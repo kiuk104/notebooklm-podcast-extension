@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>NotebookLM Podcast Sync — 설정</title>
+<style>
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #222; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: #666; margin-top: 0; font-size: 13px; }
+  label { display: block; margin-top: 18px; font-size: 13px; font-weight: 600; }
+  input { width: 100%; padding: 8px 10px; margin-top: 4px; box-sizing: border-box; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; }
+  button { margin-top: 22px; padding: 10px 20px; font-size: 14px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  .hint { font-size: 11px; color: #666; margin-top: 4px; font-weight: normal; }
+  .hint a { color: #2563eb; }
+  .status { margin-top: 14px; font-size: 13px; padding: 8px 12px; border-radius: 4px; }
+  .status.success { background: #dcfce7; color: #166534; }
+  .status.error { background: #fee2e2; color: #991b1b; }
+</style>
+</head>
+<body>
+<h1>NotebookLM Podcast Sync 설정</h1>
+<p class="sub">받은 음성개요를 자동으로 push 할 GitHub repo 와 token 을 등록하세요.</p>
+
+<form id="form">
+  <label>GitHub Personal Access Token
+    <input type="password" id="token" placeholder="ghp_…" required autocomplete="off">
+    <div class="hint">
+      <a href="https://github.com/settings/tokens/new?scopes=repo&description=notebooklm-podcast-extension" target="_blank">새 token 발급</a>
+      — `repo` scope 필요. 토큰은 이 브라우저에만 저장되고 외부로 나가지 않습니다.
+    </div>
+  </label>
+
+  <label>Repo (owner/name)
+    <input type="text" id="repo" placeholder="kiuk104/my-notebooklm-podcast" required autocomplete="off">
+    <div class="hint">아직 없으면 GitHub 에서 빈 public repo 를 먼저 만들고 입력하세요. Pages 활성화는 README 참고.</div>
+  </label>
+
+  <label>커밋 시 사용할 이름 / 이메일 (선택)
+    <input type="text" id="committer-name" placeholder="kiuk104">
+    <input type="email" id="committer-email" placeholder="kiuk104@gmail.com" style="margin-top:6px">
+    <div class="hint">비워 두면 GitHub 기본값을 사용합니다.</div>
+  </label>
+
+  <button type="submit">저장</button>
+  <div id="status" class="status" style="display:none"></div>
+</form>
+
+<script src="options.js"></script>
+</body>
+</html>
