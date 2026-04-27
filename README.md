@@ -50,6 +50,10 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 3. 생성된 RSS URL: `https://<사용자>.github.io/<repo>/feed.xml`
 4. 그 URL 을 팟캐스트 앱에 등록
 
+## v1 에서 배운 함정
+
+구현 시 주의할 NotebookLM DOM/동작 함정과 v1 의 대응책: [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
+
 ## 라이선스
 
 MIT
