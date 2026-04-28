@@ -4,24 +4,42 @@
 <meta charset="utf-8">
 <title>NotebookLM Podcast Sync</title>
 <style>
-  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; width: 320px; padding: 14px; margin: 0; color: #222; }
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; width: 360px; padding: 14px; margin: 0; color: #222; }
   h1 { font-size: 14px; margin: 0 0 4px; }
-  p.sub { font-size: 11px; color: #666; margin: 0 0 12px; }
-  button { width: 100%; padding: 10px 14px; font-size: 13px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
-  button:hover:not(:disabled) { background: #1d4ed8; }
-  button:disabled { background: #9ca3af; cursor: not-allowed; }
-  .status { margin-top: 12px; font-size: 12px; line-height: 1.5; color: #444; padding: 8px 10px; border-radius: 4px; background: #f4f4f4; min-height: 16px; }
+  p.sub { font-size: 11px; color: #666; margin: 0 0 10px; }
+  button.primary { width: 100%; padding: 9px 14px; font-size: 13px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+  button.primary:hover:not(:disabled) { background: #1d4ed8; }
+  button.primary:disabled { background: #9ca3af; cursor: not-allowed; }
+  .status { margin-top: 10px; font-size: 12px; line-height: 1.45; color: #444; padding: 8px 10px; border-radius: 4px; background: #f4f4f4; min-height: 14px; white-space: pre-wrap; }
   .status.error { background: #fee2e2; color: #991b1b; }
   .status.success { background: #dcfce7; color: #166534; }
+  .cover { margin-top: 10px; font-size: 12px; color: #444; }
+  .cover .nb-title { font-weight: 600; color: #111; }
+  .cover .nb-date { color: #888; font-size: 11px; }
+  ul.cards { list-style: none; padding: 0; margin: 8px 0 0; }
+  ul.cards li { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 12px; }
+  ul.cards li:last-child { border-bottom: 0; }
+  ul.cards .ep-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ul.cards .ep-state { font-size: 10px; color: #666; min-width: 50px; text-align: right; }
+  ul.cards .ep-state.ok { color: #166534; }
+  ul.cards .ep-state.err { color: #991b1b; }
+  ul.cards button.dl { padding: 4px 8px; font-size: 11px; background: #fff; color: #2563eb; border: 1px solid #2563eb; border-radius: 4px; cursor: pointer; }
+  ul.cards button.dl:hover:not(:disabled) { background: #eff6ff; }
+  ul.cards button.dl:disabled { color: #9ca3af; border-color: #d1d5db; cursor: not-allowed; }
   a.settings { display: block; text-align: center; margin-top: 10px; font-size: 11px; color: #2563eb; text-decoration: none; }
   a.settings:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <h1>NotebookLM Podcast Sync</h1>
-<p class="sub">v0.1.0 · 스켈레톤</p>
-<button id="scan">현재 노트북 스캔</button>
+<p class="sub">v0.3.0 · GitHub push</p>
+<button id="scan" class="primary">현재 노트북 스캔</button>
 <div class="status" id="status"></div>
+<div class="cover" id="cover" style="display:none">
+  <div class="nb-title" id="nb-title"></div>
+  <div class="nb-date" id="nb-date"></div>
+</div>
+<ul class="cards" id="cards"></ul>
 <a href="#" class="settings" id="open-options">⚙ GitHub 설정</a>
 <script src="popup.js"></script>
 </body>
