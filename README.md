@@ -6,7 +6,7 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 
 ## 상태
 
-🚧 **개발 중 — v0.2.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__제목.{ext}` 파일명으로 자동 다운로드합니다. GitHub push / RSS 생성은 아직 미구현.
+🚧 **개발 중 — v0.3.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다. RSS feed 자동 생성은 아직 미구현.
 
 ## 로드맵
 
