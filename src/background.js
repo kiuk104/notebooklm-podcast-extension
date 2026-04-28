@@ -2,13 +2,18 @@
 // 다운로드를 가로채 `YYYYMMDD__노트북-슬러그__제목-슬러그.{ext}` 로 rename 한다.
 //
 // 흐름: popup → content("download") → content 가 background 에 "download:expect"
-// 로 메타(노트북/제목/cover-date + sender tabId) 를 push → content 가 ⋮ →
-// 다운로드 메뉴 클릭 → Chrome 다운로드 시작 → onDeterminingFilename 에서 큐 pop,
-// suggest() 로 rename → chrome.scripting.executeScript({world:"MAIN"}) 로
-// NotebookLM 페이지 컨텍스트에서 audio URL 을 fetch (page-world 는 사용자
-// Google 로그인 세션을 가짐. SW 직접 fetch 는 third-party cookie 취급으로
-// CORS+401 redirect 를 맞아 막힘). 결과 base64 를 받아 GitHub Contents API 로
-// docs/episodes/ 에 PUT.
+// 로 메타(노트북/제목/cover-date) 를 push → content 가 ⋮ → 다운로드 메뉴 클릭 →
+// Chrome 다운로드 시작 → onDeterminingFilename 에서 큐 pop, suggest() 로 rename →
+// 같은 audio URL 을 SW 에서 직접 fetch 해서 GitHub 로 PUT.
+//
+// audio URL 은 lh3.googleusercontent.com signed URL. path 의 토큰만으론 인증
+// 부족해 CDN 이 accounts.google.com/ServiceLogin → lh3.google.com/rd-notebooklm
+// 으로 redirect 시키므로 그 호스트들도 manifest host_permissions 에 포함시켜
+// CORS 면제. credentials:"include" 로 .google.com 세션 쿠키를 redirect 체인
+// 내내 동행시키면 ServiceLogin 이 자동 통과되어 최종 audio 응답까지 도달한다.
+// (이전 시도들: SW fetch credentials:"omit" → ServiceLogin redirect target 이
+// host_permissions 밖이라 CORS 차단; page-world fetch via executeScript →
+// CDN 이 ACAO 헤더를 notebooklm origin 으로 안 줘서 CORS 차단.)
 
 const expectedQueue = [];
 const STALE_MS = 5 * 60 * 1000;
@@ -28,13 +33,9 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
 });
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "download:expect") {
-    expectedQueue.push({
-      ...msg.payload,
-      tabId: sender?.tab?.id,
-      pushedAt: Date.now(),
-    });
+    expectedQueue.push({ ...msg.payload, pushedAt: Date.now() });
     sendResponse({ ok: true, queued: expectedQueue.length });
     return false;
   }
@@ -58,9 +59,9 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   const filename = buildFilename(meta, ext);
   suggest({ filename, conflictAction: "uniquify" });
 
-  // 로컬 저장은 Chrome 이 그대로 진행. 동시에 NotebookLM 탭의 page world 에서
-  // audio URL 을 fetch 해서 (사용자 로그인 세션 사용) GitHub 로 push.
-  pushFromTab(item.url, filename, meta).then((result) => {
+  // 로컬 저장은 Chrome 이 그대로 진행. 동시에 SW 에서 audio URL 을 다시 fetch
+  // 해서 GitHub 로 push.
+  pushEpisode(item.url, filename).then((result) => {
     notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, ...result });
   }).catch((err) => {
     console.error("[push]", filename, err);
@@ -74,18 +75,24 @@ function notifyPush(detail) {
   });
 }
 
-async function pushFromTab(audioUrl, filename, meta) {
+async function pushEpisode(audioUrl, filename) {
   const cfg = await chrome.storage.local.get([
     "token", "repo", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {
     return { skipped: true, reason: "GitHub 설정 없음" };
   }
-  if (!meta.tabId) throw new Error("download 요청 tab id 누락");
   const path = `docs/episodes/${filename}`;
 
-  console.log(`[push] page-world fetch: ${audioUrl.slice(0, 100)}…`);
-  const { b64, size } = await fetchInPageWorld(meta.tabId, audioUrl);
+  const urlHost = (() => { try { return new URL(audioUrl).host; } catch { return "(invalid)"; } })();
+  console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
+  const r = await fetch(audioUrl, { credentials: "include" });
+  if (!r.ok) {
+    throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost} final=${r.url.slice(0, 80)}… redirected=${r.redirected}`);
+  }
+  const buf = await r.arrayBuffer();
+  const size = buf.byteLength;
+  const b64 = arrayBufferToBase64(buf);
   console.log(`[push] fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
 
   const existing = await ghGet(cfg.repo, path, cfg.token);
@@ -103,54 +110,14 @@ async function pushFromTab(audioUrl, filename, meta) {
   return { ok: true, size };
 }
 
-// chrome.scripting.executeScript world:"MAIN" 으로 NotebookLM 페이지의 자바스크립트
-// 컨텍스트 안에서 fetch 를 수행. 페이지가 이미 사용자 Google 세션으로 로그인되어
-// 있으므로 audio URL (lh3.googleusercontent.com 등) 이 same-site cookie 로 인증됨.
-// SW 직접 fetch 는 third-party cookie 취급되어 ServiceLogin 으로 리다이렉트되며 CORS 차단됨.
-async function fetchInPageWorld(tabId, url) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: async (u) => {
-      // Chrome <117 의 executeScript 는 throw 된 에러를 별도 필드로 돌려주지 않으므로
-      // 항상 try/catch 로 잡아 직접 직렬화한다.
-      try {
-        const r = await fetch(u, { credentials: "include" });
-        if (!r.ok) {
-          return { ok: false, error: `fetch ${r.status} ${r.statusText}`, finalUrl: r.url, redirected: r.redirected };
-        }
-        const buf = await r.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        const CHUNK = 0x8000;
-        const parts = [];
-        for (let i = 0; i < bytes.length; i += CHUNK) {
-          parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
-        }
-        return { ok: true, b64: btoa(parts.join("")), size: bytes.length, finalUrl: r.url, redirected: r.redirected };
-      } catch (e) {
-        return {
-          ok: false,
-          error: String(e?.message || e || "unknown"),
-          name: e?.name,
-        };
-      }
-    },
-    args: [url],
-  });
-  const out = results?.[0]?.result;
-  if (!out) {
-    throw new Error("page-world 결과 없음 (executeScript 자체 실패?)");
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 0x8000;
+  const parts = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
   }
-  if (!out.ok) {
-    const detail = [
-      out.error,
-      out.name ? `(${out.name})` : "",
-      out.finalUrl ? `final=${out.finalUrl.slice(0, 80)}…` : "",
-      out.redirected ? "redirected" : "",
-    ].filter(Boolean).join(" ");
-    throw new Error(`page-world fetch 실패: ${detail}`);
-  }
-  return out;
+  return btoa(parts.join(""));
 }
 
 function ghContentsUrl(repo, path) {
