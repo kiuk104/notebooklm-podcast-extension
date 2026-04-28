@@ -2,8 +2,13 @@
 // 다운로드를 가로채 `YYYYMMDD__노트북-슬러그__제목-슬러그.{ext}` 로 rename 한다.
 //
 // 흐름: popup → content("download") → content 가 background 에 "download:expect"
-// 로 메타(노트북/제목/cover-date) 를 push → content 가 ⋮ → 다운로드 메뉴 클릭 →
-// Chrome 다운로드 시작 → onDeterminingFilename 에서 큐 pop, suggest() 로 rename.
+// 로 메타(노트북/제목/cover-date + sender tabId) 를 push → content 가 ⋮ →
+// 다운로드 메뉴 클릭 → Chrome 다운로드 시작 → onDeterminingFilename 에서 큐 pop,
+// suggest() 로 rename → chrome.scripting.executeScript({world:"MAIN"}) 로
+// NotebookLM 페이지 컨텍스트에서 audio URL 을 fetch (page-world 는 사용자
+// Google 로그인 세션을 가짐. SW 직접 fetch 는 third-party cookie 취급으로
+// CORS+401 redirect 를 맞아 막힘). 결과 base64 를 받아 GitHub Contents API 로
+// docs/episodes/ 에 PUT.
 
 const expectedQueue = [];
 const STALE_MS = 5 * 60 * 1000;
@@ -23,9 +28,13 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "download:expect") {
-    expectedQueue.push({ ...msg.payload, pushedAt: Date.now() });
+    expectedQueue.push({
+      ...msg.payload,
+      tabId: sender?.tab?.id,
+      pushedAt: Date.now(),
+    });
     sendResponse({ ok: true, queued: expectedQueue.length });
     return false;
   }
@@ -49,9 +58,9 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   const filename = buildFilename(meta, ext);
   suggest({ filename, conflictAction: "uniquify" });
 
-  // 로컬 저장은 Chrome 이 그대로 진행. 동시에 audio URL 을 다시 fetch 해서
-  // GitHub repo 의 docs/episodes/ 로 push (RSS 의 enclosure 가 가리키는 위치).
-  pushEpisodeToGitHub(item.url, filename, meta).then((result) => {
+  // 로컬 저장은 Chrome 이 그대로 진행. 동시에 NotebookLM 탭의 page world 에서
+  // audio URL 을 fetch 해서 (사용자 로그인 세션 사용) GitHub 로 push.
+  pushFromTab(item.url, filename, meta).then((result) => {
     notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, ...result });
   }).catch((err) => {
     console.error("[push]", filename, err);
@@ -65,23 +74,22 @@ function notifyPush(detail) {
   });
 }
 
-async function pushEpisodeToGitHub(audioUrl, filename, _meta) {
+async function pushFromTab(audioUrl, filename, meta) {
   const cfg = await chrome.storage.local.get([
     "token", "repo", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {
     return { skipped: true, reason: "GitHub 설정 없음" };
   }
+  if (!meta.tabId) throw new Error("download 요청 tab id 누락");
   const path = `docs/episodes/${filename}`;
 
-  console.log(`[push] fetch audio: ${audioUrl}`);
-  const audioRes = await fetch(audioUrl);
-  if (!audioRes.ok) throw new Error(`audio fetch ${audioRes.status}`);
-  const buf = await audioRes.arrayBuffer();
-  console.log(`[push] fetched ${(buf.byteLength / 1024 / 1024).toFixed(1)}MB`);
+  console.log(`[push] page-world fetch: ${audioUrl.slice(0, 100)}…`);
+  const { b64, size } = await fetchInPageWorld(meta.tabId, audioUrl);
+  console.log(`[push] fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
 
   const existing = await ghGet(cfg.repo, path, cfg.token);
-  if (existing && existing.size === buf.byteLength) {
+  if (existing && existing.size === size) {
     console.log(`[push] ${filename} 이미 존재 (같은 크기), skip`);
     return { skipped: true, reason: "이미 존재" };
   }
@@ -89,10 +97,60 @@ async function pushEpisodeToGitHub(audioUrl, filename, _meta) {
   const committer = cfg.committerName && cfg.committerEmail
     ? { name: cfg.committerName, email: cfg.committerEmail }
     : null;
-  await ghPut(cfg.repo, path, arrayBufferToBase64(buf),
+  await ghPut(cfg.repo, path, b64,
     `Add episode ${filename}`, existing?.sha, cfg.token, committer);
-  console.log(`[push] ${filename} pushed (${(buf.byteLength / 1024 / 1024).toFixed(1)}MB)`);
-  return { ok: true, size: buf.byteLength };
+  console.log(`[push] ${filename} pushed (${(size / 1024 / 1024).toFixed(1)}MB)`);
+  return { ok: true, size };
+}
+
+// chrome.scripting.executeScript world:"MAIN" 으로 NotebookLM 페이지의 자바스크립트
+// 컨텍스트 안에서 fetch 를 수행. 페이지가 이미 사용자 Google 세션으로 로그인되어
+// 있으므로 audio URL (lh3.googleusercontent.com 등) 이 same-site cookie 로 인증됨.
+// SW 직접 fetch 는 third-party cookie 취급되어 ServiceLogin 으로 리다이렉트되며 CORS 차단됨.
+async function fetchInPageWorld(tabId, url) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (u) => {
+      // Chrome <117 의 executeScript 는 throw 된 에러를 별도 필드로 돌려주지 않으므로
+      // 항상 try/catch 로 잡아 직접 직렬화한다.
+      try {
+        const r = await fetch(u, { credentials: "include" });
+        if (!r.ok) {
+          return { ok: false, error: `fetch ${r.status} ${r.statusText}`, finalUrl: r.url, redirected: r.redirected };
+        }
+        const buf = await r.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const CHUNK = 0x8000;
+        const parts = [];
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
+        }
+        return { ok: true, b64: btoa(parts.join("")), size: bytes.length, finalUrl: r.url, redirected: r.redirected };
+      } catch (e) {
+        return {
+          ok: false,
+          error: String(e?.message || e || "unknown"),
+          name: e?.name,
+        };
+      }
+    },
+    args: [url],
+  });
+  const out = results?.[0]?.result;
+  if (!out) {
+    throw new Error("page-world 결과 없음 (executeScript 자체 실패?)");
+  }
+  if (!out.ok) {
+    const detail = [
+      out.error,
+      out.name ? `(${out.name})` : "",
+      out.finalUrl ? `final=${out.finalUrl.slice(0, 80)}…` : "",
+      out.redirected ? "redirected" : "",
+    ].filter(Boolean).join(" ");
+    throw new Error(`page-world fetch 실패: ${detail}`);
+  }
+  return out;
 }
 
 function ghContentsUrl(repo, path) {
@@ -130,16 +188,6 @@ async function ghPut(repo, path, contentB64, message, sha, token, committer) {
   });
   if (!r.ok) throw new Error(`ghPut ${path}: ${r.status} ${(await r.text()).slice(0, 200)}`);
   return r.json();
-}
-
-function arrayBufferToBase64(buf) {
-  const bytes = new Uint8Array(buf);
-  const CHUNK = 0x8000;
-  const parts = [];
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
-  }
-  return btoa(parts.join(""));
 }
 
 function extOf(name) {
