@@ -183,7 +183,7 @@
   <tr><th>구간</th><th>의미</th></tr>
   <tr><td><code>YYYYMMDD</code></td><td>NotebookLM 노트북의 cover 생성일 (페이지 cover 영역의 날짜 표시).</td></tr>
   <tr><td><code>노트북-슬러그</code></td><td>노트북 제목을 한글/영숫자만 남기고 40자로 컷.</td></tr>
-  <tr><td><code>shortId</code></td><td>카드의 NotebookLM artifact UUID 첫 8자 (16진수). 제목과 무관하게 카드별로 고정이라 dedup 키로 사용 — 같은 카드를 다시 받거나 NotebookLM 에서 제목이 사후 변경돼도 GitHub 측 중복 push 가 방지됨.</td></tr>
+  <tr><td><code>shortId</code></td><td>카드의 NotebookLM artifact UUID 첫 8자 (16진수). 제목과 무관하게 카드별로 고정이라 dedup 키로 사용 — 같은 카드를 다시 받거나 NotebookLM 에서 <strong>노트북 이름 / 카드 제목이 사후 변경되어도</strong> GitHub 측 중복 push 가 방지됨 (PUT 직후 재클릭 케이스도 포함 — GET 응답을 캐시하지 않아 항상 최신 listing 으로 매칭).</td></tr>
   <tr><td><code>제목-슬러그</code></td><td>음성개요 카드 제목을 같은 규칙으로 40자로 컷.</td></tr>
 </table>
 
