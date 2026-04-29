@@ -16,6 +16,11 @@
     menuItem: '[role="menuitem"], button[mat-menu-item]',
   };
   const DL_LABEL_RE = /다운로드|Download/;
+  // NotebookLM 은 음성개요 직후 `audio 0`, `audio 1` 같은 플레이스홀더 제목을
+  // 잠시 보여주다가 실제 제목으로 비동기 교체. 이 시점에 받으면 v1 처럼 다음
+  // sync 에서 같은 오디오를 실제 제목으로 또 받는 중복이 생기므로 스킵.
+  // (IMPLEMENTATION_NOTES.md §1)
+  const PLACEHOLDER_TITLE_RE = /^audio[\s\-_]?\d+$/i;
 
   function getCover() {
     return {
@@ -31,9 +36,13 @@
   }
 
   function getAudioCards() {
-    return getAudioCardEls().map((card) => ({
-      title: card.querySelector(SEL.cardTitle)?.textContent?.trim() ?? "",
-    }));
+    return getAudioCardEls().map((card) => {
+      const title = card.querySelector(SEL.cardTitle)?.textContent?.trim() ?? "";
+      return {
+        title,
+        isPlaceholder: PLACEHOLDER_TITLE_RE.test(title),
+      };
+    });
   }
 
   function waitFor(predicate, timeoutMs = 3000, intervalMs = 80) {
@@ -84,6 +93,9 @@
           const cards = getAudioCards();
           const card = cards[msg.index];
           if (!card) throw new Error(`card #${msg.index} 없음`);
+          if (card.isPlaceholder) {
+            throw new Error("제목이 아직 'audio N' 플레이스홀더입니다. 잠시 후 다시 시도하세요.");
+          }
 
           await chrome.runtime.sendMessage({
             type: "download:expect",

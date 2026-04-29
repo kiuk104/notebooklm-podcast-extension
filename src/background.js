@@ -20,6 +20,9 @@ import { rebuildFeed } from "./feed.js";
 
 const expectedQueue = [];
 const STALE_MS = 5 * 60 * 1000;
+// content.js 가 동일한 가드를 갖지만, popup/content 우회로 들어오는 메시지에
+// 대비한 2차 방어선 (IMPLEMENTATION_NOTES.md §1).
+const PLACEHOLDER_TITLE_RE = /^audio[\s\-_]?\d+$/i;
 
 // v1 의 episode 파일명 컨벤션. v2 는 노트북/오디오 슬러그 각각 40자로 잘라서
 // MAX_PATH (260) / GitHub path 255-byte 제한을 처음부터 회피.
@@ -38,6 +41,11 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "download:expect") {
+    const title = msg.payload?.episodeTitle || "";
+    if (PLACEHOLDER_TITLE_RE.test(title)) {
+      sendResponse({ ok: false, error: "placeholder 제목은 큐잉하지 않음" });
+      return false;
+    }
     expectedQueue.push({ ...msg.payload, pushedAt: Date.now() });
     sendResponse({ ok: true, queued: expectedQueue.length });
     return false;

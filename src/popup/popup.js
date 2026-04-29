@@ -45,6 +45,13 @@ function renderCards(audios, tabId) {
     const btn = document.createElement("button");
     btn.className = "dl";
     btn.textContent = "받기";
+    if (a.isPlaceholder) {
+      // NotebookLM 의 'audio N' 플레이스홀더 제목 단계에서 받으면 v1 처럼 다음
+      // sync 에서 실제 제목으로 또 받는 중복이 생김 (IMPLEMENTATION_NOTES.md §1).
+      btn.disabled = true;
+      btn.title = "제목이 확정되면 활성화됩니다";
+      setRow(state, "", "제목 확정 대기 중", "다시 스캔하면 활성화됩니다");
+    }
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       setRow(state, "", "받는 중…");
@@ -110,7 +117,17 @@ scanBtn.addEventListener("click", async () => {
     nbTitleEl.textContent = resp.cover.title || "(제목 없음)";
     nbDateEl.textContent = resp.cover.dateAttr || "생성일 정보 없음";
     coverEl.style.display = "block";
-    setStatus(`음성개요 ${resp.audios.length}개`, resp.audios.length ? "success" : "");
+    const total = resp.audios.length;
+    const pending = resp.audios.filter((a) => a.isPlaceholder).length;
+    if (!total) {
+      setStatus("음성개요 0개", "");
+    } else if (pending === total) {
+      setStatus(`음성개요 ${total}개 — 모두 제목 확정 대기 중. 잠시 후 다시 스캔하세요.`, "");
+    } else if (pending > 0) {
+      setStatus(`음성개요 ${total}개 (${pending}개 제목 확정 대기 중)`, "success");
+    } else {
+      setStatus(`음성개요 ${total}개`, "success");
+    }
     renderCards(resp.audios, tab.id);
   } catch (e) {
     setStatus(`오류: ${e.message}`, "error");

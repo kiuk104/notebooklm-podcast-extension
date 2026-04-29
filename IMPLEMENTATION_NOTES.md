@@ -47,6 +47,13 @@ v1 구현 위치: [downloader.py:50](https://github.com/kiuk104/notebooklm-podca
 - 노트북에 음성개요가 N 개 있는데 모두 플레이스홀더라면 그 노트북은 이번 sync 에서 통째로 스킵하고 사용자에게 "제목 확정 대기 중" 정도로 알리는 게 좋다.
 - 드물게 제목이 끝까지 안 붙는 경우가 있을 수 있으니, 같은 노트북을 N 회 (예: 3회) 연속 스킵하면 fallback 으로 `audio-0` 그대로 받게 하는 안전장치도 고려할 만함. v1 은 아직 이 fallback 이 없음.
 
+### 익스텐션 구현 상태 (✅ 적용됨)
+
+- [src/content.js](src/content.js): `PLACEHOLDER_TITLE_RE = /^audio[\s\-_]?\d+$/i`. `getAudioCards()` 가 카드별 `isPlaceholder` 플래그를 내고, `download` 핸들러는 플레이스홀더면 에러로 거절.
+- [src/popup/popup.js](src/popup/popup.js): 플레이스홀더 카드의 "받기" 버튼 disabled + "제목 확정 대기 중" 라벨. 모든 카드가 플레이스홀더면 status bar 에 "잠시 후 다시 스캔하세요" 안내.
+- [src/background.js](src/background.js): `download:expect` 큐잉 직전 동일 정규식으로 한 번 더 거름 (popup/content 우회 메시지에 대한 2차 방어선).
+- 미구현: N 회 연속 스킵 시 `audio-N` fallback 강제 다운로드. 사용자가 수동으로 다시 스캔하면 되므로 우선순위 낮음.
+
 ### dedup 키 설계 일반 원칙
 
 플레이스홀더 함정을 떠나서, 카드 제목은 시간이 지나면 바뀔 수 있는 mutable 한 값이다. 가능하면 dedup 키에는:
