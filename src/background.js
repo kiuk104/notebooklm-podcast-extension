@@ -1,5 +1,7 @@
 // Service worker. content / popup 와 메시지로 연결되고, NotebookLM 이 발생시킨
-// 다운로드를 가로채 `YYYYMMDD__노트북-슬러그__제목-슬러그.{ext}` 로 rename 한다.
+// 다운로드를 가로채 `YYYYMMDD__노트북-슬러그__shortId__제목-슬러그.{ext}` 로 rename
+// 한다. shortId 는 카드의 artifact UUID 첫 8자 — 제목이 바뀌어도 같은 audio 는
+// 같은 shortId 를 가지므로 GitHub 폴더 list 후 substring 매칭으로 robust dedup.
 //
 // 흐름: popup → content("download") → content 가 background 에 "download:expect"
 // 로 메타(노트북/제목/cover-date) 를 push → content 가 ⋮ → 다운로드 메뉴 클릭 →
@@ -67,12 +69,16 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
 
   const meta = expectedQueue.shift();
   const ext = extOf(item.filename) || ".m4a";
-  const filename = buildFilename(meta, ext);
+  const shortId = shortIdOf(meta.artifactId);
+  const filename = buildFilename(meta, ext, shortId);
+  // shortId 가 도입되기 전 포맷 — 마이그레이션 시점에 같은 audio 가 옛 이름으로
+  // 이미 push 되어 있을 수 있어 dedup 매칭에 함께 사용.
+  const legacyFilename = shortId ? buildFilename(meta, ext, "") : null;
   suggest({ filename, conflictAction: "uniquify" });
 
   // 로컬 저장은 Chrome 이 그대로 진행. 동시에 SW 에서 audio URL 을 다시 fetch
   // 해서 GitHub 로 push.
-  pushEpisode(item.url, filename).then((result) => {
+  pushEpisode(item.url, filename, shortId, legacyFilename).then((result) => {
     notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, ...result });
   }).catch((err) => {
     console.error("[push]", filename, err);
@@ -86,13 +92,46 @@ function notifyPush(detail) {
   });
 }
 
-async function pushEpisode(audioUrl, filename) {
+async function pushEpisode(audioUrl, filename, shortId, legacyFilename) {
   const cfg = await chrome.storage.local.get([
     "token", "repo", "rssMode", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {
     return { skipped: true, reason: "GitHub 설정 없음" };
   }
+
+  // shortId 가 있으면 episodes 폴더 list 해서 같은 UUID 박힌 파일이 이미 있는지
+  // 먼저 확인. 제목이 바뀌어도 UUID 기반으로 dedup. legacyFilename (UUID 없는
+  // 옛 포맷) 도 함께 매칭해서 마이그레이션 이전 파일과의 충돌 회피.
+  const committer = cfg.committerName && cfg.committerEmail
+    ? { name: cfg.committerName, email: cfg.committerEmail }
+    : null;
+
+  let existingMatch = null;
+  if (shortId || legacyFilename) {
+    try {
+      const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
+      existingMatch = list.find((f) => {
+        if (shortId && f.name.includes(`__${shortId}__`)) return true;
+        if (legacyFilename && f.name === legacyFilename) return true;
+        return false;
+      });
+    } catch (e) {
+      // 폴더가 없거나 list 실패 — 그대로 진행해서 PUT 단계에서 ghGet 으로 fallback
+      console.warn(`[push] list 실패, fallback 진행: ${e.message}`);
+    }
+  }
+
+  // 매칭된 파일이 있으면 SW fetch 자체를 건너뛰어 대역폭 절약.
+  if (existingMatch) {
+    console.log(`[push] ${filename} dedup hit (existing=${existingMatch.name} size=${existingMatch.size}), skip`);
+    return {
+      skipped: true,
+      reason: existingMatch.name === filename ? "이미 존재" : `이미 존재 (${existingMatch.name})`,
+      matchedFilename: existingMatch.name,
+    };
+  }
+
   const path = `docs/episodes/${filename}`;
 
   const urlHost = (() => { try { return new URL(audioUrl).host; } catch { return "(invalid)"; } })();
@@ -106,10 +145,7 @@ async function pushEpisode(audioUrl, filename) {
   const b64 = arrayBufferToBase64(buf);
   console.log(`[push] fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
 
-  const committer = cfg.committerName && cfg.committerEmail
-    ? { name: cfg.committerName, email: cfg.committerEmail }
-    : null;
-
+  // 정확 path 에 같은 크기 파일이 있으면 skip (list 실패 시 fallback 경로 + 이중 안전망).
   const existing = await ghGet(cfg.repo, path, cfg.token);
   let pushResult;
   if (existing && existing.size === size) {
@@ -169,6 +205,20 @@ async function ghGet(repo, path, token) {
   return r.json();
 }
 
+async function ghList(repo, dirPath, token) {
+  const r = await fetch(ghContentsUrl(repo, dirPath), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (r.status === 404) return [];
+  if (!r.ok) throw new Error(`ghList ${dirPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
+  const arr = await r.json();
+  return Array.isArray(arr) ? arr.filter((f) => f.type === "file") : [];
+}
+
 async function ghPut(repo, path, contentB64, message, sha, token, committer) {
   const body = { message, content: contentB64 };
   if (sha) body.sha = sha;
@@ -199,7 +249,14 @@ function slugify(text, max = SLUG_MAX) {
   return s.slice(0, max) || "episode";
 }
 
-function buildFilename(meta, ext) {
+function shortIdOf(artifactId) {
+  // UUID 의 첫 8자 (16진수). 없거나 형식이 다르면 빈 문자열을 반환해 옛 포맷으로 동작.
+  if (!artifactId) return "";
+  const m = /^([0-9a-f]{8})/.exec(artifactId);
+  return m ? m[1] : "";
+}
+
+function buildFilename(meta, ext, shortId) {
   let date;
   const m = DATE_RE.exec(meta.coverDateAttr || "");
   if (m && MONTHS[m[1]]) {
@@ -214,5 +271,10 @@ function buildFilename(meta, ext) {
       String(n.getMonth() + 1).padStart(2, "0") +
       String(n.getDate()).padStart(2, "0");
   }
-  return `${date}__${slugify(meta.notebookTitle)}__${slugify(meta.episodeTitle)}${ext}`;
+  const nb = slugify(meta.notebookTitle);
+  const title = slugify(meta.episodeTitle);
+  // shortId 가 있으면 ${date}__${nb}__${shortId}__${title}.ext, 없으면 옛 포맷.
+  return shortId
+    ? `${date}__${nb}__${shortId}__${title}${ext}`
+    : `${date}__${nb}__${title}${ext}`;
 }

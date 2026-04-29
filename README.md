@@ -6,13 +6,13 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 
 ## 상태
 
-🚧 **개발 중 — v0.4.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다. RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` / `transcode` 필드로 보관 정책과 m4a→mp3 변환을 같이 처리. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
+🚧 **개발 중 — v0.4.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__shortId__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다 (`shortId` 는 카드의 NotebookLM artifact UUID 첫 8자 — 제목이 바뀌어도 dedup 안정). RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` / `transcode` 필드로 보관 정책과 m4a→mp3 변환을 같이 처리. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
 
 ## 로드맵
 
 - [x] 프로젝트 골격 (manifest v3 + content/background/popup/options)
 - [x] NotebookLM 페이지 스캔 (노트북 제목, audio overview 목록)
-- [x] audio overview 다운로드 트리거 + `YYYYMMDD__노트북__제목.{ext}` 자동 rename
+- [x] audio overview 다운로드 트리거 + `YYYYMMDD__노트북__shortId__제목.{ext}` 자동 rename (UUID 기반 안정 dedup)
 - [x] PAT 기반 GitHub Contents API push (`docs/episodes/`)
 - [x] RSS feed 자동 생성 — GitHub Actions 위임 모드 (사용자 repo 의 워크플로가 빌드)
 - [x] RSS feed 자동 생성 — 익스텐션 직접 생성 모드 (옵션)
@@ -45,9 +45,10 @@ Chrome Web Store 에 아직 올리지 않았으므로 압축해제 모드로 직
 4. 노트북 제목 / 생성일 + 음성개요 목록이 표시됩니다
 5. 받고 싶은 카드 옆 **[받기]** → Chrome 기본 다운로드 폴더에 다음 형식으로 저장:
    ```
-   YYYYMMDD__노트북-슬러그__제목-슬러그.{m4a|mp3}
+   YYYYMMDD__노트북-슬러그__shortId__제목-슬러그.{m4a|mp3}
    ```
    - `YYYYMMDD` 는 NotebookLM 노트북의 cover 생성일 (`.cover-subtitle-date` 의 `title` 속성)
+   - `shortId` 는 카드의 NotebookLM artifact UUID 첫 8자 (16진수). 제목이 바뀌어도 같은 UUID 면 같은 audio 로 인식되어 GitHub 측 중복 push 가 방지됨.
    - 슬러그는 한글/영숫자만 남기고 노트북·제목 각각 40자로 컷 (Windows MAX_PATH + GitHub path 255-byte 가드)
 
 ## 디버깅

@@ -21,7 +21,10 @@ CONFIG_FILE = ROOT / "docs" / "podcast.json"
 OUTPUT_FILE = ROOT / "docs" / "feed.xml"
 
 # 익스텐션의 buildFilename 규약 ([src/background.js] buildFilename) 과 정확히 일치해야 함.
-FILENAME_RE = re.compile(r"^(\d{8})__(.+?)__(.+?)\.(m4a|mp3|mp4)$")
+# 두 포맷 수용:
+#   옛 포맷: YYYYMMDD__노트북__제목.ext              (3 segment)
+#   새 포맷: YYYYMMDD__노트북__shortId__제목.ext      (4 segment, shortId = 8자 16진수)
+FILENAME_RE = re.compile(r"^(\d{8})__(.+?)__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$")
 MIME = {"m4a": "audio/mp4", "mp4": "audio/mp4", "mp3": "audio/mpeg"}
 
 
@@ -54,7 +57,7 @@ def collect_episodes() -> list[dict]:
         if not m:
             print(f"skip (unrecognized filename): {path.name}", file=sys.stderr)
             continue
-        date_s, notebook_slug, title_slug, ext = m.groups()
+        date_s, notebook_slug, _short_id, title_slug, ext = m.groups()
         items.append({
             "filename": path.name,
             "size": path.stat().st_size,

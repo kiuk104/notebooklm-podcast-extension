@@ -14,7 +14,12 @@
     coverTitle: ".cover-title",
     coverDate: ".cover-subtitle-date",
     menuItem: '[role="menuitem"], button[mat-menu-item]',
+    artifactLabels: '[id^="artifact-labels-"]',
   };
+  // 카드 안의 `<span class="artifact-labels" id="artifact-labels-{UUID}">` 에서
+  // UUID 를 뽑는 정규식. UUID 는 NotebookLM 내부 artifact ID 라 카드 제목이
+  // 바뀌어도 동일하게 유지되므로 dedup 키로 안전 (IMPLEMENTATION_NOTES.md §1).
+  const ARTIFACT_ID_RE = /^artifact-labels-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
   const DL_LABEL_RE = /다운로드|Download/;
   // NotebookLM 은 음성개요 직후 `audio 0`, `audio 1` 같은 플레이스홀더 제목을
   // 잠시 보여주다가 실제 제목으로 비동기 교체. 이 시점에 받으면 v1 처럼 다음
@@ -35,11 +40,18 @@
     );
   }
 
+  function getArtifactId(card) {
+    const labelEl = card.querySelector(SEL.artifactLabels);
+    const m = ARTIFACT_ID_RE.exec(labelEl?.id || "");
+    return m ? m[1] : "";
+  }
+
   function getAudioCards() {
     return getAudioCardEls().map((card) => {
       const title = card.querySelector(SEL.cardTitle)?.textContent?.trim() ?? "";
       return {
         title,
+        artifactId: getArtifactId(card),
         isPlaceholder: PLACEHOLDER_TITLE_RE.test(title),
       };
     });
@@ -103,6 +115,7 @@
               notebookTitle: cover.title,
               coverDateAttr: cover.dateAttr,
               episodeTitle: card.title,
+              artifactId: card.artifactId,
             },
           });
 

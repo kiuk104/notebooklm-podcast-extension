@@ -4,7 +4,11 @@
 // 출력 포맷은 examples/feed-builder/scripts/build_feed.py 와 정확히 일치 — 두 모드를
 // 왔다갔다 해도 RSS 가 그대로 유지되도록.
 
-const FILENAME_RE = /^(\d{8})__(.+?)__(.+?)\.(m4a|mp3|mp4)$/;
+// 두 포맷 모두 수용:
+//   옛 포맷: ${date}__${notebook}__${title}.ext           (3 segment)
+//   새 포맷: ${date}__${notebook}__${shortId}__${title}.ext (4 segment, shortId = 8자 16진수)
+// shortId 그룹은 옵셔널이라 기존 episode 들도 그대로 파싱된다 (IMPLEMENTATION_NOTES.md §1).
+const FILENAME_RE = /^(\d{8})__(.+?)__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$/;
 const MIME = { m4a: "audio/mp4", mp4: "audio/mp4", mp3: "audio/mpeg" };
 
 const DEFAULT_META = {
@@ -102,7 +106,7 @@ async function listEpisodes(repo, token) {
     if (f.type !== "file") continue;
     const m = FILENAME_RE.exec(f.name);
     if (!m) continue;
-    const [, dateS, notebook, title, ext] = m;
+    const [, dateS, notebook, _shortId, title, ext] = m;
     items.push({
       filename: f.name,
       sha: f.sha,

@@ -64,6 +64,17 @@ v1 구현 위치: [downloader.py:50](https://github.com/kiuk104/notebooklm-podca
 
 같은 식별자를 우선 쓰고, 사람이 읽을 제목은 파일명 표시용 보조 필드로 두는 게 안전하다. v1 은 사람이 읽을 파일명을 직접 dedup 키로 써서 위 함정에 걸렸다.
 
+### 익스텐션 UUID 기반 dedup (✅ 적용됨)
+
+NotebookLM 카드 안 `<span class="artifact-labels" id="artifact-labels-{UUID}">` 에 노출되는 artifact UUID 를 안정 식별자로 사용. UUID 의 첫 8자 (shortId) 를 파일명에 박는다.
+
+- 파일명: `${date}__${nb-slug}__${shortId}__${title-slug}.ext` (shortId = 8자 16진수)
+- dedup: 매 push 전 `docs/episodes/` 를 list 해서 `__${shortId}__` substring 매칭 — 제목이 바뀌어도 같은 UUID 면 same hit → push skip + SW fetch 자체 생략 (대역폭 절약)
+- backward compat: shortId 가 도입되기 전 push 된 파일 (3-segment 옛 포맷) 은 정확 파일명 매칭으로 함께 dedup. feed.js / build_feed.py 의 `FILENAME_RE` 도 shortId 그룹 옵셔널로 양쪽 포맷 파싱.
+- list 실패 시 fallback: 옛 ghGet 기반 path 일치 검사가 이중 안전망으로 남음.
+
+구현 위치: [src/content.js](src/content.js) (`ARTIFACT_ID_RE` + `getArtifactId`), [src/background.js](src/background.js) (`shortIdOf`, `buildFilename(meta, ext, shortId)`, `ghList`), [src/feed.js](src/feed.js) + [examples/feed-builder/scripts/build_feed.py](examples/feed-builder/scripts/build_feed.py) (`FILENAME_RE` 옵셔널 shortId 그룹).
+
 ---
 
 ## 2. audio URL 재fetch 의 인증/CORS 체인

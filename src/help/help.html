@@ -177,16 +177,21 @@
 <p><strong>익스텐션 내장 (ffmpeg.wasm) 모드</strong>: 미구현. 패키지 +25MB / SW 메모리 100~200MB / 첫 [받기] 응답 30초~수분 등 트레이드오프가 커서 후순위. 워크플로 셋업이 어려운 사용자만을 위한 옵션.</p>
 
 <h2 id="filename">7. 파일명 규약</h2>
-<pre>YYYYMMDD__노트북-슬러그__제목-슬러그.{m4a|mp3}</pre>
+<pre>YYYYMMDD__노트북-슬러그__shortId__제목-슬러그.{m4a|mp3}</pre>
 
 <table>
   <tr><th>구간</th><th>의미</th></tr>
   <tr><td><code>YYYYMMDD</code></td><td>NotebookLM 노트북의 cover 생성일 (페이지 cover 영역의 날짜 표시).</td></tr>
   <tr><td><code>노트북-슬러그</code></td><td>노트북 제목을 한글/영숫자만 남기고 40자로 컷.</td></tr>
+  <tr><td><code>shortId</code></td><td>카드의 NotebookLM artifact UUID 첫 8자 (16진수). 제목과 무관하게 카드별로 고정이라 dedup 키로 사용 — 같은 카드를 다시 받거나 NotebookLM 에서 제목이 사후 변경돼도 GitHub 측 중복 push 가 방지됨.</td></tr>
   <tr><td><code>제목-슬러그</code></td><td>음성개요 카드 제목을 같은 규칙으로 40자로 컷.</td></tr>
 </table>
 
 <p>40자 컷은 Windows MAX_PATH (260) + GitHub path 255-byte 제한 가드입니다. 한글 1자가 UTF-8 3 byte 라 제목이 길 때 GitHub 가 거절하는 사고를 방지.</p>
+
+<div class="tip">
+  <strong>옛 포맷과의 호환:</strong> v0.4.0 이전 버전이 push 한 파일은 <code>shortId</code> 없이 3-segment <code>YYYYMMDD__노트북__제목.{ext}</code> 로 저장돼 있을 수 있습니다. RSS 빌더 (익스텐션 / GitHub Actions 워크플로) 모두 두 포맷을 동시에 인식하므로 그대로 두어도 무방합니다. 새 push 부터만 4-segment 포맷이 적용됩니다.
+</div>
 
 <h2 id="troubleshoot">8. 트러블슈팅</h2>
 
