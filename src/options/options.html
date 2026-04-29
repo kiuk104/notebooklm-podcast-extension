@@ -24,7 +24,11 @@
 
 <form id="form">
   <label>GitHub Personal Access Token
-    <input type="password" id="token" placeholder="ghp_…" required autocomplete="off">
+    <div style="display: flex; gap: 6px; margin-top: 4px;">
+      <input type="password" id="token" placeholder="ghp_…" required autocomplete="off" style="margin-top: 0; flex: 1;">
+      <button type="button" id="toggle-token" title="토큰 보이기/숨기기" aria-label="토큰 보이기/숨기기"
+              style="margin-top: 0; padding: 0 12px; font-size: 14px; background: #fff; color: #2563eb; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">👁</button>
+    </div>
     <div class="hint">
       <a href="https://github.com/settings/tokens/new?scopes=repo&description=notebooklm-podcast-extension" target="_blank">새 token 발급</a>
       — `repo` scope 필요. 토큰은 이 브라우저에만 저장되고 외부로 나가지 않습니다.

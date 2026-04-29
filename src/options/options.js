@@ -41,6 +41,18 @@ function show(text, kind) {
   statusEl.style.display = "block";
 }
 
+document.getElementById("toggle-token").addEventListener("click", () => {
+  const t = fields.token;
+  const btn = document.getElementById("toggle-token");
+  if (t.type === "password") {
+    t.type = "text";
+    btn.textContent = "🙈";
+  } else {
+    t.type = "password";
+    btn.textContent = "👁";
+  }
+});
+
 document.getElementById("verify").addEventListener("click", async () => {
   const token = fields.token.value.trim();
   const repo = fields.repo.value.trim();
