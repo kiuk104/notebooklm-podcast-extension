@@ -70,15 +70,17 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   const meta = expectedQueue.shift();
   const ext = extOf(item.filename) || ".m4a";
   const shortId = shortIdOf(meta.artifactId);
+  const date = extractDate(meta);
+  const titleSlug = slugify(meta.episodeTitle);
   const filename = buildFilename(meta, ext, shortId);
-  // shortId 가 도입되기 전 포맷 — 마이그레이션 시점에 같은 audio 가 옛 이름으로
-  // 이미 push 되어 있을 수 있어 dedup 매칭에 함께 사용.
-  const legacyFilename = shortId ? buildFilename(meta, ext, "") : null;
   suggest({ filename, conflictAction: "uniquify" });
 
   // 로컬 저장은 Chrome 이 그대로 진행. 동시에 SW 에서 audio URL 을 다시 fetch
-  // 해서 GitHub 로 push.
-  pushEpisode(item.url, filename, shortId, legacyFilename).then((result) => {
+  // 해서 GitHub 로 push. dedupHints 는 episodes/ list 의 어느 파일이 같은 audio
+  // 인지 판정하는 키 — shortId 가 1차, 옛 포맷 파일은 (date, titleSlug) 로 매칭해
+  // 노트북 rename 도 견딘다.
+  const dedupHints = { shortId, date, titleSlug, ext };
+  pushEpisode(item.url, filename, dedupHints).then((result) => {
     notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, ...result });
   }).catch((err) => {
     console.error("[push]", filename, err);
@@ -92,7 +94,7 @@ function notifyPush(detail) {
   });
 }
 
-async function pushEpisode(audioUrl, filename, shortId, legacyFilename) {
+async function pushEpisode(audioUrl, filename, dedupHints) {
   const cfg = await chrome.storage.local.get([
     "token", "repo", "rssMode", "committerName", "committerEmail",
   ]);
@@ -100,20 +102,23 @@ async function pushEpisode(audioUrl, filename, shortId, legacyFilename) {
     return { skipped: true, reason: "GitHub 설정 없음" };
   }
 
-  // shortId 가 있으면 episodes 폴더 list 해서 같은 UUID 박힌 파일이 이미 있는지
-  // 먼저 확인. 제목이 바뀌어도 UUID 기반으로 dedup. legacyFilename (UUID 없는
-  // 옛 포맷) 도 함께 매칭해서 마이그레이션 이전 파일과의 충돌 회피.
+  // episodes 폴더 list 후 두 경로로 dedup:
+  //  (a) shortId 가 있으면 `__${shortId}__` 부분 문자열 매칭 — 새 4-segment 포맷.
+  //  (b) shortId 없는 옛 3-segment 파일은 (date, titleSlug, ext) 로 매칭. 옛 포맷에는
+  //      노트북-슬러그가 들어가지만 포함시키지 않음 — 사용자가 노트북 이름을
+  //      바꾸고 다시 받아도 같은 audio 로 인식되도록.
   const committer = cfg.committerName && cfg.committerEmail
     ? { name: cfg.committerName, email: cfg.committerEmail }
     : null;
+  const { shortId, date, titleSlug, ext } = dedupHints || {};
 
   let existingMatch = null;
-  if (shortId || legacyFilename) {
+  if (shortId || (date && titleSlug)) {
     try {
       const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
       existingMatch = list.find((f) => {
         if (shortId && f.name.includes(`__${shortId}__`)) return true;
-        if (legacyFilename && f.name === legacyFilename) return true;
+        if (date && titleSlug && legacyFilenameMatches(f.name, date, titleSlug, ext)) return true;
         return false;
       });
     } catch (e) {
@@ -192,6 +197,9 @@ function ghContentsUrl(repo, path) {
   return `https://api.github.com/repos/${repo}/contents/${segs}`;
 }
 
+// GitHub Contents API 의 GET 응답은 `Cache-Control: private, max-age=60` 으로 들어와
+// 브라우저 HTTP 캐시에 60초간 머문다. push 직후 같은 디렉토리를 다시 list 하면
+// stale 한 listing 이 와서 dedup 매칭이 미스나는 문제가 있어 GET 전부 no-store.
 async function ghGet(repo, path, token) {
   const r = await fetch(ghContentsUrl(repo, path), {
     headers: {
@@ -199,6 +207,7 @@ async function ghGet(repo, path, token) {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
     },
+    cache: "no-store",
   });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`ghGet ${path}: ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -212,6 +221,7 @@ async function ghList(repo, dirPath, token) {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
     },
+    cache: "no-store",
   });
   if (r.status === 404) return [];
   if (!r.ok) throw new Error(`ghList ${dirPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -256,25 +266,43 @@ function shortIdOf(artifactId) {
   return m ? m[1] : "";
 }
 
-function buildFilename(meta, ext, shortId) {
-  let date;
+function extractDate(meta) {
   const m = DATE_RE.exec(meta.coverDateAttr || "");
   if (m && MONTHS[m[1]]) {
-    date =
+    return (
       m[3] +
       String(MONTHS[m[1]]).padStart(2, "0") +
-      m[2].padStart(2, "0");
-  } else {
-    const n = new Date();
-    date =
-      n.getFullYear().toString() +
-      String(n.getMonth() + 1).padStart(2, "0") +
-      String(n.getDate()).padStart(2, "0");
+      m[2].padStart(2, "0")
+    );
   }
+  const n = new Date();
+  return (
+    n.getFullYear().toString() +
+    String(n.getMonth() + 1).padStart(2, "0") +
+    String(n.getDate()).padStart(2, "0")
+  );
+}
+
+function buildFilename(meta, ext, shortId) {
+  const date = extractDate(meta);
   const nb = slugify(meta.notebookTitle);
   const title = slugify(meta.episodeTitle);
   // shortId 가 있으면 ${date}__${nb}__${shortId}__${title}.ext, 없으면 옛 포맷.
   return shortId
     ? `${date}__${nb}__${shortId}__${title}${ext}`
     : `${date}__${nb}__${title}${ext}`;
+}
+
+// 옛 3-segment 파일 (UUID 도입 전 v0.4.0 이하) 을 (date, titleSlug, ext) 만으로
+// 매칭. 노트북 슬러그는 매칭 키에서 제외 — 사용자가 NotebookLM 에서 노트북 이름을
+// 바꾼 뒤 같은 카드를 다시 받는 케이스에서도 dedup 이 동작하도록.
+// 4-segment (shortId 박힌) 파일은 여기서 매칭하지 않음 — shortId substring 매칭이 1차 키.
+const LEGACY_DEDUP_RE = /^(\d{8})__.+?__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$/;
+function legacyFilenameMatches(name, date, titleSlug, ext) {
+  const m = LEGACY_DEDUP_RE.exec(name);
+  if (!m) return false;
+  const [, fDate, fShortId, fTitle, fExt] = m;
+  if (fShortId) return false; // 4-segment 는 shortId 매칭으로 처리
+  const wantExt = (ext || "").replace(/^\./, "").toLowerCase();
+  return fDate === date && fTitle === titleSlug && fExt.toLowerCase() === wantExt;
 }

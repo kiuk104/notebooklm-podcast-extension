@@ -95,6 +95,7 @@ async function loadMeta(repo, token) {
 async function listEpisodes(repo, token) {
   const r = await fetch(ghContentsUrl(repo, "docs/episodes"), {
     headers: ghHeaders(token),
+    cache: "no-store",
   });
   if (r.status === 404) return [];
   if (!r.ok) throw new Error(`feed list: ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -227,7 +228,11 @@ function ghHeaders(token) {
 }
 
 async function ghGet(repo, path, token) {
-  const r = await fetch(ghContentsUrl(repo, path), { headers: ghHeaders(token) });
+  // GitHub GET 은 60초 HTTP 캐시되므로 dedup/feed 정확성을 위해 no-store.
+  const r = await fetch(ghContentsUrl(repo, path), {
+    headers: ghHeaders(token),
+    cache: "no-store",
+  });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`feed ghGet ${path}: ${r.status} ${(await r.text()).slice(0, 200)}`);
   return r.json();
