@@ -74,14 +74,22 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type !== "push:result") return;
   const state = stateByTitle.get(msg.episodeTitle);
   if (!state) return;
+  const feedNote = feedSuffix(msg);
   if (msg.skipped) {
-    setRow(state, "ok", "↻ push 스킵", msg.reason || "");
+    setRow(state, "ok", "↻ push 스킵" + feedNote, msg.reason || "");
   } else if (msg.ok) {
-    setRow(state, "ok", "✓ push 완료", msg.filename);
+    setRow(state, "ok", "✓ push 완료" + feedNote, msg.filename);
   } else {
     setRow(state, "err", "✗ push 실패", msg.error || "");
   }
 });
+
+function feedSuffix(msg) {
+  if (msg.feedError) return " ⚠ feed";
+  if (msg.feed?.ok) return " + feed";
+  if (msg.feed?.skipped) return "";
+  return "";
+}
 
 scanBtn.addEventListener("click", async () => {
   scanBtn.disabled = true;
@@ -114,4 +122,9 @@ scanBtn.addEventListener("click", async () => {
 document.getElementById("open-options").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
+});
+
+document.getElementById("open-help").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/help/help.html") });
 });

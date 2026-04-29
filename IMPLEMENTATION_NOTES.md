@@ -56,3 +56,133 @@ v1 구현 위치: [downloader.py:50](https://github.com/kiuk104/notebooklm-podca
 3. 카드 인덱스 또는 audio overview 가 NotebookLM 내부에서 갖는 고유 ID — 가장 안정적, 다만 DOM 에서 노출되는지 확인 필요
 
 같은 식별자를 우선 쓰고, 사람이 읽을 제목은 파일명 표시용 보조 필드로 두는 게 안전하다. v1 은 사람이 읽을 파일명을 직접 dedup 키로 써서 위 함정에 걸렸다.
+
+---
+
+## 2. audio URL 재fetch 의 인증/CORS 체인
+
+### 배경
+
+v0.3.0 ([af1cb2f](https://github.com/kiuk104/notebooklm-podcast-extension/commit/af1cb2f)) 부터 다운로드 트리거가 발사되는 순간 SW 가 같은 audio URL 을 한 번 더 fetch 해서 GitHub Contents API 로 PUT 한다 (Chrome 의 로컬 다운로드와 병렬). 문제는 그 audio URL 이 단순 정적 파일이 아니라는 점.
+
+### 인증 체인의 실제 모양
+
+NotebookLM 의 audio overview URL 은 `lh3.googleusercontent.com/...` signed URL 형태인데, path 토큰만으로는 인증이 부족해 CDN 이 다음과 같이 redirect 시킨다:
+
+```
+lh3.googleusercontent.com
+  → accounts.google.com/ServiceLogin           (로그인 확인)
+  → lh3.google.com/rd-notebooklm                (NotebookLM 전용 redirector)
+  → drum.usercontent.google.com/...             (실제 audio 응답)
+```
+
+`.google.com` 세션 쿠키가 체인 내내 동행해야 ServiceLogin 이 자동 통과되고 마지막 응답까지 도달함.
+
+### 시도 1: SW direct fetch + `credentials:"omit"` (af1cb2f)
+
+- 결과: ServiceLogin redirect target 호스트가 `manifest.host_permissions` 밖이라 CORS 차단.
+- 학습: SW fetch 도 chrome 익스텐션 origin 에서 나가는 거라 redirect 체인의 *모든* 호스트가 host_permissions 에 들어 있어야 CORS 면제됨.
+
+### 시도 2: page-world fetch via `chrome.scripting.executeScript` ([6e2405a](https://github.com/kiuk104/notebooklm-podcast-extension/commit/6e2405a))
+
+- 발상: notebooklm.google.com 페이지 컨텍스트에서 fetch 하면 same-origin 으로 통과하지 않을까.
+- 결과: CDN 이 `Access-Control-Allow-Origin` 헤더를 notebooklm origin 으로 안 보내서 CORS 차단. credentials 설정과 무관하게 실패.
+- 학습: page-world fetch 는 same-origin 일 때만 의미가 있고, cross-origin 이면 CDN 측 ACAO 에 의존 — 통제 불가.
+- 비용: tabId 플러밍, executeScript 권한, 추가 메시지 holding — 그 모두를 [ac13fef](https://github.com/kiuk104/notebooklm-podcast-extension/commit/ac13fef) 에서 다시 걷어냄.
+
+### 시도 3 (현재): SW direct fetch + `credentials:"include"` + 확장된 host_permissions (ac13fef)
+
+- 변경: `manifest.json` 에 `accounts.google.com`, `lh3.google.com`, `*.usercontent.google.com` 추가. SW fetch 가 `credentials:"include"` 로 세션 쿠키 동행.
+- 이론: host_permissions 가 redirect 체인의 모든 호스트를 커버하면 SW 가 각 hop 에서 CORS 면제 + 세션 쿠키로 ServiceLogin 자동 통과 → 최종 audio 응답 도달.
+- 검증 상태: **✅ 작동 확인 (2026-04-29)**. 22.3MB m4a 가 SW devtools 에 `[push] fetched 22.3MB` 로 찍힘. 인증 체인은 닫힘.
+
+### fallback 후보 (현재로선 불필요)
+
+1. **`chrome.downloads.download({ url, ... }) ` 결과 파일을 SW 에서 read** — 시도 3 가 깨지면 Chrome 이 이미 받은 로컬 파일을 디스크에서 다시 읽어서 PUT.
+2. **ArrayBuffer 를 page-world 에서 받아 SW 로 postMessage** — 시도 2 의 변형이지만 CORS 가 안 풀리면 의미 없음.
+3. **`webRequest` 로 audio response 가로채서 body 캡처** — Manifest V3 에서는 `webRequest.filterResponseData` 가 빠져 있어 사실상 불가.
+
+---
+
+## 3. GitHub Contents API 401 Bad credentials (2026-04-29, 해결됨)
+
+### 증상
+
+시도 3 이 audio 를 정상적으로 가져온 직후 [src/background.js:138](src/background.js#L138) 의 `ghGet` 이:
+
+```
+401 {"message": "Bad credentials", "documentation_url": "https://docs.github.com/rest", "status": "401"}
+```
+
+audio fetch / 파일명 / 흐름 자체는 다 멀쩡하고 토큰 인증 단계만 실패.
+
+### 원인
+
+옵션 페이지에 저장된 PAT 가 무효. 코드 (저장 [src/options/options.js:25-30](src/options/options.js#L25-L30) ↔ 로드 [src/background.js:79-81](src/background.js#L79-L81), 둘 다 `.trim()`) 자체는 깨끗했음.
+
+### 해결
+
+옵션 페이지에서 token 새로 paste 후 동일 audio 재시도 → `[push] ... pushed (22.3MB)` 로그까지 정상 흐름 확인. 토큰 만료 / 잘못된 입력 / scope 부족 중 하나가 원인이었던 것으로 추정 (사용자 측 재입력으로 해결되었으므로 정확한 원인은 사후 추적 불가).
+
+### 학습 포인트 (v0.4.0 에서 처리됨)
+
+- 401 같은 인증 실패는 옵션 페이지로 바로 안내하는 동선이 더 친절함 → ✅ **v0.4.0 추가**: 옵션 페이지에 [설정 검증] 버튼 ([src/options/options.js](src/options/options.js)). `/user` 로 토큰 자체, `/repos/{repo}` 로 repo 접근/push 권한 확인. 401, 404, 권한 부족 케이스를 한 번에 잡아 저장 시점에서 사고 차단.
+
+---
+
+## 4. v0.4.0 디자인 결정 / 함정
+
+### RSS 두 모드의 메타 source-of-truth = `docs/podcast.json`
+
+옵션 페이지의 `rssMode` 가 두 모드를 가르지만, RSS 의 메타 (title/owner/image/retention/transcode) 는 양쪽 모두 repo 의 `docs/podcast.json` 에서 읽는다. 두 모드를 왔다갔다 해도 feed 가 동일하게 빌드되는 게 디자인 원칙. 익스텐션 옵션에 메타 폼을 추가하지 않은 이유 — 옵션이 source 가 되는 순간 두 모드 불일치 가능.
+
+### `retention` 의 AND 의미
+
+`maxItems` + `maxAgeDays` 둘 다 설정 시 둘 다 통과해야 keep — 더 짧은 정책이 실질 적용. 사용자가 "둘 다 설정하면 어느 쪽이 우선?" 으로 헷갈릴 수 있어 도움말 / example README 에 명시 필요. 한 쪽만 쓰려면 다른 쪽을 빼는 게 안전 (`0` 도 비활성으로 처리).
+
+### transcode + 익스텐션 직접 RSS 모드 (4-2) 의 race
+
+워크플로 transcode 를 켰는데 RSS 모드도 4-2 (익스텐션 직접) 면:
+1. 익스텐션이 m4a push → 익스텐션이 m4a 기준 feed 빌드 (잠시 m4a URL 노출)
+2. 워크플로가 트리거 → m4a → mp3 + retention + 워크플로 측 feed 재빌드 (mp3 URL 로 갱신)
+
+30초~1분 사이에 팟캐스트 앱이 m4a URL 을 잡았다 mp3 로 바뀌면 또 받음. 동작 자체는 OK 지만 부담. 권장: transcode 켜면 RSS 모드도 4-1 (Actions 위임) 로 통일. 도움말 §6 에 명시.
+
+### `host_permissions` 확장의 적정 경계
+
+audio fetch 를 위해 `accounts.google.com`, `lh3.google.com`, `*.usercontent.google.com` 까지 host_permissions 에 들어 있다. Chrome Web Store 심사 시 "왜 그렇게 많이?" 가 질문될 수 있어 `host_permissions justification` 미리 준비 필요 (§2 의 redirect 체인 설명을 그대로 인용). 사용자 입장에서도 권한 페이지에서 보이는 호스트 목록이 길어 보임 — 도움말 §9 (권한 & 프라이버시) 에 redirect 체인 이유를 명시한 이유.
+
+---
+
+## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
+
+```
+content.js (artifact-more-button → 다운로드 메뉴 polling 클릭)
+  → background.onMessage("download:expect")  // 메타 큐잉
+  → Chrome 다운로드 시작
+  → background.onDeterminingFilename
+       ├─ suggest({ filename: YYYYMMDD__노트북__제목.ext })  // 로컬 저장
+       └─ pushEpisode(audioUrl, filename)
+            ├─ SW fetch audioUrl (credentials:"include", host_permissions 확장)
+            │    redirect: lh3.googleusercontent.com → ServiceLogin → lh3.google.com → drum.usercontent.google.com
+            ├─ ghGet (sha 확인)
+            ├─ ghPut (audio Contents API PUT)
+            └─ if rssMode === "extension":
+                rebuildFeed (src/feed.js)
+                  ├─ ghGet docs/podcast.json (메타)
+                  ├─ ghList docs/episodes/  (sha 포함)
+                  ├─ applyRetention → ghDelete drop 대상
+                  └─ ghPut docs/feed.xml
+
+[ rssMode === "actions" 모드는 익스텐션이 audio 만 PUT.
+  사용자 repo 의 .github/workflows/build-feed.yml 가 트리거되어
+  transcode → build_feed (retention 포함) → commit ]
+```
+
+### 디버깅 핸드오프
+
+`[push]` / `[feed]` prefix log:
+- [src/background.js](src/background.js) — `[push] SW fetch host=...`, `[push] fetched XX MB`, `[push] ... pushed`
+- [src/feed.js](src/feed.js) — `[feed] retention drop: ...`, `[feed] rebuilt with N episodes` 또는 `[feed] skip (feed unchanged)`
+
+popup 에는 `notifyPush` 가 던지는 `push:result` 메시지로 ok/실패 + feed 결과 (`+ feed`, `⚠ feed`) 가 카드 상태에 노출되어 SW devtools 안 열어도 확인 가능.

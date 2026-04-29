@@ -6,7 +6,7 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 
 ## 상태
 
-🚧 **개발 중 — v0.3.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다. RSS feed 자동 생성은 아직 미구현.
+🚧 **개발 중 — v0.4.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다. RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` / `transcode` 필드로 보관 정책과 m4a→mp3 변환을 같이 처리. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
 
 ## 로드맵
 
@@ -14,9 +14,11 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 - [x] NotebookLM 페이지 스캔 (노트북 제목, audio overview 목록)
 - [x] audio overview 다운로드 트리거 + `YYYYMMDD__노트북__제목.{ext}` 자동 rename
 - [x] PAT 기반 GitHub Contents API push (`docs/episodes/`)
-- [ ] RSS feed 자동 생성 (`docs/feed.xml`) + index.html
-- [ ] Rolling window (오래된 에피소드 자동 정리, repo 용량 관리)
-- [ ] m4a → mp3 transcode (ffmpeg.wasm — 선택)
+- [x] RSS feed 자동 생성 — GitHub Actions 위임 모드 (사용자 repo 의 워크플로가 빌드)
+- [x] RSS feed 자동 생성 — 익스텐션 직접 생성 모드 (옵션)
+- [x] Rolling window (오래된 에피소드 자동 정리, repo 용량 관리) — `docs/podcast.json` 의 `retention` 필드
+- [x] m4a → mp3 transcode — 워크플로 측 native ffmpeg (`docs/podcast.json` 의 `transcode` 필드)
+- [ ] m4a → mp3 transcode — 익스텐션 내장 ffmpeg.wasm (옵션, 후순위)
 - [ ] Chrome Web Store 등록
 
 ## 설치 (개발 모드)

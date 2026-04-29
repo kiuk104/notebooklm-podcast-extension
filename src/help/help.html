@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>NotebookLM Podcast Sync — 도움말</title>
+<style>
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 24px 80px; color: #222; line-height: 1.6; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  p, li { font-size: 13px; }
+  p.sub { color: #666; margin-top: 0; font-size: 13px; }
+  code { background: #f4f4f5; padding: 1px 6px; border-radius: 3px; font-size: 12px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  pre { background: #f8f9fb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; font-size: 12px; line-height: 1.5; overflow-x: auto; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  ol li, ul li { margin: 4px 0; }
+  a { color: #2563eb; }
+  .tip { background: #eff6ff; border-left: 3px solid #2563eb; padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; font-size: 12.5px; }
+  .warn { background: #fef3c7; border-left: 3px solid #d97706; padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; font-size: 12.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  th { background: #f9fafb; font-weight: 600; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+  nav.toc { background: #f9fafb; border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 6px; margin: 20px 0 28px; font-size: 12.5px; }
+  nav.toc ol { margin: 4px 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+
+<h1>NotebookLM Podcast Sync — 도움말</h1>
+<p class="sub">NotebookLM 음성개요를 본인 GitHub repo 로 push 해서 개인 팟캐스트 RSS 를 만드는 익스텐션 사용법.</p>
+
+<nav class="toc">
+  <strong>목차</strong>
+  <ol>
+    <li><a href="#how-it-works">전체 흐름</a></li>
+    <li><a href="#setup">처음 설정 (GitHub repo + PAT)</a></li>
+    <li><a href="#usage">사용법</a></li>
+    <li><a href="#rss">RSS feed 생성</a></li>
+    <li><a href="#retention">보관 정책 (rolling window)</a></li>
+    <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
+    <li><a href="#filename">파일명 규약</a></li>
+    <li><a href="#troubleshoot">트러블슈팅</a></li>
+    <li><a href="#privacy">권한 &amp; 프라이버시</a></li>
+  </ol>
+</nav>
+
+<h2 id="how-it-works">1. 전체 흐름</h2>
+<pre>NotebookLM 노트북 페이지 (음성개요 카드)
+  → 익스텐션 [받기] 버튼
+    → Chrome 이 audio 다운로드 (로컬 폴더에도 저장)
+    → 동시에 익스텐션 SW 가 같은 audio 를 다시 fetch
+      → GitHub Contents API 로 docs/episodes/ 에 PUT
+        → (repo 의 GitHub Actions workflow 가) feed.xml 생성
+          → 팟캐스트 앱 → 새 에피소드</pre>
+
+<p>한 번 셋업하면 그 다음부터는 NotebookLM 에 새 음성개요가 생길 때마다 익스텐션 아이콘 → [받기] 만 누르면 끝.</p>
+
+<h2 id="setup">2. 처음 설정</h2>
+
+<h3>2-1. 빈 public GitHub repo 만들기</h3>
+<ol>
+  <li>GitHub 에서 새 repo 생성. <strong>Public</strong> 으로. (RSS 가 외부 팟캐스트 앱에서 접근 가능해야 함.)</li>
+  <li><strong>Settings → Pages</strong> 에서 Source 를 <code>main</code> branch / <code>/docs</code> folder 로 활성화.</li>
+  <li>활성화 후 Pages URL 확인: <code>https://&lt;사용자&gt;.github.io/&lt;repo&gt;/</code></li>
+  <li>최종 RSS URL 은: <code>https://&lt;사용자&gt;.github.io/&lt;repo&gt;/feed.xml</code> — 이걸 팟캐스트 앱에 등록.</li>
+</ol>
+
+<h3>2-2. Personal Access Token (PAT) 발급</h3>
+<ol>
+  <li><a href="https://github.com/settings/tokens/new?scopes=repo&description=notebooklm-podcast-extension" target="_blank">새 PAT 발급 페이지</a> 열기 (필요한 scope 가 미리 선택되어 있음).</li>
+  <li>Note 에 식별 가능한 이름 (예: <code>notebooklm-podcast-extension</code>), Expiration 은 적당히.</li>
+  <li>scope 는 <code>repo</code> 만 켜져 있으면 충분.</li>
+  <li>[Generate token] → 표시되는 <code>ghp_...</code> 토큰 복사 (다시 못 봄).</li>
+</ol>
+
+<div class="warn">
+  토큰은 <strong>발급 직후 한 번만</strong> 보입니다. 페이지를 닫기 전에 익스텐션 옵션에 paste 하세요. 잃어버리면 다시 발급해야 합니다.
+</div>
+
+<h3>2-3. 익스텐션 옵션 입력</h3>
+<ol>
+  <li>익스텐션 아이콘 → 팝업 하단 <code>⚙ GitHub 설정</code> 클릭.</li>
+  <li><strong>Token</strong> 에 위에서 받은 PAT paste.</li>
+  <li><strong>Repo</strong> 에 <code>owner/name</code> 형식 (예: <code>kiuk104/my-notebooklm-podcast</code>).</li>
+  <li><strong>RSS feed 생성 방식</strong> 은 기본값 <em>GitHub Actions 에 위임</em> 권장 (<a href="#rss">§4</a> 참고).</li>
+  <li>커밋 이름/이메일은 비워 둬도 됨 (GitHub 기본값 사용).</li>
+  <li>[저장] — 그 다음 <strong>[설정 검증]</strong> 을 한 번 눌러 토큰/repo 가 실제로 통하는지 확인. <code>✓ &lt;사용자&gt; → &lt;repo&gt; push 가능. 설정 정상.</code> 이 떠야 OK.</li>
+</ol>
+
+<div class="tip">
+  [설정 검증] 은 <code>GET /user</code> + <code>GET /repos/&lt;owner&gt;/&lt;name&gt;</code> 두 번을 호출해서 토큰 자체 + repo 접근/push 권한을 한 번에 확인합니다. 401 / 404 / 권한 없음을 다운로드 흐름까지 가기 전에 잡아주는 가드.
+</div>
+
+<h2 id="usage">3. 사용법</h2>
+<ol>
+  <li>NotebookLM 에서 음성개요가 있는 노트북 페이지 열기 (<code>https://notebooklm.google.com/notebook/&lt;id&gt;</code>).</li>
+  <li><strong>그 페이지에서 F5 한 번</strong> — content script 가 inject 되도록 (배포 직후나 익스텐션 새로고침 직후 필요).</li>
+  <li>툴바의 익스텐션 아이콘 클릭 → <strong>[현재 노트북 스캔]</strong>.</li>
+  <li>노트북 제목 / 생성일 + 음성개요 목록 확인.</li>
+  <li>받고 싶은 카드 옆 <strong>[받기]</strong> 클릭.</li>
+  <li>상태가 <em>받는 중 → ⬇ 받음, push 중 → ✓ push 완료</em> 로 진행.</li>
+</ol>
+
+<div class="tip">
+  Chrome 기본 다운로드 폴더에도 같은 파일이 저장됩니다 (오프라인 백업). repo 에는 <code>docs/episodes/</code> 아래에 push 됩니다.
+</div>
+
+<h2 id="rss">4. RSS feed 생성</h2>
+
+<p>음성개요 m4a/mp3 파일이 repo 에 올라가는 것만으로는 팟캐스트 앱이 인식 못 합니다. <strong><code>docs/feed.xml</code></strong> (RSS) 이 같이 있어야 합니다. 익스텐션 옵션의 <strong>RSS feed 생성 방식</strong> 으로 두 갈래 중 하나를 택하세요.</p>
+
+<h3>4-1. GitHub Actions 에 위임 (기본값, 권장)</h3>
+<p>repo 에 워크플로 파일 (<code>.github/workflows/build-feed.yml</code>) 을 두면 audio 가 push 될 때마다 GitHub 가 알아서 <code>feed.xml</code> 을 다시 만들고 commit 합니다. 익스텐션은 audio push 만 하므로 가볍고, 워크플로 로직을 사용자가 자유롭게 커스터마이즈할 수 있습니다.</p>
+
+<p><strong>표준 한 벌 example</strong>: 익스텐션 repo 의 <a href="https://github.com/kiuk104/notebooklm-podcast-extension/tree/main/examples/feed-builder" target="_blank">examples/feed-builder/</a> 폴더에 그대로 복사해 쓸 수 있는 4 개 파일이 있습니다 (워크플로, 빌드 스크립트, <code>podcast.json</code>, README). 본인 RSS 호스팅 repo 에 같은 경로 (<code>.github/workflows/</code>, <code>scripts/</code>, <code>docs/podcast.json</code>) 로 복사 → <code>docs/podcast.json</code> 의 제목/오너 정보만 본인 것으로 수정 → push 하면 첫 audio 가 들어왔을 때 (또는 Actions 탭에서 [Run workflow] 로 수동 트리거) <code>feed.xml</code> 이 자동 생성됩니다.</p>
+
+<p>외부 의존성 없는 Python 표준 라이브러리만 사용하므로 GitHub Actions 의 setup-python 한 단계만 있으면 빌드됩니다. 자세한 셋업 / 트러블슈팅은 example 폴더의 README 참조.</p>
+
+<h3>4-2. 익스텐션이 매 push 시마다 직접 생성</h3>
+<p>익스텐션이 audio push 직후 본인이 직접 episodes 디렉토리를 list 해서 <code>feed.xml</code> 을 만들어 같이 PUT 합니다. 워크플로 셋업 부담이 없는 대신 매번 list + XML 조립을 익스텐션이 부담합니다. 매 audio 카드의 [받기] 한 번이 두 번의 GitHub PUT (audio + feed) 으로 이어집니다.</p>
+
+<p>이 모드도 4-1 과 같은 메타 source 를 씁니다 — repo 의 <code>docs/podcast.json</code> 이 있으면 그걸 읽어 RSS 의 title/owner/image 등을 채웁니다. 없으면 default 메타 (title = "NotebookLM Podcast", language = "ko", owner 비어 있음) 로 진행하고 SW 콘솔에 경고 한 번 출력. <strong>팟캐스트 앱 등록을 위해서는 <code>docs/podcast.json</code> 을 추가하는 것이 권장</strong>됩니다 (포맷은 <a href="https://github.com/kiuk104/notebooklm-podcast-extension/blob/main/examples/feed-builder/docs/podcast.json" target="_blank">example</a> 그대로).</p>
+
+<p>BASE_URL 은 익스텐션 옵션의 <code>owner/name</code> 에서 자동 조립 (<code>https://&lt;owner&gt;.github.io/&lt;name&gt;/</code>) — custom domain 을 쓰는 경우 4-1 모드 (워크플로) 가 더 적합합니다.</p>
+
+<h2 id="retention">5. 보관 정책 (rolling window)</h2>
+
+<p>repo 용량을 통제하려면 <code>docs/podcast.json</code> 에 <code>retention</code> 필드를 추가하세요. 두 RSS 모드 (4-1, 4-2) 모두 같은 정책을 따르므로, 모드를 바꿔도 정리 동작은 동일합니다.</p>
+
+<pre>{
+  "title": "...",
+  ...
+  "retention": {
+    "maxItems": 50,
+    "maxAgeDays": 365
+  }
+}</pre>
+
+<table>
+  <tr><th>필드</th><th>의미</th></tr>
+  <tr><td><code>maxItems</code></td><td>최근 N 개의 episode 만 유지. 그보다 오래된 파일은 build 시점에 자동 삭제.</td></tr>
+  <tr><td><code>maxAgeDays</code></td><td>오늘로부터 N 일 이내 episode 만 유지.</td></tr>
+</table>
+
+<p>둘 다 설정하면 <strong>둘 다 통과해야 유지</strong> (AND) — 더 짧은 정책이 실질적으로 적용됩니다. 한 쪽만 쓰려면 다른 쪽을 빼거나 <code>0</code> 으로. <code>retention</code> 필드 자체를 제거하면 정리 비활성 (모든 episode 영구 보관).</p>
+
+<div class="tip">
+  NotebookLM 의 카드 자체를 지우는 것과는 무관합니다 — repo 의 파일만 정리. 보관 정책 밖으로 나간 episode 는 RSS 에서 사라지지만 NotebookLM 에 카드가 살아 있다면 [받기] 를 다시 누를 때 또 push 됩니다.
+</div>
+
+<h2 id="transcode">6. Transcode (m4a → mp3)</h2>
+
+<p>NotebookLM 의 m4a 는 256k stereo 라 한 시간에 ~22MB. 음성개요는 사람 목소리 위주라 64k mono mp3 (~5MB) 로도 충분히 들립니다 — repo 1GB 한도가 약 4배 늘어나는 효과.</p>
+
+<p><strong>워크플로 측 native ffmpeg 모드 (권장)</strong> — <code>docs/podcast.json</code> 의 <code>transcode</code> 필드를 켜면 워크플로의 transcode step 이 <code>docs/episodes/</code> 안 m4a/mp4 를 같은 이름의 mp3 로 변환합니다 (원본 삭제). <code>ubuntu-latest</code> 의 native ffmpeg (libmp3lame 포함) 가 처리해서 1시간 audio 가 5~10초. RSS 모드는 <a href="#rss">4-1 (Actions 위임)</a> 사용 전제.</p>
+
+<pre>{
+  ...
+  "transcode": {
+    "enabled": true,
+    "bitrate": "64k",
+    "mono": true
+  }
+}</pre>
+
+<table>
+  <tr><th>필드</th><th>의미</th></tr>
+  <tr><td><code>enabled</code></td><td><code>true</code> 일 때만 변환 시도. 기본 <code>false</code>.</td></tr>
+  <tr><td><code>bitrate</code></td><td>"64k" / "96k" / "128k" 등. 음성 위주면 "64k", 음악/효과음 비중이 높으면 "96k" 이상.</td></tr>
+  <tr><td><code>mono</code></td><td><code>true</code> 면 <code>-ac 1</code> 로 다운믹스. NotebookLM 음성개요는 기본 mono 라 stereo 유지의 의미가 작음.</td></tr>
+</table>
+
+<div class="warn">
+  <strong>익스텐션 직접 RSS 모드 (4-2) 와 함께 쓰면 잠시 m4a feed 가 노출됨</strong>: 익스텐션이 m4a 를 push 한 직후 m4a 기준으로 RSS 가 한 번 빌드되고, 그 다음 워크플로가 트리거되어 mp3 로 transcode + RSS 재빌드. 그 사이 (보통 30초~1분) 팟캐스트 앱이 m4a URL 을 받아갈 수 있습니다. transcode 를 쓸 거면 RSS 모드도 4-1 (Actions 위임) 로 통일하는 게 깔끔.
+</div>
+
+<p><strong>익스텐션 내장 (ffmpeg.wasm) 모드</strong>: 미구현. 패키지 +25MB / SW 메모리 100~200MB / 첫 [받기] 응답 30초~수분 등 트레이드오프가 커서 후순위. 워크플로 셋업이 어려운 사용자만을 위한 옵션.</p>
+
+<h2 id="filename">7. 파일명 규약</h2>
+<pre>YYYYMMDD__노트북-슬러그__제목-슬러그.{m4a|mp3}</pre>
+
+<table>
+  <tr><th>구간</th><th>의미</th></tr>
+  <tr><td><code>YYYYMMDD</code></td><td>NotebookLM 노트북의 cover 생성일 (페이지 cover 영역의 날짜 표시).</td></tr>
+  <tr><td><code>노트북-슬러그</code></td><td>노트북 제목을 한글/영숫자만 남기고 40자로 컷.</td></tr>
+  <tr><td><code>제목-슬러그</code></td><td>음성개요 카드 제목을 같은 규칙으로 40자로 컷.</td></tr>
+</table>
+
+<p>40자 컷은 Windows MAX_PATH (260) + GitHub path 255-byte 제한 가드입니다. 한글 1자가 UTF-8 3 byte 라 제목이 길 때 GitHub 가 거절하는 사고를 방지.</p>
+
+<h2 id="troubleshoot">8. 트러블슈팅</h2>
+
+<h3>"현재 탭이 NotebookLM 노트북 페이지가 아닙니다"</h3>
+<p>NotebookLM 의 노트북 상세 페이지 (<code>/notebook/&lt;id&gt;</code>) 에서만 동작합니다. 홈 / 검색 페이지에서는 스캔 안 됨.</p>
+
+<h3>"응답 없음 — 페이지를 새로고침하세요"</h3>
+<p>NotebookLM 페이지를 익스텐션 설치/새로고침 전에 열었으면 content script 가 주입 안 된 상태. 그 페이지에서 <strong>F5</strong>.</p>
+
+<h3>push 실패: <code>401 Bad credentials</code> 또는 권한 부족</h3>
+<ol>
+  <li>옵션 페이지에서 [설정 검증] 을 한 번 눌러 어디서 막히는지 확인 — 토큰 401 / repo 404 / push 권한 없음 중 하나로 분류됨.</li>
+  <li>토큰 401 이면: token 필드 비우고 새로 paste (보이지 않는 trailing 공백 제거). 그래도 안 되면 PAT 만료 — 새로 발급 (§2-2).</li>
+  <li>repo 404 이면: owner/name 오타 또는 private repo 인데 토큰 권한이 그 repo 를 못 봄. fine-grained PAT 의 repository access 설정 확인.</li>
+  <li>push 권한 없음이면: classic PAT 는 <code>repo</code> scope, fine-grained PAT 는 해당 repo 에 <code>Contents: Read and write</code> 권한 필요.</li>
+</ol>
+
+<h3>같은 음성개요가 두 번 받아짐 (예: <code>__audio-0.mp3</code>, <code>__실제-제목.mp3</code>)</h3>
+<p>NotebookLM 이 음성개요 생성 직후 제목을 <code>audio 0</code>, <code>audio 1</code> 같은 플레이스홀더로 잠시 보여주다가 비동기로 실제 제목으로 교체합니다. 플레이스홀더 상태에서 받으면 같은 audio 를 두 번 받게 될 수 있음. 잠시 기다렸다가 제목이 확정된 뒤 받기 권장. 자세한 내용은 <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §1</a>.</p>
+
+<h3>다운로드는 됐는데 GitHub 에 안 올라감</h3>
+<p>SW devtools console 확인:</p>
+<ol>
+  <li><code>chrome://extensions/</code> 에서 익스텐션 카드의 <strong>service worker</strong> 링크 클릭.</li>
+  <li>console 에 <code>[push] ...</code> 로그 보임 — fetch / push 단계별 상태 확인.</li>
+  <li>에러 메시지 (host, status) 가 다음 차단 호스트나 권한 문제를 노출함.</li>
+</ol>
+
+<h2 id="privacy">9. 권한 &amp; 프라이버시</h2>
+
+<table>
+  <tr><th>권한</th><th>용도</th></tr>
+  <tr><td><code>activeTab</code>, <code>scripting</code></td><td>현재 NotebookLM 탭에 content script 주입.</td></tr>
+  <tr><td><code>storage</code></td><td>GitHub token / repo 설정을 브라우저 로컬에 저장.</td></tr>
+  <tr><td><code>downloads</code></td><td>NotebookLM audio 받기 + 파일명 rename.</td></tr>
+  <tr><td><code>host_permissions: notebooklm.google.com</code></td><td>NotebookLM 페이지 DOM 에서 카드 정보 읽기.</td></tr>
+  <tr><td><code>host_permissions: *.googleusercontent.com, *.usercontent.google.com, accounts.google.com, lh3.google.com</code></td><td>audio CDN / 인증 redirect 체인 통과 (자세한 이유: IMPLEMENTATION_NOTES §2).</td></tr>
+  <tr><td><code>host_permissions: api.github.com</code></td><td>본인 repo 에 audio / RSS push.</td></tr>
+</table>
+
+<p><strong>토큰 저장 위치</strong>: <code>chrome.storage.local</code>. 외부 서버로 전송되지 않으며, GitHub API 호출 시에만 Authorization 헤더로 사용됩니다. 익스텐션을 제거하면 같이 삭제됩니다.</p>
+
+<p><strong>NotebookLM 세션 쿠키</strong>: audio 재fetch 시 <code>credentials:"include"</code> 로 동행. 이 쿠키는 redirect 체인 (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>) 을 통과하기 위해서만 사용되며 익스텐션이 따로 저장하지 않습니다.</p>
+
+<hr>
+
+<p style="font-size: 12px; color: #666;">
+더 자세한 구현 / 디버깅 노트:
+<a href="../../README.md" target="_blank">README.md</a> ·
+<a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a>
+</p>
+
+</body>
+</html>

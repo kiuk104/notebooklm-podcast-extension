@@ -8,7 +8,7 @@
   h1 { font-size: 22px; margin-bottom: 4px; }
   p.sub { color: #666; margin-top: 0; font-size: 13px; }
   label { display: block; margin-top: 18px; font-size: 13px; font-weight: 600; }
-  input { width: 100%; padding: 8px 10px; margin-top: 4px; box-sizing: border-box; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; }
+  input, select { width: 100%; padding: 8px 10px; margin-top: 4px; box-sizing: border-box; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; background: #fff; }
   button { margin-top: 22px; padding: 10px 20px; font-size: 14px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
   button:hover { background: #1d4ed8; }
   .hint { font-size: 11px; color: #666; margin-top: 4px; font-weight: normal; }
@@ -36,15 +36,33 @@
     <div class="hint">아직 없으면 GitHub 에서 빈 public repo 를 먼저 만들고 입력하세요. Pages 활성화는 README 참고.</div>
   </label>
 
+  <label>RSS feed 생성 방식
+    <select id="rss-mode">
+      <option value="actions">GitHub Actions 에 위임 (권장)</option>
+      <option value="extension">익스텐션이 매 push 시마다 직접 생성</option>
+    </select>
+    <div class="hint">
+      기본값은 위임. repo 에 워크플로 (`.github/workflows/build-feed.yml`) 를 두면 audio 가 push 될 때마다 GitHub 가 `feed.xml` 을 자동 생성합니다.
+      익스텐션 직접 생성 모드는 매 push 마다 episodes 디렉터리를 list + feed.xml PUT 까지 한 번에 처리 — 워크플로 셋업이 부담스러울 때 선택.
+    </div>
+  </label>
+
   <label>커밋 시 사용할 이름 / 이메일 (선택)
     <input type="text" id="committer-name" placeholder="kiuk104">
     <input type="email" id="committer-email" placeholder="kiuk104@gmail.com" style="margin-top:6px">
     <div class="hint">비워 두면 GitHub 기본값을 사용합니다.</div>
   </label>
 
-  <button type="submit">저장</button>
+  <div style="display: flex; gap: 10px; align-items: center;">
+    <button type="submit">저장</button>
+    <button type="button" id="verify" style="background: #fff; color: #2563eb; border: 1px solid #2563eb;">설정 검증</button>
+  </div>
   <div id="status" class="status" style="display:none"></div>
 </form>
+
+<p style="margin-top: 28px; font-size: 12px; color: #666;">
+  처음 사용하시나요? <a href="../help/help.html" target="_blank">도움말 페이지</a> 에 GitHub repo 셋업 / Pages 활성화 / RSS feed 생성 방법이 있습니다.
+</p>
 
 <script src="options.js"></script>
 </body>

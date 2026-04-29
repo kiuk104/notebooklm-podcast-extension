@@ -4,7 +4,10 @@
 // 흐름: popup → content("download") → content 가 background 에 "download:expect"
 // 로 메타(노트북/제목/cover-date) 를 push → content 가 ⋮ → 다운로드 메뉴 클릭 →
 // Chrome 다운로드 시작 → onDeterminingFilename 에서 큐 pop, suggest() 로 rename →
-// 같은 audio URL 을 SW 에서 직접 fetch 해서 GitHub 로 PUT.
+// 같은 audio URL 을 SW 에서 직접 fetch 해서 GitHub 로 PUT → rssMode 가 "extension"
+// 이면 동시에 docs/feed.xml 도 재빌드해서 PUT.
+
+import { rebuildFeed } from "./feed.js";
 //
 // audio URL 은 lh3.googleusercontent.com signed URL. path 의 토큰만으론 인증
 // 부족해 CDN 이 accounts.google.com/ServiceLogin → lh3.google.com/rd-notebooklm
@@ -77,7 +80,7 @@ function notifyPush(detail) {
 
 async function pushEpisode(audioUrl, filename) {
   const cfg = await chrome.storage.local.get([
-    "token", "repo", "committerName", "committerEmail",
+    "token", "repo", "rssMode", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {
     return { skipped: true, reason: "GitHub 설정 없음" };
@@ -95,19 +98,38 @@ async function pushEpisode(audioUrl, filename) {
   const b64 = arrayBufferToBase64(buf);
   console.log(`[push] fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
 
-  const existing = await ghGet(cfg.repo, path, cfg.token);
-  if (existing && existing.size === size) {
-    console.log(`[push] ${filename} 이미 존재 (같은 크기), skip`);
-    return { skipped: true, reason: "이미 존재" };
-  }
-
   const committer = cfg.committerName && cfg.committerEmail
     ? { name: cfg.committerName, email: cfg.committerEmail }
     : null;
-  await ghPut(cfg.repo, path, b64,
-    `Add episode ${filename}`, existing?.sha, cfg.token, committer);
-  console.log(`[push] ${filename} pushed (${(size / 1024 / 1024).toFixed(1)}MB)`);
-  return { ok: true, size };
+
+  const existing = await ghGet(cfg.repo, path, cfg.token);
+  let pushResult;
+  if (existing && existing.size === size) {
+    console.log(`[push] ${filename} 이미 존재 (같은 크기), skip`);
+    pushResult = { skipped: true, reason: "이미 존재" };
+  } else {
+    await ghPut(cfg.repo, path, b64,
+      `Add episode ${filename}`, existing?.sha, cfg.token, committer);
+    console.log(`[push] ${filename} pushed (${(size / 1024 / 1024).toFixed(1)}MB)`);
+    pushResult = { ok: true, size };
+  }
+
+  // rssMode === "extension" 이면 audio push 가 끝난 직후 같은 SW 안에서 feed 도 재빌드.
+  // skip 된 경우엔 audio 가 이미 있던 상태이므로 feed 도 그대로일 가능성이 높음 →
+  // rebuildFeed 내부의 sha 비교가 unchanged 면 PUT 안 함, 그래서 호출은 무해함.
+  if (cfg.rssMode === "extension") {
+    try {
+      const feed = await rebuildFeed({ repo: cfg.repo, token: cfg.token, committer });
+      pushResult.feed = feed;
+      if (feed.skipped) console.log(`[feed] skip (${feed.reason})`);
+      else console.log(`[feed] rebuilt with ${feed.episodes} episodes`);
+      if (feed.missingMeta) console.warn("[feed] docs/podcast.json 없음 — default 메타로 생성됨. examples/feed-builder/docs/podcast.json 참고해서 추가 권장.");
+    } catch (e) {
+      console.error("[feed]", e);
+      pushResult.feedError = e.message;
+    }
+  }
+  return pushResult;
 }
 
 function arrayBufferToBase64(buf) {
