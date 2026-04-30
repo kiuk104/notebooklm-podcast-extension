@@ -151,9 +151,19 @@
   <li>진행률 막대 (done/total 비율)</li>
   <li>통계 요약 (노트북 N 개 · 카드 N 개 · 성공 N · 실패 N)</li>
   <li>실패 목록 — 어느 노트북/카드에서 어떤 이유로 실패했는지 (max 20개, 위에서부터 오래된 것)</li>
+  <li><strong>최근 GitHub push 활동 로그</strong> — 마지막 30 건의 push 결과를 라이브 표시 (✓ 성공 / ↻ dedup 스킵 / ✗ 실패), 카드 제목 + 파일 크기 + feed 갱신 여부 + "X초전". 헤더에 누적 카운트와 push 된 총 byte (예: ✓ 12 · ↻ 3 · ✗ 1 · 142.7MB).</li>
 </ul>
 <p>작업이 idle / completed / failed 상태일 때만 [초기화] 버튼이 노출 — 누르면 패널이 사라집니다 (다음 작업 시작하면 자동으로 다시 표시).</p>
 <p>패널은 작업이 없을 때 (idle) 자동으로 숨겨지므로 평소엔 옵션 폼만 보입니다.</p>
+
+<h3>3-6. 직전 스캔 결과 패널 + [신규 받기]</h3>
+<p>모든 노트북 sweep 이 완료되면 그 결과가 <code>chrome.storage.session</code> 에 30분간 보존됩니다. 관리 페이지 폼 아래에 <strong>"직전 스캔 결과"</strong> 패널이 자동으로 등장:</p>
+<ul>
+  <li>요약: <code>노트북 N개 · 카드 N개 · 신규 N개</code> + 스캔 후 경과 시간.</li>
+  <li><strong>[신규 N개 받기]</strong> 버튼 — popup 안 열고 관리 페이지에서 바로 bulk 다운로드 시작. 진행 상황은 위쪽 모니터에 자동 노출.</li>
+  <li><strong>[지우기]</strong> 버튼 — 저장된 스캔 결과 삭제 (다음 sweep 시작 시 자동 갱신됨).</li>
+</ul>
+<p>같은 결과는 <strong>popup 도 자동 복원</strong> — popup 닫혔다 다시 열면 재스캔 없이 cards list 가 그대로 표시됩니다 (30분 freshness 가드).</p>
 
 <h2 id="rss">4. RSS feed 생성</h2>
 
@@ -261,6 +271,11 @@
 
 <h3>같은 음성개요가 두 번 받아짐 (예: <code>__audio-0.mp3</code>, <code>__실제-제목.mp3</code>)</h3>
 <p>NotebookLM 이 음성개요 생성 직후 제목을 <code>audio 0</code>, <code>audio 1</code> 같은 플레이스홀더로 잠시 보여주다가 비동기로 실제 제목으로 교체합니다. 플레이스홀더 상태에서 받으면 같은 audio 를 두 번 받게 될 수 있음. 잠시 기다렸다가 제목이 확정된 뒤 받기 권장. 자세한 내용은 <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §1</a>.</p>
+
+<h3>"Chrome 탭 API 잠김" 또는 "Tabs cannot be edited right now"</h3>
+<p>모든 노트북 sweep 중 다수의 노트북이 같은 메시지로 줄줄이 실패하는 케이스. 실제 사용자 드래그뿐 아니라 빠른 연속 탭 create/close, 다른 탭 관리 익스텐션과의 충돌, Chrome 내부 rate limit 에서 발생.</p>
+<p>익스텐션이 자동으로 5회까지 backoff (500ms → 8s) retry 합니다. 5회 연속 실패하면 sweep 자체를 abort 하고 안내 메시지를 표시 — 그 시점까지 성공한 결과는 보존되어 [신규 받기] 로 활용 가능.</p>
+<p>대응: (a) 탭바를 클릭/드래그하지 않은 상태에서 재시도 (b) 다른 탭 관리 익스텐션 (OneTab, tab grouping 류) 을 잠시 비활성화 (c) 잠시 기다렸다가 다시 시도. 자세한 분석은 <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §5</a>.</p>
 
 <h3>다운로드는 됐는데 GitHub 에 안 올라감</h3>
 <p>SW devtools console 확인:</p>

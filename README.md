@@ -16,6 +16,10 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 - [x] PAT 기반 GitHub Contents API push (`docs/episodes/`)
 - [x] 일괄 다운로드 — 카드별 체크박스 + [선택 받기] (현재 노트북 + 모든 노트북 sweep 양쪽)
 - [x] cross-notebook scan — [모든 노트북 스캔] 으로 v1 cron sweep 동등 (백그라운드 탭 순차 방문)
+- [x] 관리 페이지 진행 모니터 — task state / 진행률 / 경과 시간 / GitHub push 활동 로그 라이브 표시
+- [x] 직전 스캔 결과 persist — 30분간 유지, popup/관리 페이지 양쪽에서 [신규 받기] 트리거 가능
+- [x] auto-download 옵션 — 스캔 후 신규 카드 자동 다운로드 (default OFF, 첫 사용은 수동 검수 권장)
+- [x] Chrome tabs API transient error 자동 retry — 50+ 노트북 cascade fail 방지
 - [x] RSS feed 자동 생성 — GitHub Actions 위임 모드 (사용자 repo 의 워크플로가 빌드)
 - [x] RSS feed 자동 생성 — 익스텐션 직접 생성 모드 (옵션)
 - [x] Rolling window (오래된 에피소드 자동 정리, repo 용량 관리) — `docs/podcast.json` 의 `retention` 필드

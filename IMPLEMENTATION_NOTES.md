@@ -176,6 +176,58 @@ audio fetch 를 위해 `accounts.google.com`, `lh3.google.com`, `*.usercontent.g
 
 ---
 
+## 5. Chrome `chrome.tabs.create` / `.remove` 의 transient error (2026-04-30)
+
+### 증상
+
+cross-notebook sweep ([모든 노트북 스캔]) 중 50+ 노트북이 줄줄이:
+
+```
+Tabs cannot be edited right now (user may be dragging a tab).
+```
+
+스캔 자체는 통째로 실패해서 노트북 0개 / 카드 0개로 끝남. SW console 에 50줄 넘게 같은 메시지 도배.
+
+### 원인
+
+메시지가 시사하는 "사용자가 탭 드래그 중" 은 케이스의 일부일 뿐. 실제로는:
+
+1. **빠른 연속 `chrome.tabs.create` / `.remove`** — 탭바의 슬라이드 애니메이션이 진행 중일 때 새 호출이 들어오면 reject. sweep 처럼 노트북 하나당 create + close 를 반복하면 첫 close 의 애니메이션이 끝나기 전에 다음 create 가 들어가기 쉬움.
+2. **다른 익스텐션과의 충돌** — tab grouping / OneTab / session manager 류가 동시에 chrome.tabs API 를 만지면 서로 lock 충돌.
+3. **Chrome 내부 rate limit** — 짧은 시간 내 너무 많은 tab 조작 (관찰: 100+ create/close/min 정도) 에서 일정 기간 reject.
+
+한 번 reject 하면 그 다음 호출도 같은 패턴으로 reject 하는 경향 — 캐스케이드. 사용자 보기엔 "스캔이 통째로 실패" 처럼 보임.
+
+### 대응 (v0.4.0 patch)
+
+[src/background.js](src/background.js) 의 `withTabRetry` + 200ms breather + 5회 연속 실패 시 abort.
+
+```js
+const TRANSIENT_TAB_ERROR_RE = /Tabs cannot be edited|may be dragging|tab strip|currently in use/i;
+
+async function withTabRetry(fn, label, maxAttempts = 5) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      if (!TRANSIENT_TAB_ERROR_RE.test(e.message)) throw e;
+      const delay = 500 + attempt * attempt * 500; // 500/1.5s/3s/5s/8s
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+```
+
+`chrome.tabs.create` / `chrome.tabs.remove` 모두 `withTabRetry` 로 감싸고, 노트북 사이마다 `await sleep(200)` breather 추가. 5회 연속 같은 transient error 면 task 자체를 abort (메시지: "Chrome 탭 API 잠김. 탭바 드래그 해제 / 다른 익스텐션 비활성화 후 재시도. 기존 성공 N개 결과는 보존됨.").
+
+### 학습
+
+- Chrome 의 tab API 는 내부 lock 이 자주 발생하는 영역이라 retry-with-backoff 가 정석.
+- 다중 tab orchestration 코드는 모두 retry wrapper 통해 호출하는 게 안전.
+- 메시지 string 매칭은 fragile 하지만 (`message` 자체가 Chrome 버전마다 미세하게 다를 수 있음) 더 나은 detection 수단이 없음 — `chrome.runtime.lastError` 도 같은 string 을 담음.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```

@@ -58,6 +58,8 @@ NotebookLM 의 음성개요(Audio Overview)는 NotebookLM 안에서만 들을 �
 • 안정 dedup: 카드의 NotebookLM artifact UUID 를 파일명에 박아, NotebookLM 측에서 노트북 이름·카드 제목을 바꿔도 같은 audio 로 인식 — 중복 push 방지.
 • 일괄 다운로드: 카드별 체크박스 + [선택 받기] 로 한 번에 여러 카드 처리. 이미 받은 카드는 자동 미체크.
 • 모든 노트북 sweep: [모든 노트북 스캔] 으로 NotebookLM 홈의 모든 노트북을 백그라운드에서 순차 방문 — 신규 카드만 골라 일괄 다운로드.
+• 진행 모니터 (관리 페이지): task 진행률 / 경과 시간 / GitHub push 활동 로그가 실시간 표시. popup 닫혀도 30분간 결과 보존.
+• 자동 다운로드 옵션: 스캔 직후 신규 카드를 그대로 이어서 받는 v1 cron 동등 모드. default OFF (안전).
 • 두 가지 RSS 모드: GitHub Actions 워크플로 위임 (권장) 또는 익스텐션 직접 생성. 옵션에서 전환.
 • 보관 정책: docs/podcast.json 의 retention 필드로 maxItems / maxAgeDays 자동 정리. 저장소 용량 통제.
 • Transcode (옵션): 워크플로 측 ffmpeg 로 m4a → mp3 자동 변환. 1시간 audio 가 5~10초.
@@ -97,6 +99,8 @@ After setup, every new audio overview is just one click away. To catch up on mul
 • Stable dedup: NotebookLM artifact UUIDs are embedded into the filename, so renaming notebooks or audio titles in NotebookLM never causes duplicate pushes.
 • Bulk download: per-card checkboxes + [Bulk download] button process multiple cards in one click. Already-pushed cards are auto-unchecked.
 • All-notebook sweep: [Scan all notebooks] visits every notebook from your home page in background tabs, then bulk-downloads only the new cards.
+• Live progress monitor (management page): task progress / elapsed time / per-card GitHub push activity log shown in real time. Scan results persist 30 min so you can act on them after closing the popup.
+• Optional auto-download: chain "scan + push new cards" into a single click — v1 cron-style behavior. Default OFF for safety.
 • Two RSS modes: delegate to a GitHub Actions workflow (recommended) or have the extension build feed.xml directly. Switchable from options.
 • Retention policy: the retention field in docs/podcast.json (maxItems / maxAgeDays) prunes old episodes automatically — keeps your repo small.
 • Optional transcode: m4a → mp3 via workflow-side ffmpeg. A one-hour audio takes 5–10 seconds.
