@@ -6,7 +6,7 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 
 ## 상태
 
-🚧 **개발 중 — v0.4.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__shortId__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다 (`shortId` 는 카드의 NotebookLM artifact UUID 첫 8자 — 노트북 이름이나 카드 제목이 바뀌어도 같은 audio 로 인식되어 중복 push 가 방지됨). RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` / `transcode` 필드로 보관 정책과 m4a→mp3 변환을 같이 처리. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
+🚧 **개발 중 — v0.4.0**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__shortId__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다 (`shortId` 는 카드의 NotebookLM artifact UUID 첫 8자 — 노트북 이름이나 카드 제목이 바뀌어도 같은 audio 로 인식되어 중복 push 가 방지됨). 단일 카드 / 현재 노트북 일괄 / 모든 노트북 sweep 세 가지 모드 — 모든 노트북 sweep 은 백그라운드 탭으로 NotebookLM 홈에서 노트북 URL 수집 후 각 노트북을 순차 방문 (v1 cron 동등). RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` / `transcode` 필드로 보관 정책과 m4a→mp3 변환을 같이 처리. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
 
 ## 로드맵
 
@@ -14,6 +14,8 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 - [x] NotebookLM 페이지 스캔 (노트북 제목, audio overview 목록)
 - [x] audio overview 다운로드 트리거 + `YYYYMMDD__노트북__shortId__제목.{ext}` 자동 rename (UUID 기반 안정 dedup)
 - [x] PAT 기반 GitHub Contents API push (`docs/episodes/`)
+- [x] 일괄 다운로드 — 카드별 체크박스 + [선택 받기] (현재 노트북 + 모든 노트북 sweep 양쪽)
+- [x] cross-notebook scan — [모든 노트북 스캔] 으로 v1 cron sweep 동등 (백그라운드 탭 순차 방문)
 - [x] RSS feed 자동 생성 — GitHub Actions 위임 모드 (사용자 repo 의 워크플로가 빌드)
 - [x] RSS feed 자동 생성 — 익스텐션 직접 생성 모드 (옵션)
 - [x] Rolling window (오래된 에피소드 자동 정리, repo 용량 관리) — `docs/podcast.json` 의 `retention` 필드

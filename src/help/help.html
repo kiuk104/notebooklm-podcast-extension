@@ -34,7 +34,7 @@
   <ol>
     <li><a href="#how-it-works">전체 흐름</a></li>
     <li><a href="#setup">처음 설정 (GitHub repo + PAT)</a></li>
-    <li><a href="#usage">사용법</a></li>
+    <li><a href="#usage">사용법 (단일 / 일괄 / 전체 스윕)</a></li>
     <li><a href="#rss">RSS feed 생성</a></li>
     <li><a href="#retention">보관 정책 (rolling window)</a></li>
     <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
@@ -92,6 +92,10 @@
 </div>
 
 <h2 id="usage">3. 사용법</h2>
+
+<p>세 가지 모드가 있습니다 — 가벼운 단일 카드부터 모든 노트북 일괄 sweep 까지.</p>
+
+<h3>3-1. 단일 카드 받기 (개별)</h3>
 <ol>
   <li>NotebookLM 에서 음성개요가 있는 노트북 페이지 열기 (<code>https://notebooklm.google.com/notebook/&lt;id&gt;</code>).</li>
   <li><strong>그 페이지에서 F5 한 번</strong> — content script 가 inject 되도록 (배포 직후나 익스텐션 새로고침 직후 필요).</li>
@@ -101,9 +105,38 @@
   <li>상태가 <em>받는 중 → ⬇ 받음, push 중 → ✓ push 완료</em> 로 진행.</li>
 </ol>
 
+<h3>3-2. 현재 노트북 일괄 받기 (체크박스 기반)</h3>
+<p>같은 [현재 노트북 스캔] 결과 화면에서 — 카드 옆에 체크박스가 있습니다.</p>
+<ul>
+  <li>이미 repo 에 push 된 카드 (artifact UUID 매칭) 는 default 미체크 + <em>↻ 이미 받음</em> 표시.</li>
+  <li>placeholder 제목 카드는 체크박스가 비활성 (다음 스캔에서 제목 확정되면 활성화).</li>
+  <li>나머지는 default 체크 — 그대로 두면 새 카드만 받음.</li>
+  <li>상단의 <strong>[전체 선택]</strong> 토글 + <strong>[선택 받기 (N)]</strong> 버튼으로 일괄 다운로드.</li>
+  <li>N 개를 순차로 처리 — 각 카드의 push 가 끝나면 다음 카드 시작 (NotebookLM 의 ⋮ → 다운로드 메뉴는 동시에 하나만 열려 race 방지).</li>
+</ul>
+
+<h3>3-3. 모든 노트북 스윕 (cross-notebook, v1 cron 동등)</h3>
+<p>NotebookLM 의 어떤 페이지에서든 popup 의 <strong>[모든 노트북 스캔]</strong> 클릭. 익스텐션이 백그라운드 탭으로:</p>
+<ol>
+  <li>NotebookLM 홈 (<code>/</code>) 을 열어 모든 노트북 URL 수집.</li>
+  <li>각 노트북 페이지를 순차로 열어 음성개요 카드 수집 (5~10초/노트북).</li>
+  <li>탭 닫기 + 다음 노트북 진행. 30개 노트북이면 약 2~7분.</li>
+  <li>완료 후 노트북별로 그룹핑된 카드 목록이 popup 에 뜸.</li>
+  <li>체크박스로 받을 카드 선택 (이미 받은 카드는 default 미체크) → <strong>[선택 받기]</strong>.</li>
+  <li>선택된 카드들을 노트북별로 다시 묶어 탭 한 번씩 열어가며 다운로드.</li>
+</ol>
+
+<div class="warn">
+  <strong>백그라운드 탭이 잠깐 깜빡일 수 있습니다.</strong> Chrome 의 <code>chrome.tabs.create({active:false})</code> 가 포커스만 막을 뿐 가시성은 못 막아서, 탭 바에 새 탭이 잠시 나타났다 사라집니다. 정상 동작이며 사용자가 클릭하지 않아도 자동으로 닫힙니다.
+</div>
+
 <div class="tip">
   Chrome 기본 다운로드 폴더에도 같은 파일이 저장됩니다 (오프라인 백업). repo 에는 <code>docs/episodes/</code> 아래에 push 됩니다.
 </div>
+
+<h3>3-4. 진행 중 popup 닫으면?</h3>
+<p>3-2 (단일 노트북 일괄): popup 의 JS 가 loop 를 돌리므로 닫으면 멈춤. 이미 시작된 다운로드는 background SW 에서 계속 처리.</p>
+<p>3-3 (모든 노트북 sweep): background SW 에서 orchestration 하므로 popup 닫혀도 계속 진행. 단 popup 재오픈 시 진행 상황은 복원되지 않음 (재스캔 필요).</p>
 
 <h2 id="rss">4. RSS feed 생성</h2>
 

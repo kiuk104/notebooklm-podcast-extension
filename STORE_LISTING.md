@@ -46,16 +46,18 @@ NotebookLM 의 음성개요(Audio Overview)는 NotebookLM 안에서만 들을 �
 — 작동 방식 —
 
 1. NotebookLM 노트북 페이지에서 익스텐션 아이콘 → [현재 노트북 스캔].
-2. 음성개요 카드 옆 [받기] 한 번 클릭.
+2. 음성개요 카드 옆 [받기] 한 번 클릭 (또는 체크박스 + [선택 받기] 로 일괄).
 3. Chrome 이 audio 를 다운로드 + 익스텐션이 같은 audio 를 본인 GitHub 저장소의 docs/episodes/ 로 자동 push.
 4. (옵션) 같은 저장소의 GitHub Actions 워크플로가 RSS feed (docs/feed.xml) 를 자동 생성, 또는 익스텐션이 매 push 시마다 직접 생성.
 5. GitHub Pages 의 RSS URL 을 팟캐스트 앱에 등록.
 
-이후 새 음성개요가 생길 때마다 [받기] 한 번이면 끝 — 팟캐스트 앱이 알아서 새 에피소드를 가져옵니다.
+이후 새 음성개요가 생길 때마다 [받기] 한 번이면 끝 — 팟캐스트 앱이 알아서 새 에피소드를 가져옵니다. 여러 노트북을 한 번에 정리하고 싶으면 [모든 노트북 스캔] 으로 NotebookLM 홈에서 모든 노트북을 자동 sweep — 받지 않은 카드만 골라 일괄 다운로드.
 
 — 주요 기능 —
 
 • 안정 dedup: 카드의 NotebookLM artifact UUID 를 파일명에 박아, NotebookLM 측에서 노트북 이름·카드 제목을 바꿔도 같은 audio 로 인식 — 중복 push 방지.
+• 일괄 다운로드: 카드별 체크박스 + [선택 받기] 로 한 번에 여러 카드 처리. 이미 받은 카드는 자동 미체크.
+• 모든 노트북 sweep: [모든 노트북 스캔] 으로 NotebookLM 홈의 모든 노트북을 백그라운드에서 순차 방문 — 신규 카드만 골라 일괄 다운로드.
 • 두 가지 RSS 모드: GitHub Actions 워크플로 위임 (권장) 또는 익스텐션 직접 생성. 옵션에서 전환.
 • 보관 정책: docs/podcast.json 의 retention 필드로 maxItems / maxAgeDays 자동 정리. 저장소 용량 통제.
 • Transcode (옵션): 워크플로 측 ffmpeg 로 m4a → mp3 자동 변환. 1시간 audio 가 5~10초.
@@ -83,16 +85,18 @@ NotebookLM's Audio Overviews live inside NotebookLM. This extension lets you bac
 — How it works —
 
 1. On a NotebookLM notebook page, click the extension icon → [Scan current notebook].
-2. Click [Download] next to an audio overview card.
+2. Click [Download] next to an audio overview card (or use checkboxes + [Bulk download] for multiple cards at once).
 3. Chrome downloads the audio while the extension simultaneously pushes the same audio to docs/episodes/ in your own GitHub repository.
 4. (Optional) A GitHub Actions workflow in the same repo rebuilds the RSS feed (docs/feed.xml) on each push — or have the extension build it directly.
 5. Subscribe to the GitHub Pages RSS URL from your podcast app.
 
-After setup, every new audio overview is just one click away.
+After setup, every new audio overview is just one click away. To catch up on multiple notebooks at once, use [Scan all notebooks] — the extension automatically sweeps every notebook on your NotebookLM home page in background tabs and lets you bulk-download only the new ones.
 
 — Highlights —
 
 • Stable dedup: NotebookLM artifact UUIDs are embedded into the filename, so renaming notebooks or audio titles in NotebookLM never causes duplicate pushes.
+• Bulk download: per-card checkboxes + [Bulk download] button process multiple cards in one click. Already-pushed cards are auto-unchecked.
+• All-notebook sweep: [Scan all notebooks] visits every notebook from your home page in background tabs, then bulk-downloads only the new cards.
 • Two RSS modes: delegate to a GitHub Actions workflow (recommended) or have the extension build feed.xml directly. Switchable from options.
 • Retention policy: the retention field in docs/podcast.json (maxItems / maxAgeDays) prunes old episodes automatically — keeps your repo small.
 • Optional transcode: m4a → mp3 via workflow-side ffmpeg. A one-hour audio takes 5–10 seconds.
@@ -133,12 +137,12 @@ This extension archives a user's NotebookLM Audio Overviews to a GitHub reposito
 
 ### 3-1. `activeTab` justification
 ```
-Used together with `scripting` to inject the content script into the user's currently open NotebookLM notebook tab when they click the toolbar icon. The content script reads audio overview metadata (titles, artifact UUIDs, cover date) from the page DOM and triggers downloads. No other tabs are accessed.
+Reads audio overview metadata (titles, artifact UUIDs, cover date) from the user's current NotebookLM notebook tab and triggers Chrome's audio download from there. No other tabs are accessed without explicit user action.
 ```
 
 ### 3-2. `scripting` justification
 ```
-Programmatically injects the content script (src/content.js) into the active NotebookLM notebook tab when the user invokes "Scan current notebook" from the popup. Required because content_scripts in manifest only auto-inject on page load — users typically open the popup on an already-loaded tab.
+Used in two flows: (1) Auto-injection of src/content.js into NotebookLM tabs (declared in content_scripts). (2) Cross-notebook sweep — when the user clicks "Scan all notebooks", the service worker programmatically opens hidden background tabs to NotebookLM home and each notebook, communicates with the content script there, and closes the tabs once metadata is collected. All tabs are automatically cleaned up when the sweep completes.
 ```
 
 ### 3-3. `storage` justification
@@ -153,7 +157,7 @@ Listens to `chrome.downloads.onDeterminingFilename` to rename audio overview dow
 
 ### 3-5. Host permission: `https://notebooklm.google.com/*`
 ```
-The content script reads audio overview metadata from this page's DOM: card titles (.artifact-title), artifact UUIDs (artifact-labels-{uuid} span IDs), the notebook cover title (.cover-title), and the cover date (.cover-subtitle-date title attribute). It also clicks the .artifact-more-button → "Download" menu item to trigger Chrome's download. No data is read from any other page.
+The content script reads audio overview metadata from notebook page DOM: card titles (.artifact-title), artifact UUIDs (artifact-labels-{uuid} span IDs), the notebook cover title (.cover-title), and the cover date (.cover-subtitle-date title attribute). It also clicks the .artifact-more-button → "Download" menu item to trigger Chrome's download. The content script also runs on the NotebookLM home page (notebooklm.google.com/) where it collects notebook URLs (a[href*="/notebook/"]) for the optional all-notebook sweep feature. No data is read from any other domain.
 ```
 
 ### 3-6. Host permission: `https://*.googleusercontent.com/*`, `https://*.usercontent.google.com/*`, `https://accounts.google.com/*`, `https://lh3.google.com/*`
