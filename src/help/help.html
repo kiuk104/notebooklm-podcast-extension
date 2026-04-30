@@ -36,6 +36,7 @@
     <li><a href="#setup">처음 설정 (GitHub repo + PAT)</a></li>
     <li><a href="#usage">사용법 (단일 / 일괄 / 전체 스윕)</a></li>
     <li><a href="#rss">RSS feed 생성</a></li>
+    <li><a href="#meta">팟캐스트 메타 (제목 / 작성자 / 커버)</a></li>
     <li><a href="#retention">보관 정책 (rolling window)</a></li>
     <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
     <li><a href="#filename">파일명 규약</a></li>
@@ -183,7 +184,35 @@
 
 <p>BASE_URL 은 익스텐션 옵션의 <code>owner/name</code> 에서 자동 조립 (<code>https://&lt;owner&gt;.github.io/&lt;name&gt;/</code>) — custom domain 을 쓰는 경우 4-1 모드 (워크플로) 가 더 적합합니다.</p>
 
-<h2 id="retention">5. 보관 정책 (rolling window)</h2>
+<h2 id="meta">5. 팟캐스트 메타 (제목 / 작성자 / 커버 이미지)</h2>
+
+<p>팟캐스트 앱에 노출되는 채널 정보 (제목, 설명, 작성자, 커버 이미지, 카테고리) 는 본인 repo 의 <code>docs/podcast.json</code> 에 저장됩니다. 관리 페이지의 <strong>"팟캐스트 메타데이터"</strong> 섹션에서 폼으로 편집 가능 — repo 를 직접 열어서 JSON 수정할 필요 없음.</p>
+
+<h3>5-1. 메타 편집</h3>
+<ol>
+  <li>관리 페이지 (<code>⚙ 관리</code>) 열면 GitHub Token + Repo 가 저장된 상태에서 자동으로 현재 <code>podcast.json</code> 을 가져와 폼에 채웁니다.</li>
+  <li>제목 / 설명 / 작성자 이름 · 이메일 / 언어 / 카테고리 / 명시적 콘텐츠 / 커버 이미지 URL 수정.</li>
+  <li>[메타 저장] 클릭 → repo 의 <code>docs/podcast.json</code> 이 갱신됨 → 워크플로가 자동 트리거되어 <code>feed.xml</code> 이 새 메타로 재빌드됩니다.</li>
+  <li>팟캐스트 앱이 다음 refresh 때 새 정보를 받습니다 (보통 수십 분~몇 시간).</li>
+</ol>
+
+<h3>5-2. 커버 이미지 업로드</h3>
+<p>iTunes/Apple Podcasts 표준 — 1400×1400 이상 JPG/PNG. 일부 앱은 작은 이미지 거절 (스크린샷의 분홍 "P" 같은 placeholder 가 그 케이스).</p>
+<ol>
+  <li>커버 이미지 행의 <strong>파일 선택</strong> 클릭 → 로컬 JPG/PNG 선택 (max 5MB).</li>
+  <li>익스텐션이 본인 repo 의 <code>docs/cover.{jpg|png}</code> 로 PUT 합니다 (Pages 가 자동으로 서빙).</li>
+  <li>이미지 URL 필드가 자동으로 <code>https://&lt;owner&gt;.github.io/&lt;repo&gt;/cover.{jpg|png}</code> 로 채워짐.</li>
+  <li>[메타 저장] 까지 눌러야 podcast.json 의 <code>image</code> 필드가 그 URL 로 갱신되어 feed.xml 에 반영됩니다.</li>
+</ol>
+
+<div class="tip">
+  외부 이미지 호스팅 (예: Imgur, Cloudinary) URL 을 직접 입력해도 동작합니다 — 단 그 호스팅이 영구적이어야 함. GitHub Pages 호스팅 (위 업로드 방식) 이 가장 안정적.
+</div>
+
+<h3>5-3. 폼에 노출되지 않는 필드</h3>
+<p><code>retention</code> (보관 정책, §6) 과 <code>transcode</code> (m4a→mp3, §7) 는 폼에 없습니다 — 자주 바꾸지 않는 기술 옵션이라 podcast.json 직접 편집 권장. 메타 [저장] 시 이 필드들은 그대로 보존됩니다 (덮어쓰지 않음).</p>
+
+<h2 id="retention">6. 보관 정책 (rolling window)</h2>
 
 <p>repo 용량을 통제하려면 <code>docs/podcast.json</code> 에 <code>retention</code> 필드를 추가하세요. 두 RSS 모드 (4-1, 4-2) 모두 같은 정책을 따르므로, 모드를 바꿔도 정리 동작은 동일합니다.</p>
 
@@ -208,7 +237,7 @@
   NotebookLM 의 카드 자체를 지우는 것과는 무관합니다 — repo 의 파일만 정리. 보관 정책 밖으로 나간 episode 는 RSS 에서 사라지지만 NotebookLM 에 카드가 살아 있다면 [받기] 를 다시 누를 때 또 push 됩니다.
 </div>
 
-<h2 id="transcode">6. Transcode (m4a → mp3)</h2>
+<h2 id="transcode">7. Transcode (m4a → mp3)</h2>
 
 <p>NotebookLM 의 m4a 는 256k stereo 라 한 시간에 ~22MB. 음성개요는 사람 목소리 위주라 64k mono mp3 (~5MB) 로도 충분히 들립니다 — repo 1GB 한도가 약 4배 늘어나는 효과.</p>
 
@@ -236,7 +265,7 @@
 
 <p><strong>익스텐션 내장 (ffmpeg.wasm) 모드</strong>: 미구현. 패키지 +25MB / SW 메모리 100~200MB / 첫 [받기] 응답 30초~수분 등 트레이드오프가 커서 후순위. 워크플로 셋업이 어려운 사용자만을 위한 옵션.</p>
 
-<h2 id="filename">7. 파일명 규약</h2>
+<h2 id="filename">8. 파일명 규약</h2>
 <pre>YYYYMMDD__노트북-슬러그__shortId__제목-슬러그.{m4a|mp3}</pre>
 
 <table>
@@ -253,7 +282,7 @@
   <strong>옛 포맷과의 호환:</strong> v0.4.0 이전 버전이 push 한 파일은 <code>shortId</code> 없이 3-segment <code>YYYYMMDD__노트북__제목.{ext}</code> 로 저장돼 있을 수 있습니다. RSS 빌더 (익스텐션 / GitHub Actions 워크플로) 모두 두 포맷을 동시에 인식하므로 그대로 두어도 무방합니다. 새 push 부터만 4-segment 포맷이 적용됩니다.
 </div>
 
-<h2 id="troubleshoot">8. 트러블슈팅</h2>
+<h2 id="troubleshoot">9. 트러블슈팅</h2>
 
 <h3>"현재 탭이 NotebookLM 노트북 페이지가 아닙니다"</h3>
 <p>NotebookLM 의 노트북 상세 페이지 (<code>/notebook/&lt;id&gt;</code>) 에서만 동작합니다. 홈 / 검색 페이지에서는 스캔 안 됨.</p>
@@ -285,7 +314,7 @@
   <li>에러 메시지 (host, status) 가 다음 차단 호스트나 권한 문제를 노출함.</li>
 </ol>
 
-<h2 id="privacy">9. 권한 &amp; 프라이버시</h2>
+<h2 id="privacy">10. 권한 &amp; 프라이버시</h2>
 
 <table>
   <tr><th>권한</th><th>용도</th></tr>

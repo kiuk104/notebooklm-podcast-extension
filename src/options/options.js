@@ -408,3 +408,254 @@ lastScanClearBtn.addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "scan:result:clear" });
   lastScanPanel.style.display = "none";
 });
+
+// ---------- 팟캐스트 메타 (docs/podcast.json) ----------
+
+const metaForm = document.getElementById("meta-form");
+const metaTitleEl = document.getElementById("meta-title");
+const metaDescriptionEl = document.getElementById("meta-description");
+const metaOwnerNameEl = document.getElementById("meta-owner-name");
+const metaOwnerEmailEl = document.getElementById("meta-owner-email");
+const metaLanguageEl = document.getElementById("meta-language");
+const metaCategoryEl = document.getElementById("meta-category");
+const metaExplicitEl = document.getElementById("meta-explicit");
+const metaImageEl = document.getElementById("meta-image");
+const metaImagePreviewEl = document.getElementById("meta-image-preview");
+const metaImageUploadEl = document.getElementById("meta-image-upload");
+const metaReloadBtn = document.getElementById("meta-reload");
+const metaStatusEl = document.getElementById("meta-status");
+
+// repo 의 podcast.json 의 sha + 폼에 노출 안 하는 필드 (retention/transcode/baseUrl) 보존용.
+let podcastJsonSha = null;
+let podcastJsonOriginal = {};
+
+function showMetaStatus(text, kind) {
+  metaStatusEl.textContent = text;
+  metaStatusEl.className = "status " + (kind || "");
+  metaStatusEl.style.display = text ? "block" : "none";
+}
+
+function utf8Btoa(str) {
+  // Korean / 한글 등 멀티바이트 안전한 base64 인코딩.
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+function utf8Atob(b64) {
+  return decodeURIComponent(escape(atob(b64)));
+}
+
+function updateImagePreview() {
+  const url = metaImageEl.value.trim();
+  if (url) {
+    metaImagePreviewEl.src = url;
+    metaImagePreviewEl.style.display = "block";
+    metaImagePreviewEl.onerror = () => { metaImagePreviewEl.style.display = "none"; };
+  } else {
+    metaImagePreviewEl.style.display = "none";
+  }
+}
+metaImageEl.addEventListener("input", updateImagePreview);
+
+function populateMetaForm(json) {
+  podcastJsonOriginal = json || {};
+  metaTitleEl.value = json?.title || "";
+  metaDescriptionEl.value = json?.description || "";
+  metaOwnerNameEl.value = json?.ownerName || "";
+  metaOwnerEmailEl.value = json?.ownerEmail || "";
+  metaLanguageEl.value = json?.language || "ko";
+  // 카테고리가 select option 에 없는 값이면 첫 번째로.
+  metaCategoryEl.value = json?.category || "Education";
+  if (metaCategoryEl.value === "" && json?.category) {
+    // option 이 없는 카테고리인 경우 — 그래도 input 에 값은 보존.
+    metaCategoryEl.value = "Education";
+  }
+  metaExplicitEl.checked = !!json?.explicit;
+  metaImageEl.value = json?.image || "";
+  updateImagePreview();
+}
+
+async function loadPodcastMeta() {
+  const stored = await chrome.storage.local.get(["token", "repo"]);
+  if (!stored.token || !stored.repo) {
+    showMetaStatus("먼저 GitHub Token + Repo 를 저장하세요.", "");
+    return;
+  }
+  if (!REPO_RE.test(stored.repo)) {
+    showMetaStatus("Repo 형식이 잘못됐습니다 (owner/name).", "error");
+    return;
+  }
+  showMetaStatus("로드 중…", "");
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${stored.repo}/contents/docs/podcast.json`,
+      { headers: ghHeaders(stored.token), cache: "no-store" },
+    );
+    if (r.status === 404) {
+      podcastJsonSha = null;
+      podcastJsonOriginal = {};
+      showMetaStatus("repo 에 docs/podcast.json 이 없습니다. 폼을 채우고 [메타 저장] 하면 새로 생성됩니다.", "");
+      return;
+    }
+    if (r.status === 401) {
+      showMetaStatus("토큰 무효 (401). [GitHub 설정] 의 [설정 검증] 으로 확인하세요.", "error");
+      return;
+    }
+    if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 120)}`);
+    const data = await r.json();
+    const text = utf8Atob(data.content.replace(/\n/g, ""));
+    const json = JSON.parse(text);
+    podcastJsonSha = data.sha;
+    populateMetaForm(json);
+    showMetaStatus("✓ 로드됨.", "success");
+  } catch (e) {
+    showMetaStatus(`로드 실패: ${e.message}`, "error");
+  }
+}
+
+metaReloadBtn.addEventListener("click", () => loadPodcastMeta());
+
+metaForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const stored = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+  if (!stored.token || !stored.repo) {
+    showMetaStatus("먼저 GitHub Token + Repo 를 저장하세요.", "error");
+    return;
+  }
+  if (!REPO_RE.test(stored.repo)) {
+    showMetaStatus("Repo 형식이 잘못됐습니다 (owner/name).", "error");
+    return;
+  }
+
+  // 폼에 노출 안 한 필드 (retention / transcode / baseUrl 등) 는 그대로 보존.
+  const updated = {
+    ...podcastJsonOriginal,
+    title: metaTitleEl.value.trim() || "내 NotebookLM 팟캐스트",
+    description: metaDescriptionEl.value.trim() || "NotebookLM 음성개요 자동 수집 피드.",
+    language: metaLanguageEl.value || "ko",
+    ownerName: metaOwnerNameEl.value.trim(),
+    ownerEmail: metaOwnerEmailEl.value.trim(),
+    image: metaImageEl.value.trim(),
+    category: metaCategoryEl.value || "Education",
+    explicit: metaExplicitEl.checked,
+  };
+
+  const content = JSON.stringify(updated, null, 2) + "\n";
+  const b64 = utf8Btoa(content);
+
+  showMetaStatus("저장 중…", "");
+  const body = {
+    message: "Update podcast metadata",
+    content: b64,
+  };
+  if (podcastJsonSha) body.sha = podcastJsonSha;
+  if (stored.committerName && stored.committerEmail) {
+    body.committer = { name: stored.committerName, email: stored.committerEmail };
+  }
+
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${stored.repo}/contents/docs/podcast.json`,
+      {
+        method: "PUT",
+        headers: { ...ghHeaders(stored.token), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!r.ok) {
+      throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`);
+    }
+    const data = await r.json();
+    podcastJsonSha = data.content?.sha || null;
+    podcastJsonOriginal = updated;
+    showMetaStatus("✓ 메타 저장됨. 워크플로가 트리거되어 feed.xml 이 재빌드됩니다.", "success");
+  } catch (e) {
+    showMetaStatus(`저장 실패: ${e.message}`, "error");
+  }
+});
+
+metaImageUploadEl.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  if (!/^image\/(jpeg|png)$/.test(file.type)) {
+    showMetaStatus("JPG / PNG 파일만 업로드 가능합니다.", "error");
+    metaImageUploadEl.value = "";
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showMetaStatus(`이미지가 너무 큽니다 (${(file.size / 1024 / 1024).toFixed(1)}MB > 5MB).`, "error");
+    metaImageUploadEl.value = "";
+    return;
+  }
+
+  const stored = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+  if (!stored.token || !stored.repo) {
+    showMetaStatus("먼저 GitHub Token + Repo 를 저장하세요.", "error");
+    return;
+  }
+
+  showMetaStatus("이미지 읽는 중…", "");
+  const reader = new FileReader();
+  reader.onerror = () => showMetaStatus("이미지 읽기 실패.", "error");
+  reader.onload = async () => {
+    // data:image/png;base64,XXXXX → "XXXXX"
+    const dataUrl = reader.result;
+    const b64 = String(dataUrl).split(",")[1];
+    if (!b64) {
+      showMetaStatus("이미지 인코딩 실패.", "error");
+      return;
+    }
+    const ext = file.type.includes("png") ? "png" : "jpg";
+    const path = `docs/cover.${ext}`;
+
+    // 같은 path 의 기존 sha 확인 (overwrite 시 필요).
+    let existingSha = null;
+    try {
+      const r = await fetch(
+        `https://api.github.com/repos/${stored.repo}/contents/${path}`,
+        { headers: ghHeaders(stored.token), cache: "no-store" },
+      );
+      if (r.ok) existingSha = (await r.json()).sha;
+    } catch {}
+
+    showMetaStatus(`이미지 업로드 중 (${(file.size / 1024).toFixed(0)}KB)…`, "");
+    const body = {
+      message: `Upload podcast cover (${file.name})`,
+      content: b64,
+    };
+    if (existingSha) body.sha = existingSha;
+    if (stored.committerName && stored.committerEmail) {
+      body.committer = { name: stored.committerName, email: stored.committerEmail };
+    }
+
+    try {
+      const r = await fetch(
+        `https://api.github.com/repos/${stored.repo}/contents/${path}`,
+        {
+          method: "PUT",
+          headers: { ...ghHeaders(stored.token), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`);
+
+      const [owner, repoName] = stored.repo.split("/");
+      const url = `https://${owner}.github.io/${repoName}/cover.${ext}`;
+      metaImageEl.value = url;
+      updateImagePreview();
+      metaImageUploadEl.value = "";
+      showMetaStatus(`✓ 이미지 업로드됨 → ${url} . [메타 저장] 까지 눌러야 podcast.json 의 image 가 갱신됩니다.`, "success");
+    } catch (e) {
+      showMetaStatus(`이미지 업로드 실패: ${e.message}`, "error");
+    }
+  };
+  reader.readAsDataURL(file);
+});
+
+// 옵션 페이지 첫 오픈 + token/repo 가 이미 저장된 상태면 자동 로드.
+(async () => {
+  const stored = await chrome.storage.local.get(["token", "repo"]);
+  if (stored.token && stored.repo && REPO_RE.test(stored.repo)) {
+    loadPodcastMeta();
+  }
+})();

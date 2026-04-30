@@ -49,6 +49,20 @@
   .task-recent .recent-item .feed-tag.feed-err { color: #d97706; }
   .task-recent .recent-item .ts { color: #aaa; font-size: 10px; margin-left: 4px; }
   .task-recent-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; margin-bottom: 2px; font-size: 11px; color: #666; font-weight: 600; }
+
+  h2.section { font-size: 15px; margin-top: 36px; padding-top: 18px; border-top: 1px solid #e5e7eb; color: #111; }
+  h2.section + p.sub { margin-top: 4px; font-size: 12px; color: #666; }
+  textarea { width: 100%; padding: 8px 10px; margin-top: 4px; box-sizing: border-box; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; resize: vertical; }
+  .meta-image-row { display: flex; gap: 10px; align-items: flex-start; margin-top: 4px; }
+  .meta-image-row .meta-image-input { flex: 1; }
+  .meta-image-preview { width: 96px; height: 96px; object-fit: cover; border: 1px solid #e5e7eb; border-radius: 6px; display: none; background: #f3f4f6; }
+  .meta-actions { margin-top: 18px; display: flex; gap: 10px; align-items: center; }
+  .meta-actions button { margin-top: 0; }
+  .meta-actions .secondary { background: #fff; color: #2563eb; border: 1px solid #2563eb; }
+  .meta-checkbox { display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 18px; }
+  .meta-checkbox input { width: auto; margin: 0; padding: 0; }
+  .file-upload-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; }
+  .file-upload-row input[type="file"] { flex: 1; padding: 4px; }
   .task-actions { margin-top: 10px; display: flex; gap: 6px; }
   .task-actions button { padding: 4px 10px; font-size: 11px; background: #fff; color: #444; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; margin-top: 0; }
   .task-actions button:hover { background: #f9fafb; }
@@ -144,6 +158,82 @@
     <button type="button" id="verify" style="background: #fff; color: #2563eb; border: 1px solid #2563eb;">설정 검증</button>
   </div>
   <div id="status" class="status" style="display:none"></div>
+</form>
+
+<h2 class="section">팟캐스트 메타데이터</h2>
+<p class="sub">이 정보는 본인 repo 의 <code>docs/podcast.json</code> 에 저장되어 RSS feed.xml 의 채널 메타 (제목 / 작성자 / 커버 이미지 등) 가 됩니다. 저장 시 워크플로가 자동 트리거되어 feed 가 재빌드됩니다.</p>
+
+<form id="meta-form" style="margin-top:8px;">
+  <label>제목
+    <input type="text" id="meta-title" placeholder="내 NotebookLM 팟캐스트" autocomplete="off">
+    <div class="hint">팟캐스트 앱에 노출되는 채널 이름.</div>
+  </label>
+
+  <label>설명
+    <textarea id="meta-description" rows="2" placeholder="NotebookLM 음성개요 자동 수집 피드."></textarea>
+  </label>
+
+  <label>작성자 이름
+    <input type="text" id="meta-owner-name" autocomplete="off">
+  </label>
+
+  <label>작성자 이메일
+    <input type="email" id="meta-owner-email" autocomplete="off">
+    <div class="hint">iTunes/Apple Podcasts 의 채널 owner 표시. 일부 팟캐스트 앱에서 등록 시 필수.</div>
+  </label>
+
+  <label>언어
+    <select id="meta-language">
+      <option value="ko">한국어 (ko)</option>
+      <option value="en">English (en)</option>
+      <option value="ja">日本語 (ja)</option>
+      <option value="zh">中文 (zh)</option>
+      <option value="es">Español (es)</option>
+      <option value="fr">Français (fr)</option>
+      <option value="de">Deutsch (de)</option>
+    </select>
+  </label>
+
+  <label>카테고리
+    <select id="meta-category">
+      <option>Education</option>
+      <option>Arts</option>
+      <option>Business</option>
+      <option>Comedy</option>
+      <option>Health &amp; Fitness</option>
+      <option>History</option>
+      <option>News</option>
+      <option>Religion &amp; Spirituality</option>
+      <option>Science</option>
+      <option>Society &amp; Culture</option>
+      <option>Sports</option>
+      <option>Technology</option>
+      <option>True Crime</option>
+    </select>
+  </label>
+
+  <label class="meta-checkbox">
+    <input type="checkbox" id="meta-explicit">
+    <span>명시적 콘텐츠 (성인)</span>
+  </label>
+
+  <label>커버 이미지 URL
+    <div class="meta-image-row">
+      <input type="text" id="meta-image" class="meta-image-input" placeholder="https://kiuk104.github.io/notebooklm-podcast-feed/cover.jpg" autocomplete="off">
+      <img id="meta-image-preview" class="meta-image-preview" alt="cover preview">
+    </div>
+    <div class="hint">1400×1400 이상 JPG/PNG (iTunes 표준). 일부 앱은 작은 이미지 거절.</div>
+    <div class="file-upload-row">
+      <input type="file" id="meta-image-upload" accept="image/jpeg,image/png">
+      <span class="hint" style="margin-top:0;">파일 선택 시 본인 repo 의 <code>docs/cover.{jpg|png}</code> 로 업로드됩니다 (max 5MB).</span>
+    </div>
+  </label>
+
+  <div class="meta-actions">
+    <button type="submit">메타 저장</button>
+    <button type="button" id="meta-reload" class="secondary">원격에서 다시 가져오기</button>
+  </div>
+  <div id="meta-status" class="status" style="display:none"></div>
 </form>
 
 <div class="task-panel" id="last-scan-panel" style="display:none; margin-top:20px;">
