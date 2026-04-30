@@ -429,8 +429,32 @@ async function waitForContentReady(tabId, timeoutMs) {
   return false;
 }
 
+// Chrome 의 chrome.tabs.create / .remove 는 가끔 transient error 를 던진다 —
+// 메시지는 보통 "Tabs cannot be edited right now (user may be dragging a tab)".
+// 실제 드래그뿐 아니라, 빠른 연속 create/close, 탭바 애니메이션 진행 중,
+// 다른 익스텐션의 동시 조작 등에서도 발생. 일정 시간 backoff 후 재시도하면
+// 거의 회복됨.
+const TRANSIENT_TAB_ERROR_RE = /Tabs cannot be edited|may be dragging|tab strip|currently in use/i;
+
+async function withTabRetry(fn, label, maxAttempts = 5) {
+  let lastErr;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!TRANSIENT_TAB_ERROR_RE.test(e.message)) throw e;
+      lastErr = e;
+      // 500ms, 1.5s, 3s, 5s, 8s 누적 — 첫 실패 후 ~18초 안에 5회 재시도.
+      const delay = 500 + attempt * attempt * 500;
+      console.log(`[tab] ${label} transient error, retry in ${delay}ms (${attempt + 1}/${maxAttempts}): ${e.message}`);
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
 async function openManagedTab(url) {
-  const tab = await chrome.tabs.create({ url, active: false });
+  const tab = await withTabRetry(() => chrome.tabs.create({ url, active: false }), "create");
   ownedTabs.add(tab.id);
   await waitForTabComplete(tab.id, TAB_OPEN_TIMEOUT);
   const ready = await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
@@ -453,7 +477,9 @@ async function openManagedTab(url) {
 
 async function closeManagedTab(tabId) {
   ownedTabs.delete(tabId);
-  try { await chrome.tabs.remove(tabId); } catch {}
+  try {
+    await withTabRetry(() => chrome.tabs.remove(tabId), "remove", 3);
+  } catch {} // 끝까지 못 닫혀도 다음 흐름 막지 않음 — 사용자가 직접 닫을 수 있음.
 }
 
 async function cleanupOwnedTabs() {
@@ -518,6 +544,10 @@ async function runScanAll() {
 
   const notebooks = [];
   let cardCount = 0;
+  // 같은 transient tab error 가 연속으로 발생하면 더 이상 retry 가 의미 없음 —
+  // 일정 횟수 넘으면 abort 해서 사용자에게 명확한 안내.
+  const MAX_CONSEC_TAB_ERRORS = 5;
+  let consecTabErrors = 0;
   for (let i = 0; i < urls.length; i++) {
     await setTaskState({
       phase: "scan", done: i,
@@ -531,11 +561,26 @@ async function runScanAll() {
       const r = await scanOneNotebook(urls[i]);
       notebooks.push(r);
       cardCount += (r.audios || []).length;
+      consecTabErrors = 0;
     } catch (e) {
       console.warn(`[scan:all] ${urls[i]} 실패:`, e.message);
       notebooks.push({ url: urls[i], cover: { title: "" }, audios: [], error: e.message });
       await pushTaskError({ url: urls[i], message: e.message });
+      if (TRANSIENT_TAB_ERROR_RE.test(e.message)) {
+        consecTabErrors++;
+        if (consecTabErrors >= MAX_CONSEC_TAB_ERRORS) {
+          throw new Error(
+            `Chrome 탭 API 잠김 (${consecTabErrors}회 연속). ` +
+            `탭바 드래그를 해제하시거나, 다른 탭 조작 중인 익스텐션을 잠시 비활성화한 뒤 재시도하세요. ` +
+            `이미 스캔된 ${notebooks.length - consecTabErrors}개 노트북은 결과에 포함됩니다.`,
+          );
+        }
+      } else {
+        consecTabErrors = 0;
+      }
     }
+    // 다음 탭 생성 전 짧은 breather — 빠른 연속 create/close 가 transient lock 의 원인.
+    await sleep(200);
   }
 
   await persistLastScanResult(notebooks);
@@ -588,6 +633,8 @@ async function runBulkRemote(selections) {
 
   let done = 0;
   let success = 0;
+  const MAX_CONSEC_TAB_ERRORS = 5;
+  let consecTabErrors = 0;
   for (const [url, items] of grouped) {
     await setTaskState({ phase: "open", message: `노트북 ${url.split("/notebook/")[1]?.slice(0, 8)}… 탭 여는 중` });
     emitEvent("bulk:remote:progress", {
@@ -597,6 +644,7 @@ async function runBulkRemote(selections) {
     let tabId;
     try {
       tabId = await openManagedTab(url);
+      consecTabErrors = 0;
       const ready = await waitForAudioCards(tabId, NOTEBOOK_CARDS_TIMEOUT);
       if (!ready) {
         for (const item of items) {
@@ -618,6 +666,17 @@ async function runBulkRemote(selections) {
         done++;
       }
       await setTaskState({ done });
+      if (TRANSIENT_TAB_ERROR_RE.test(e.message)) {
+        consecTabErrors++;
+        if (consecTabErrors >= MAX_CONSEC_TAB_ERRORS) {
+          throw new Error(
+            `Chrome 탭 API 잠김 (${consecTabErrors}회 연속). ` +
+            `탭바 드래그 해제 / 다른 익스텐션 비활성화 후 재시도. 성공 ${success} / 실패 ${done - success} 까지는 결과에 반영됨.`,
+          );
+        }
+      } else {
+        consecTabErrors = 0;
+      }
       continue;
     }
     try {
