@@ -4,6 +4,11 @@
   "version": "0.4.0",
   "description": "Turn your NotebookLM Audio Overviews into a personal podcast RSS feed pushed to your own GitHub repo.",
   "permissions": ["activeTab", "storage", "downloads", "scripting"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "host_permissions": [
     "https://notebooklm.google.com/*",
     "https://*.googleusercontent.com/*",
@@ -15,7 +20,12 @@
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "NotebookLM Podcast Sync"
+    "default_title": "NotebookLM Podcast Sync",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "options_page": "src/options/options.html",
   "background": {

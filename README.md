@@ -18,8 +18,8 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 - [x] RSS feed 자동 생성 — 익스텐션 직접 생성 모드 (옵션)
 - [x] Rolling window (오래된 에피소드 자동 정리, repo 용량 관리) — `docs/podcast.json` 의 `retention` 필드
 - [x] m4a → mp3 transcode — 워크플로 측 native ffmpeg (`docs/podcast.json` 의 `transcode` 필드)
-- [ ] m4a → mp3 transcode — 익스텐션 내장 ffmpeg.wasm (옵션, 후순위)
-- [ ] Chrome Web Store 등록
+- [ ] m4a → mp3 transcode — 익스텐션 내장 (보류, 사용자 피드백 대기). ffmpeg.wasm 은 분석 후 기각 (+25MB / SAB / cold start), 향후 진행 시 lamejs + offscreen document 권고 (미검증)
+- [ ] Chrome Web Store 등록 — 자료 준비 완료 ([RELEASING.md](RELEASING.md), [STORE_LISTING.md](STORE_LISTING.md), [docs/privacy.html](docs/privacy.html)). 남은 사용자 측 작업: Pages 활성화 + 스크린샷 + Developer 계정 + zip 업로드.
 
 ## 설치 (개발 모드)
 
@@ -32,8 +32,6 @@ Chrome Web Store 에 아직 올리지 않았으므로 압축해제 모드로 직
 2. **Chrome 확장 페이지 열기** — 주소창에 `chrome://extensions/`
 3. **개발자 모드 ON** — 페이지 우측 상단 토글
 4. **[압축해제된 확장 프로그램을 로드합니다]** 클릭 → clone 한 폴더 선택 (이 안에 `manifest.json` 이 있어야 함)
-
-> ⚠️ 아이콘 누락 경고: `icons/` 폴더가 비어 있어 카드에 빨간 오류가 뜰 수 있지만 기능은 정상 동작합니다. 배포 단계에서 16/48/128px PNG 를 채워 넣을 예정.
 
 코드 수정 후 반영하려면 `chrome://extensions/` 의 해당 카드에서 **새로고침 (↻)** 클릭. content script 를 고친 경우 NotebookLM 탭도 **F5**.
 
@@ -84,6 +82,12 @@ NotebookLM UI 가 바뀌어 동작이 깨지면 [src/content.js](src/content.js)
 ## v1 에서 배운 함정
 
 구현 시 주의할 NotebookLM DOM/동작 함정과 v1 의 대응책: [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md).
+
+## 릴리스 / 버전 업데이트
+
+- 릴리스 절차 (버전 정책, 패키징, sanity check, 업로드): [RELEASING.md](RELEASING.md)
+- Chrome Web Store 등록정보 카피 (제목·요약·상세설명·권한 정당화·데이터 사용 선언·체크리스트): [STORE_LISTING.md](STORE_LISTING.md)
+- 개인정보 처리방침: [docs/privacy.html](docs/privacy.html) (Pages 활성화 시 `https://kiuk104.github.io/notebooklm-podcast-extension/privacy.html`)
 
 ## 라이선스
 
