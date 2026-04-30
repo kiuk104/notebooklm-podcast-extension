@@ -159,6 +159,11 @@ Persists the user's GitHub Personal Access Token, target repository (owner/name)
 Listens to `chrome.downloads.onDeterminingFilename` to rename audio overview downloads to the canonical pattern `YYYYMMDD__notebook__shortId__title.{m4a|mp3}`. The shortId (8-character artifact UUID prefix) is the dedup key — without rename, downloads land with NotebookLM's opaque server-generated filename and cannot be deduplicated.
 ```
 
+### 3-4b. `alarms` justification
+```
+Used as a service-worker keepalive during long-running cross-notebook sweep and bulk download tasks (5 min to 2+ hours). MV3 service workers terminate after ~30 seconds of inactivity, which would interrupt these multi-step tasks during retry sleep windows or sendMessage timeouts. A single repeating alarm fired every 30 seconds via chrome.alarms keeps the worker alive for the duration of the task, and is automatically cleared on completion. No alarm-driven business logic — purely a wake mechanism.
+```
+
 ### 3-5. Host permission: `https://notebooklm.google.com/*`
 ```
 The content script reads audio overview metadata from notebook page DOM: card titles (.artifact-title), artifact UUIDs (artifact-labels-{uuid} span IDs), the notebook cover title (.cover-title), and the cover date (.cover-subtitle-date title attribute). It also clicks the .artifact-more-button → "Download" menu item to trigger Chrome's download. The content script also runs on the NotebookLM home page (notebooklm.google.com/) where it collects notebook URLs (a[href*="/notebook/"]) for the optional all-notebook sweep feature. No data is read from any other domain.

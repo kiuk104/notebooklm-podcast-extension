@@ -228,6 +228,52 @@ async function withTabRetry(fn, label, maxAttempts = 5) {
 
 ---
 
+## 6. MV3 Service Worker idle 종료 + chrome.tabs.sendMessage 영구 pending (2026-04-30)
+
+### 증상
+
+bulk:remote 가 153 개 카드 중 0/153 에서 1시간 25분 동안 멈춤. 진행 모니터에 `다운로드 중: <첫 카드 제목>` 메시지가 떠 있고 경과 시간만 흘러감. 사용자 [강제 중단] 도 전엔 클리어할 방법 없음.
+
+### 원인 — 두 갈래
+
+**(a) `chrome.tabs.sendMessage` 영구 pending**: bulk 의 download 메시지가 첫 카드의 노트북 탭으로 갔는데 content script 가 응답을 못 함. NotebookLM SPA freeze / 탭 navigate / content script crash 어느 쪽이든 가능. Chrome 의 sendMessage 는 timeout 이 없어서 영원히 await 가 걸림.
+
+**(b) MV3 service worker idle 종료**: 153 카드 × ~30~60초 = 1.5~2.5시간. SW 는 활성 작업 (Chrome API 호출) 이 ~30초 이상 없으면 종료. retry backoff 의 `sleep(8000)` 이나 sendMessage timeout (30초) 같은 idle 구간에서 SW 가 죽으면, 재시작 후 currentTaskState 는 session storage 에서 그대로 복원되어 status: "running" 로 유지 — 하지만 실제 함수는 죽었으므로 진행 0.
+
+### 대응
+
+**(a) sendMessageWithTimeout** — `Promise.race` 로 30초 timeout. 응답 없으면 throw → 기존 catch 에서 `done++` + 다음 카드.
+```js
+async function sendMessageWithTimeout(tabId, msg, timeoutMs = 30000) {
+  return Promise.race([
+    chrome.tabs.sendMessage(tabId, msg),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error(`tabs.sendMessage timeout (${timeoutMs}ms)`)), timeoutMs,
+    )),
+  ]);
+}
+```
+
+**(b) 두 단계 방어**:
+
+1. **chrome.alarms keepalive** (proactive). 30초 주기 알람을 task 시작 시 set, finally 에서 clear. 알람 발화 자체가 SW wake 이벤트라 SW 가 idle 로 죽지 않음. MV3 standard pattern.
+   ```js
+   await chrome.alarms.create("task-keepalive", { periodInMinutes: 0.5 });
+   ```
+   `manifest.json` 의 `permissions` 에 `"alarms"` 추가 필요.
+
+2. **Heartbeat-based stale detection** (reactive, 안전망). `setTaskState` 마다 `lastHeartbeatAt: Date.now()` 갱신. SW init 시 복원된 state 의 heartbeat 가 90초+ 전이면 stalled 로 판단해 `status: "failed"` 로 전환. UI 가 영구 "running" 갇힘 방지.
+
+3. **사용자 [강제 중단] 버튼**. 진행 모니터에 cancel 버튼 추가. `task:cancel` 메시지 → `cancelRequested = true` → 루프가 다음 iteration 시작 시 즉시 빠져나감.
+
+### 학습
+
+- 장시간 백그라운드 작업은 **반드시** chrome.alarms keepalive 로 SW 살려두기.
+- Idle 종료 가능성을 가정한 **graceful failure** 가 필요 — heartbeat / cancel / state restoration 점검.
+- 외부 API (sendMessage, fetch) 호출은 모두 명시적 timeout 으로 wrap. Chrome API 들은 reject 하지만 동기 응답을 기다리는 sendMessage 는 무한 대기 가능.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```

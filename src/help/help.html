@@ -318,9 +318,10 @@
 
 <table>
   <tr><th>권한</th><th>용도</th></tr>
-  <tr><td><code>activeTab</code>, <code>scripting</code></td><td>현재 NotebookLM 탭에 content script 주입.</td></tr>
+  <tr><td><code>activeTab</code>, <code>scripting</code></td><td>현재 NotebookLM 탭에 content script 주입 + 모든 노트북 sweep 시 백그라운드 탭으로 각 노트북 방문.</td></tr>
   <tr><td><code>storage</code></td><td>GitHub token / repo 설정을 브라우저 로컬에 저장.</td></tr>
   <tr><td><code>downloads</code></td><td>NotebookLM audio 받기 + 파일명 rename.</td></tr>
+  <tr><td><code>alarms</code></td><td>장시간 bulk 작업 (5분~2시간+) 중 service worker 가 idle 종료되지 않도록 30초 주기 wake — 알람 자체가 "활성" 신호. 작업 종료 즉시 자동 해제.</td></tr>
   <tr><td><code>host_permissions: notebooklm.google.com</code></td><td>NotebookLM 페이지 DOM 에서 카드 정보 읽기.</td></tr>
   <tr><td><code>host_permissions: *.googleusercontent.com, *.usercontent.google.com, accounts.google.com, lh3.google.com</code></td><td>audio CDN / 인증 redirect 체인 통과 (자세한 이유: IMPLEMENTATION_NOTES §2).</td></tr>
   <tr><td><code>host_permissions: api.github.com</code></td><td>본인 repo 에 audio / RSS push.</td></tr>

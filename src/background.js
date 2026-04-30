@@ -82,6 +82,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       })
       .finally(async () => {
         await cleanupOwnedTabs();
+        await stopKeepalive();
         inProgressTask = null;
       });
     return false;
@@ -106,6 +107,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       })
       .finally(async () => {
         await cleanupOwnedTabs();
+        await stopKeepalive();
         inProgressTask = null;
       });
     return false;
@@ -161,6 +163,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
       } finally {
         await cleanupOwnedTabs();
+        await stopKeepalive();
         inProgressTask = null;
       }
     })();
@@ -312,6 +315,35 @@ async function sendMessageWithTimeout(tabId, msg, timeoutMs = 30000) {
   ]);
 }
 
+// MV3 service worker 는 활성 작업이 없으면 ~30초 idle 후 종료된다. 153개 카드를
+// 한 번에 처리하면 (개당 30~60초 × 153 = 1.5~2.5시간) 중간에 retry sleep / sendMessage
+// timeout 같은 idle 구간에서 SW 가 죽어 task 가 통째로 멈출 수 있음. chrome.alarms
+// 를 30초마다 발화시켜 그 발화 자체로 SW 를 깨워 두는 패턴 — MV3 long-running task
+// 의 표준 keepalive.
+const KEEPALIVE_ALARM = "task-keepalive";
+
+async function startKeepalive() {
+  // alarms 의 production minimum period 는 30s. periodInMinutes: 0.5 = 30초.
+  try {
+    await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+  } catch (e) {
+    console.warn("[keepalive] create 실패 (alarms 권한 누락?):", e.message);
+  }
+}
+
+async function stopKeepalive() {
+  try { await chrome.alarms.clear(KEEPALIVE_ALARM); } catch {}
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== KEEPALIVE_ALARM) return;
+  // 발화 자체가 SW wake. running task 이면 heartbeat 갱신 + 작업이 흘렀는지 점검.
+  if (currentTaskState.status === "running") {
+    currentTaskState.lastHeartbeatAt = Date.now();
+    try { await chrome.storage.session.set({ currentTaskState }); } catch {}
+  }
+});
+
 function emitEvent(type, payload) {
   chrome.runtime.sendMessage({ type, ...payload }).catch(() => {});
 }
@@ -378,6 +410,11 @@ const STALE_HEARTBEAT_MS = 90 * 1000; // 1.5분 — runBulkRemote 의 push timeo
       }
     }
     currentTaskState = restored;
+
+    // SW 재시작 후 task 가 더 이상 active 가 아니면 leftover keepalive 알람 정리.
+    if (currentTaskState.status !== "running") {
+      try { await chrome.alarms.clear(KEEPALIVE_ALARM); } catch {}
+    }
   } catch {}
 })();
 
@@ -586,6 +623,7 @@ async function scanOneNotebook(url) {
 }
 
 async function runScanAll() {
+  await startKeepalive();
   await setTaskState({
     ...INITIAL_TASK_STATE,
     task: "scan:all", status: "running", phase: "list",
@@ -680,6 +718,7 @@ async function runScanAll() {
 }
 
 async function runBulkRemote(selections) {
+  await startKeepalive();
   // selections: [{ notebookUrl, cardIndex, episodeTitle }, ...]
   const grouped = new Map();
   for (const s of selections) {
