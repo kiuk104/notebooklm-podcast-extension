@@ -77,9 +77,9 @@
   토큰은 <strong>발급 직후 한 번만</strong> 보입니다. 페이지를 닫기 전에 익스텐션 옵션에 paste 하세요. 잃어버리면 다시 발급해야 합니다.
 </div>
 
-<h3>2-3. 익스텐션 옵션 입력</h3>
+<h3>2-3. 익스텐션 관리 페이지에서 입력</h3>
 <ol>
-  <li>익스텐션 아이콘 → 팝업 하단 <code>⚙ GitHub 설정</code> 클릭.</li>
+  <li>익스텐션 아이콘 → 팝업 하단 <code>⚙ 관리</code> 클릭.</li>
   <li><strong>Token</strong> 에 위에서 받은 PAT paste.</li>
   <li><strong>Repo</strong> 에 <code>owner/name</code> 형식 (예: <code>kiuk104/my-notebooklm-podcast</code>).</li>
   <li><strong>RSS feed 생성 방식</strong> 은 기본값 <em>GitHub Actions 에 위임</em> 권장 (<a href="#rss">§4</a> 참고).</li>
@@ -136,10 +136,10 @@
 
 <h3>3-4. 진행 중 popup 닫으면?</h3>
 <p>3-2 (단일 노트북 일괄): popup 의 JS 가 loop 를 돌리므로 닫으면 멈춤. 이미 시작된 다운로드는 background SW 에서 계속 처리.</p>
-<p>3-3 (모든 노트북 sweep): background SW 에서 orchestration 하므로 popup 닫혀도 계속 진행. popup 재오픈 시 카드 list 자체는 복원되지 않지만 — <strong>옵션 페이지 (⚙ GitHub 설정) 상단의 진행 모니터</strong> 에서 현재 상태 (스캔/다운로드 단계, 진행률, 경과 시간, 에러) 가 라이브로 보입니다. background 가 <code>chrome.storage.session</code> 에 상태를 저장하므로 옵션 페이지를 닫고 다시 열어도 진행 중인 작업은 그대로 노출.</p>
+<p>3-3 (모든 노트북 sweep): background SW 에서 orchestration 하므로 popup 닫혀도 계속 진행. popup 재오픈 시 카드 list 자체는 복원되지 않지만 — <strong>관리 페이지 (⚙ 관리) 상단의 진행 모니터</strong> 에서 현재 상태 (스캔/다운로드 단계, 진행률, 경과 시간, 에러) 가 라이브로 보입니다. background 가 <code>chrome.storage.session</code> 에 상태를 저장하므로 관리 페이지를 닫고 다시 열어도 진행 중인 작업은 그대로 노출.</p>
 
-<h3>3-5. 진행 모니터 (옵션 페이지)</h3>
-<p>모든 노트북 sweep 또는 일괄 다운로드는 5~10분 걸릴 수 있어 popup 만으로는 진행 상황 확인이 불편합니다. 옵션 페이지 상단의 <strong>진행 모니터 패널</strong> 이:</p>
+<h3>3-5. 진행 모니터 (관리 페이지)</h3>
+<p>모든 노트북 sweep 또는 일괄 다운로드는 5~10분 걸릴 수 있어 popup 만으로는 진행 상황 확인이 불편합니다. 관리 페이지 상단의 <strong>진행 모니터 패널</strong> 이:</p>
 <ul>
   <li>현재 작업 종류 (모든 노트북 스캔 / 일괄 다운로드) + 상태 배지 (진행 중 / 완료 / 실패)</li>
   <li>경과 시간 (초 → 분 → 시간 단위로 자동 변환)</li>
@@ -249,7 +249,7 @@
 
 <h3>push 실패: <code>401 Bad credentials</code> 또는 권한 부족</h3>
 <ol>
-  <li>옵션 페이지에서 [설정 검증] 을 한 번 눌러 어디서 막히는지 확인 — 토큰 401 / repo 404 / push 권한 없음 중 하나로 분류됨.</li>
+  <li>관리 페이지에서 [설정 검증] 을 한 번 눌러 어디서 막히는지 확인 — 토큰 401 / repo 404 / push 권한 없음 중 하나로 분류됨.</li>
   <li>토큰 401 이면: token 필드 비우고 새로 paste (보이지 않는 trailing 공백 제거). 그래도 안 되면 PAT 만료 — 새로 발급 (§2-2).</li>
   <li>repo 404 이면: owner/name 오타 또는 private repo 인데 토큰 권한이 그 repo 를 못 봄. fine-grained PAT 의 repository access 설정 확인.</li>
   <li>push 권한 없음이면: classic PAT 는 <code>repo</code> scope, fine-grained PAT 는 해당 repo 에 <code>Contents: Read and write</code> 권한 필요.</li>
