@@ -52,6 +52,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, queued: expectedQueue.length });
     return false;
   }
+  if (msg?.type === "task:cancel") {
+    // 진행 중인 task 의 다음 iteration 에서 빠져나가도록 플래그 set.
+    if (!inProgressTask) {
+      sendResponse({ ok: false, error: "진행 중인 작업이 없습니다" });
+      return false;
+    }
+    cancelRequested = true;
+    sendResponse({ ok: true, task: inProgressTask });
+    return false;
+  }
   if (msg?.type === "scan:all") {
     if (inProgressTask) {
       sendResponse({ ok: false, error: "이미 진행 중인 작업이 있습니다" });
@@ -59,6 +69,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     sendResponse({ ok: true, started: true });
     inProgressTask = "scan:all";
+    cancelRequested = false;
     runScanAll()
       .catch(async (e) => {
         console.error("[scan:all]", e);
@@ -82,6 +93,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     sendResponse({ ok: true, started: true });
     inProgressTask = "bulk:remote";
+    cancelRequested = false;
     runBulkRemote(msg.selections || [])
       .catch(async (e) => {
         console.error("[bulk:remote]", e);
@@ -122,6 +134,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     sendResponse({ ok: true, started: true });
     inProgressTask = "bulk:remote";
+    cancelRequested = false;
     (async () => {
       try {
         const cfg = await chrome.storage.local.get(["token", "repo"]);
@@ -286,6 +299,19 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// chrome.tabs.sendMessage 는 receiving end 가 응답을 안 하면 영구 pending 가능
+// (특히 NotebookLM SPA 가 freeze 되거나 content script 가 block 됐을 때). 명시적
+// timeout 으로 wrap 해 stuck 을 방지.
+async function sendMessageWithTimeout(tabId, msg, timeoutMs = 30000) {
+  return Promise.race([
+    chrome.tabs.sendMessage(tabId, msg),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error(`tabs.sendMessage timeout (${timeoutMs}ms)`)),
+      timeoutMs,
+    )),
+  ]);
+}
+
 function emitEvent(type, payload) {
   chrome.runtime.sendMessage({ type, ...payload }).catch(() => {});
 }
@@ -312,25 +338,55 @@ const INITIAL_TASK_STATE = {
   recentPushes: [],     // 최근 N 건의 push 결과 — 옵션 페이지에 라이브 활동 로그로 노출.
   startedAt: null,
   endedAt: null,
+  lastHeartbeatAt: null, // setTaskState 마다 갱신 — SW 재시작 시 stale running 감지용.
 };
 let currentTaskState = { ...INITIAL_TASK_STATE };
 
-// SW 재시작 시 마지막 상태 복원 (가능하면 session 우선 — 브라우저 종료 시 삭제됨,
-// idle 한 새 세션에 stale 상태가 안 남음). session 사용 불가 시 local fallback.
+// 사용자 [강제 중단] 클릭 시 set. runScanAll / runBulkRemote 의 루프가 매 iteration
+// 시작 시 체크해서 즉시 빠져나간다.
+let cancelRequested = false;
+
+// SW 재시작 시 마지막 상태 복원. heartbeat 가 너무 오래된 "running" 은 SW 가
+// 죽었다 살아난 케이스로 보고 stalled (failed) 로 마킹 — UI 가 영구 "진행 중" 에
+// 갇히는 사고 방지.
+const STALE_HEARTBEAT_MS = 90 * 1000; // 1.5분 — runBulkRemote 의 push timeout (3분) 보다 짧게
+
 (async () => {
   try {
-    const r = await chrome.storage.session.get(["currentTaskState"]);
-    if (r.currentTaskState) currentTaskState = r.currentTaskState;
-  } catch {
+    let restored = null;
     try {
-      const r = await chrome.storage.local.get(["currentTaskState"]);
-      if (r.currentTaskState) currentTaskState = r.currentTaskState;
+      const r = await chrome.storage.session.get(["currentTaskState"]);
+      if (r.currentTaskState) restored = r.currentTaskState;
     } catch {}
-  }
+    if (!restored) {
+      try {
+        const r = await chrome.storage.local.get(["currentTaskState"]);
+        if (r.currentTaskState) restored = r.currentTaskState;
+      } catch {}
+    }
+    if (!restored) return;
+
+    if (restored.status === "running") {
+      const heartbeat = restored.lastHeartbeatAt || restored.startedAt || 0;
+      const stale = Date.now() - heartbeat;
+      if (stale > STALE_HEARTBEAT_MS) {
+        restored.status = "failed";
+        restored.message =
+          `이전 작업이 SW 재시작으로 중단됐습니다 ` +
+          `(마지막 heartbeat ${Math.round(stale / 60000)}분 전). 새로 시작하세요.`;
+        restored.endedAt = Date.now();
+      }
+    }
+    currentTaskState = restored;
+  } catch {}
 })();
 
 async function setTaskState(updates) {
-  currentTaskState = { ...currentTaskState, ...updates };
+  currentTaskState = {
+    ...currentTaskState,
+    ...updates,
+    lastHeartbeatAt: Date.now(), // 모든 setTaskState 호출이 heartbeat — SW 살아있음의 증거.
+  };
   // errors 누적 방지 — 마지막 20개만 유지.
   if (currentTaskState.errors && currentTaskState.errors.length > 20) {
     currentTaskState.errors = currentTaskState.errors.slice(-20);
@@ -503,7 +559,7 @@ async function waitForAudioCards(tabId, timeoutMs) {
   let lastResult = null;
   while (Date.now() - start < timeoutMs) {
     try {
-      const r = await chrome.tabs.sendMessage(tabId, { type: "scan" });
+      const r = await sendMessageWithTimeout(tabId, { type: "scan" }, 5000);
       if (r?.ok) {
         lastResult = r;
         const audios = r.audios || [];
@@ -549,6 +605,14 @@ async function runScanAll() {
   const MAX_CONSEC_TAB_ERRORS = 5;
   let consecTabErrors = 0;
   for (let i = 0; i < urls.length; i++) {
+    if (cancelRequested) {
+      await setTaskState({
+        status: "failed", phase: "cancelled",
+        message: `사용자 중단 — 노트북 ${i}/${urls.length} 까지 완료`,
+        endedAt: Date.now(),
+      });
+      return { notebooks };
+    }
     await setTaskState({
       phase: "scan", done: i,
       message: `노트북 ${i + 1}/${urls.length} 스캔 중…`,
@@ -681,12 +745,21 @@ async function runBulkRemote(selections) {
     }
     try {
       for (const item of items) {
+        if (cancelRequested) {
+          await setTaskState({
+            status: "failed", phase: "cancelled",
+            message: `사용자 중단 — 진행 ${done}/${total}`, endedAt: Date.now(),
+          });
+          return { ok: false, cancelled: true };
+        }
         await setTaskState({ phase: "download", message: `다운로드 중: ${item.episodeTitle?.slice(0, 40) || "(제목 없음)"}` });
         emitEvent("bulk:remote:progress", {
           phase: "download", url, episodeTitle: item.episodeTitle, done, total,
         });
         try {
-          const r = await chrome.tabs.sendMessage(tabId, { type: "download", index: item.cardIndex });
+          // sendMessageWithTimeout 으로 NotebookLM 탭이 freeze 됐을 때 영구 pending 차단.
+          // content.js 의 download 핸들러는 보통 1~3초 안에 응답 (메뉴 polling 포함) — 30초 timeout 충분.
+          const r = await sendMessageWithTimeout(tabId, { type: "download", index: item.cardIndex }, 30000);
           if (!r?.ok) {
             emitEvent("bulk:remote:result", {
               episodeTitle: item.episodeTitle, ok: false, error: r?.error || "메뉴 클릭 실패",

@@ -150,6 +150,7 @@ const taskRecentSummaryEl = document.getElementById("task-recent-summary");
 const taskRecentEl = document.getElementById("task-recent");
 const taskActionsEl = document.getElementById("task-actions");
 const taskClearBtn = document.getElementById("task-clear");
+const taskCancelBtn = document.getElementById("task-cancel");
 
 const TASK_LABELS = {
   "scan:all": "모든 노트북 스캔",
@@ -290,12 +291,20 @@ function renderTaskState(state) {
 
   renderRecentPushes(state.recentPushes);
 
-  if (state.status === "completed" || state.status === "failed") {
+  // 진행 중에는 [강제 중단] 만, 종료 후에는 [초기화] 만 노출.
+  if (state.status === "running") {
     taskActionsEl.style.display = "flex";
+    taskCancelBtn.style.display = "inline-block";
+    taskClearBtn.style.display = "none";
+    startElapsedTimer();
+  } else if (state.status === "completed" || state.status === "failed") {
+    taskActionsEl.style.display = "flex";
+    taskCancelBtn.style.display = "none";
+    taskClearBtn.style.display = "inline-block";
     stopElapsedTimer();
   } else {
     taskActionsEl.style.display = "none";
-    startElapsedTimer();
+    stopElapsedTimer();
   }
 }
 
@@ -324,6 +333,20 @@ function stopElapsedTimer() {
 taskClearBtn.addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "task:state:clear" });
   // task:state 메시지가 broadcast 되어 renderTaskState 가 호출됨.
+});
+
+taskCancelBtn.addEventListener("click", async () => {
+  if (!confirm("현재 작업을 중단하시겠습니까? 다음 노트북/카드 처리 시작 전 빠져나갑니다.")) return;
+  taskCancelBtn.disabled = true;
+  taskCancelBtn.textContent = "중단 요청 중…";
+  try {
+    await chrome.runtime.sendMessage({ type: "task:cancel" });
+  } catch {}
+  // 실제 상태 전환은 task:state 메시지로 도착 — UI 재렌더에서 처리.
+  setTimeout(() => {
+    taskCancelBtn.disabled = false;
+    taskCancelBtn.textContent = "강제 중단";
+  }, 3000);
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
