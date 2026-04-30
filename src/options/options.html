@@ -108,6 +108,14 @@
     </div>
   </label>
 
+  <label style="display:flex; align-items:center; gap:8px; font-weight:500; margin-top:18px;">
+    <input type="checkbox" id="auto-download-new" style="width:auto; margin:0; padding:0;">
+    <span>스캔 후 신규 카드 자동 다운로드</span>
+  </label>
+  <div class="hint" style="margin-left:24px;">
+    [모든 노트북 스캔] 직후 repo 에 없는 카드들을 그대로 이어서 다운로드 + push 합니다 (v1 cron 동등). 첫 사용 시 수십~수백 개가 한꺼번에 들어올 수 있어 default 는 OFF — 수동 검수 후 [신규 받기] 클릭이 안전.
+  </div>
+
   <label>커밋 시 사용할 이름 / 이메일 (선택)
     <input type="text" id="committer-name" placeholder="kiuk104">
     <input type="email" id="committer-email" placeholder="kiuk104@gmail.com" style="margin-top:6px">
@@ -120,6 +128,18 @@
   </div>
   <div id="status" class="status" style="display:none"></div>
 </form>
+
+<div class="task-panel" id="last-scan-panel" style="display:none; margin-top:20px;">
+  <div class="task-head">
+    <span class="task-title">직전 스캔 결과</span>
+    <span class="task-elapsed" id="last-scan-when"></span>
+  </div>
+  <div class="task-message" id="last-scan-summary"></div>
+  <div class="task-actions">
+    <button type="button" id="last-scan-download" class="primary-action" style="background:#2563eb; color:#fff; border:0;">신규 받기</button>
+    <button type="button" id="last-scan-clear">지우기</button>
+  </div>
+</div>
 
 <p style="margin-top: 28px; font-size: 12px; color: #666;">
   처음 사용하시나요? <a href="../help/help.html" target="_blank">도움말 페이지</a> 에 GitHub repo 셋업 / Pages 활성화 / RSS feed 생성 방법이 있습니다.

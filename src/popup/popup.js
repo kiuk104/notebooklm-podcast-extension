@@ -491,6 +491,24 @@ async function renderAggregate(notebooks) {
   scanAllBtn.disabled = false;
 }
 
+// popup 첫 오픈 시 직전 스캔 결과 자동 복원 — 11분짜리 sweep 이후 popup 이 닫혔다 다시
+// 열릴 때 [모든 노트북 스캔] 을 또 누르지 않아도 카드 list 가 그대로 보이도록.
+// 단 (a) 진행 중인 task 가 있으면 그 흐름에 양보 (b) 30분 이상 지난 결과는 무시.
+(async () => {
+  try {
+    const taskR = await chrome.runtime.sendMessage({ type: "task:state:get" });
+    if (taskR?.state?.status === "running") return; // 진행 중이면 안 건드림.
+    const r = await chrome.runtime.sendMessage({ type: "scan:result:get" });
+    if (!r?.result?.notebooks?.length) return;
+    const ageMs = Date.now() - (r.result.scannedAt || 0);
+    if (ageMs > 30 * 60 * 1000) return; // 30분 넘으면 stale 로 보고 무시.
+    await renderAggregate(r.result.notebooks);
+    const ageMin = Math.round(ageMs / 60000);
+    const ageStr = ageMin < 1 ? `${Math.round(ageMs / 1000)}초 전` : `${ageMin}분 전`;
+    setStatus((statusEl.textContent || "").replace(/^\s*/, "") + ` (${ageStr} 스캔)`, "success");
+  } catch {}
+})();
+
 document.getElementById("open-options").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();

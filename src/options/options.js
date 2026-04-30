@@ -4,20 +4,25 @@ const fields = {
   rssMode: document.getElementById("rss-mode"),
   committerName: document.getElementById("committer-name"),
   committerEmail: document.getElementById("committer-email"),
+  autoDownloadNew: document.getElementById("auto-download-new"),
 };
 const statusEl = document.getElementById("status");
 const feedUrlEl = document.getElementById("feed-url");
 const openFeedEl = document.getElementById("open-feed");
 const copyFeedBtn = document.getElementById("copy-feed");
 
-const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail"];
+const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "autoDownloadNew"];
 const RSS_MODE_DEFAULT = "actions";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 (async () => {
   const stored = await chrome.storage.local.get(KEYS);
   for (const k of KEYS) {
-    if (stored[k]) fields[k].value = stored[k];
+    if (k === "autoDownloadNew") {
+      fields.autoDownloadNew.checked = !!stored.autoDownloadNew;
+    } else if (stored[k]) {
+      fields[k].value = stored[k];
+    }
   }
   if (!stored.rssMode) fields.rssMode.value = RSS_MODE_DEFAULT;
   refreshFeedUrl();
@@ -75,6 +80,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     rssMode: fields.rssMode.value || RSS_MODE_DEFAULT,
     committerName: fields.committerName.value.trim(),
     committerEmail: fields.committerEmail.value.trim(),
+    autoDownloadNew: fields.autoDownloadNew.checked,
   });
   show("저장됨.", "success");
 });
@@ -256,4 +262,68 @@ chrome.runtime.onMessage.addListener((msg) => {
     const r = await chrome.runtime.sendMessage({ type: "task:state:get" });
     if (r?.state) renderTaskState(r.state);
   } catch {}
+  await renderLastScanPanel();
 })();
+
+// ---------- 직전 스캔 결과 패널 ----------
+
+const lastScanPanel = document.getElementById("last-scan-panel");
+const lastScanWhenEl = document.getElementById("last-scan-when");
+const lastScanSummaryEl = document.getElementById("last-scan-summary");
+const lastScanDownloadBtn = document.getElementById("last-scan-download");
+const lastScanClearBtn = document.getElementById("last-scan-clear");
+
+async function renderLastScanPanel() {
+  const r = await chrome.runtime.sendMessage({ type: "scan:result:get" }).catch(() => null);
+  const result = r?.result;
+  if (!result || !result.notebooks || result.notebooks.length === 0) {
+    lastScanPanel.style.display = "none";
+    return;
+  }
+  const cardCount = result.notebooks.reduce((s, n) => s + (n.audios?.length || 0), 0);
+
+  // 신규 카드 수는 ghList 기반으로 background 에서 계산할 수도 있지만, 일반 GET 한 번이면
+  // 충분하니 popup 처럼 list:pushed 를 직접 호출.
+  let newCount = 0;
+  let placeholderCount = 0;
+  try {
+    const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" });
+    const pushedSet = new Set(pushed?.shortIds || []);
+    for (const nb of result.notebooks) {
+      for (const audio of (nb.audios || [])) {
+        if (audio.isPlaceholder) { placeholderCount++; continue; }
+        const sid = (audio.artifactId || "").slice(0, 8);
+        if (sid && pushedSet.has(sid)) continue;
+        newCount++;
+      }
+    }
+  } catch {}
+
+  const ageMs = Date.now() - (result.scannedAt || Date.now());
+  lastScanWhenEl.textContent = formatElapsed(ageMs) + " 전";
+
+  const parts = [`노트북 ${result.notebooks.length}개`, `카드 ${cardCount}개`];
+  if (placeholderCount > 0) parts.push(`${placeholderCount}개 제목 대기`);
+  parts.push(`신규 ${newCount}개`);
+  lastScanSummaryEl.textContent = parts.join(" · ");
+
+  lastScanPanel.style.display = "block";
+  lastScanDownloadBtn.disabled = newCount === 0;
+  lastScanDownloadBtn.textContent = newCount === 0 ? "신규 없음" : `신규 ${newCount}개 받기`;
+}
+
+lastScanDownloadBtn.addEventListener("click", async () => {
+  lastScanDownloadBtn.disabled = true;
+  const r = await chrome.runtime.sendMessage({ type: "bulk:remote:from-last-scan" });
+  if (!r?.ok) {
+    show(`Bulk 시작 실패: ${r?.error || "알 수 없음"}`, "error");
+    lastScanDownloadBtn.disabled = false;
+    return;
+  }
+  // task:state 가 갱신되면서 진행 모니터에 자동으로 노출됨.
+});
+
+lastScanClearBtn.addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "scan:result:clear" });
+  lastScanPanel.style.display = "none";
+});

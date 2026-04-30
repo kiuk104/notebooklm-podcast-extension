@@ -106,6 +106,53 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     setTaskState({ ...INITIAL_TASK_STATE }).then(() => sendResponse({ ok: true }));
     return true; // async
   }
+  if (msg?.type === "scan:result:get") {
+    loadLastScanResult().then((result) => sendResponse({ ok: true, result }));
+    return true; // async
+  }
+  if (msg?.type === "scan:result:clear") {
+    clearLastScanResult().then(() => sendResponse({ ok: true }));
+    return true; // async
+  }
+  if (msg?.type === "bulk:remote:from-last-scan") {
+    // 직전 스캔 결과 + 현재 repo 상태 기준으로 신규 selections 만들어 바로 bulk:remote.
+    if (inProgressTask) {
+      sendResponse({ ok: false, error: "이미 진행 중인 작업이 있습니다" });
+      return false;
+    }
+    sendResponse({ ok: true, started: true });
+    inProgressTask = "bulk:remote";
+    (async () => {
+      try {
+        const cfg = await chrome.storage.local.get(["token", "repo"]);
+        if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음");
+        const last = await loadLastScanResult();
+        if (!last?.notebooks?.length) throw new Error("저장된 스캔 결과 없음");
+        const selections = await buildNewSelections(last.notebooks, cfg.repo, cfg.token);
+        if (selections.length === 0) {
+          await setTaskState({
+            ...INITIAL_TASK_STATE,
+            task: "bulk:remote", status: "completed",
+            message: "신규 카드 없음 — 이미 모두 받음",
+            startedAt: Date.now(), endedAt: Date.now(),
+          });
+          return;
+        }
+        await runBulkRemote(selections);
+      } catch (e) {
+        console.error("[bulk:remote:from-last-scan]", e);
+        await setTaskState({
+          status: "failed",
+          message: `Bulk 다운로드 실패: ${e.message}`,
+          endedAt: Date.now(),
+        });
+      } finally {
+        await cleanupOwnedTabs();
+        inProgressTask = null;
+      }
+    })();
+    return false;
+  }
   if (msg?.type === "list:pushed") {
     // popup 의 bulk 모드에서 "이미 받은 카드" 를 default 미체크로 두기 위한 사전 점검.
     // ghList 가 실패해도 popup 흐름이 멈추면 안 되므로 빈 배열로 fallback.
@@ -279,6 +326,61 @@ function pushTaskError(err) {
   return setTaskState({ errors, errorCount: (currentTaskState.errorCount || 0) + 1 });
 }
 
+// 모든 노트북 sweep 결과를 session storage 에 저장. popup 이 닫혀 있다 다시 열려도
+// 이전 결과를 그대로 보여주고, 관리 페이지의 [신규 받기] 도 같은 결과를 사용.
+async function persistLastScanResult(notebooks) {
+  const data = { notebooks, scannedAt: Date.now() };
+  try { await chrome.storage.session.set({ lastScanResult: data }); }
+  catch {
+    try { await chrome.storage.local.set({ lastScanResult: data }); } catch {}
+  }
+}
+
+async function loadLastScanResult() {
+  try {
+    const r = await chrome.storage.session.get(["lastScanResult"]);
+    if (r.lastScanResult) return r.lastScanResult;
+  } catch {}
+  try {
+    const r = await chrome.storage.local.get(["lastScanResult"]);
+    return r.lastScanResult || null;
+  } catch { return null; }
+}
+
+async function clearLastScanResult() {
+  try { await chrome.storage.session.remove(["lastScanResult"]); } catch {}
+  try { await chrome.storage.local.remove(["lastScanResult"]); } catch {}
+}
+
+// 노트북 array 와 ghList 결과로부터 "아직 repo 에 없는" 카드들의 selections 를 만든다.
+// auto-download 와 관리 페이지의 [신규 받기] 양쪽이 공유.
+async function buildNewSelections(notebooks, repo, token) {
+  const pushedShortIds = new Set();
+  try {
+    const list = await ghList(repo, "docs/episodes", token);
+    for (const f of list) {
+      const m = /__([0-9a-f]{8})__/.exec(f.name);
+      if (m) pushedShortIds.add(m[1]);
+    }
+  } catch (e) {
+    console.warn("[buildNewSelections] ghList 실패:", e.message);
+  }
+  const selections = [];
+  for (const nb of notebooks) {
+    (nb.audios || []).forEach((audio, idx) => {
+      if (audio.isPlaceholder) return;
+      const sid = (audio.artifactId || "").slice(0, 8);
+      if (sid && pushedShortIds.has(sid)) return;
+      selections.push({
+        notebookUrl: nb.url,
+        cardIndex: idx,
+        episodeTitle: audio.title,
+      });
+    });
+  }
+  return selections;
+}
+
 function waitForTabComplete(tabId, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
@@ -415,6 +517,7 @@ async function runScanAll() {
     }
   }
 
+  await persistLastScanResult(notebooks);
   await setTaskState({
     status: "completed", phase: "done",
     done: urls.length,
@@ -423,6 +526,26 @@ async function runScanAll() {
     endedAt: Date.now(),
   });
   emitEvent("scan:all:done", { ok: true, notebooks });
+
+  // 옵션의 autoDownloadNew 가 켜져 있으면 신규 카드들을 같은 SW 안에서 이어서
+  // 다운로드. 직접 runBulkRemote 호출 — message 라우팅 우회. inProgressTask 는
+  // 이미 "scan:all" 이라 외부 message 는 거부되지만, 우리가 호출한 건 통과.
+  // task state 는 runBulkRemote 안에서 자동으로 "bulk:remote" 로 전환됨.
+  try {
+    const cfg = await chrome.storage.local.get(["autoDownloadNew", "token", "repo"]);
+    if (cfg.autoDownloadNew && cfg.token && cfg.repo) {
+      const selections = await buildNewSelections(notebooks, cfg.repo, cfg.token);
+      if (selections.length > 0) {
+        console.log(`[scan:all] auto-download: ${selections.length} 카드 시작`);
+        await runBulkRemote(selections);
+      } else {
+        console.log("[scan:all] auto-download: 신규 카드 없음");
+      }
+    }
+  } catch (e) {
+    console.error("[scan:all] auto-download 실패:", e);
+  }
+
   return { notebooks };
 }
 
