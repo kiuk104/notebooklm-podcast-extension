@@ -15,7 +15,7 @@ Output:
 """
 from PIL import Image, ImageDraw
 
-BG = (220, 38, 38, 255)        # red-600
+BG = (17, 17, 17, 255)         # near-black (#111)
 FG = (255, 255, 255, 255)
 SUPERSAMPLE = 4
 
