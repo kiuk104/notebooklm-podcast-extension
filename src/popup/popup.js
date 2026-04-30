@@ -438,6 +438,16 @@ async function renderAggregate(notebooks) {
   clearList();
   viewMode = "all";
 
+  if (!notebooks || notebooks.length === 0) {
+    setStatus(
+      "노트북을 찾지 못했습니다. NotebookLM 홈에 노트북이 있는지 + 로그인 상태인지 확인하세요.",
+      "error",
+    );
+    scanBtn.disabled = false;
+    scanAllBtn.disabled = false;
+    return;
+  }
+
   const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" })
     .catch(() => ({ ok: false, shortIds: [] }));
   const pushedShortIds = pushed?.shortIds || [];
@@ -471,7 +481,10 @@ async function renderAggregate(notebooks) {
   if (totalPlaceholder > 0) parts.push(`${totalPlaceholder}개 제목 대기`);
   if (totalAlready > 0) parts.push(`${totalAlready}개 이미 받음`);
   if (totalEligible > 0) parts.push(`${totalEligible}개 신규`);
-  setStatus(parts.join(" · "), "success");
+  if (totalCards === 0) {
+    parts.push("(스캔된 노트북에 음성개요 없음 — 카드 로딩이 늦어 timeout 됐을 수도)");
+  }
+  setStatus(parts.join(" · "), totalCards > 0 ? "success" : "");
 
   refreshBulkBar();
   scanBtn.disabled = false;

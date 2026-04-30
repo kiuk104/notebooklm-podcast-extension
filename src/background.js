@@ -236,7 +236,21 @@ async function openManagedTab(url) {
   const tab = await chrome.tabs.create({ url, active: false });
   ownedTabs.add(tab.id);
   await waitForTabComplete(tab.id, TAB_OPEN_TIMEOUT);
-  await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
+  const ready = await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
+  if (!ready) {
+    // content script 가 ping 에 응답하지 않음 — 보통 (a) 로그인 redirect 로 페이지가
+    // accounts.google.com 등 host_permissions 밖으로 나갔거나 (b) NotebookLM 이
+    // 다른 도메인으로 redirect (c) 페이지 로드 자체 실패. 친화적 에러로 변환.
+    let finalUrl = "";
+    try { finalUrl = (await chrome.tabs.get(tab.id))?.url || ""; } catch {}
+    if (finalUrl.includes("accounts.google.com") || finalUrl.includes("ServiceLogin")) {
+      throw new Error("NotebookLM 에 로그인되어 있지 않습니다. 브라우저에서 먼저 로그인 후 재시도하세요.");
+    }
+    if (!finalUrl.startsWith("https://notebooklm.google.com")) {
+      throw new Error(`NotebookLM 페이지로 이동되지 않음 (final=${finalUrl.slice(0, 80)}). 네트워크 / 로그인 상태 확인.`);
+    }
+    throw new Error("NotebookLM 페이지에서 content script 로딩 실패 (timeout). 페이지 새로고침 후 재시도.");
+  }
   return tab.id;
 }
 
