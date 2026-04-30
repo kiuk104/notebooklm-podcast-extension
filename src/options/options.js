@@ -253,6 +253,11 @@ taskClearBtn.addEventListener("click", async () => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type === "task:state") {
     renderTaskState(msg.state);
+    // 스캔 완료 시점엔 lastScanResult 가 막 persist 됐으니, bulk:remote 완료 시점엔
+    // 신규 카드 수가 줄어들었으니 — 둘 다 직전 스캔 패널 재렌더가 필요.
+    if (msg.state?.status === "completed" || msg.state?.status === "failed") {
+      renderLastScanPanel();
+    }
   }
 });
 
