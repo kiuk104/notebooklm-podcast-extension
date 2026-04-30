@@ -60,8 +60,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, started: true });
     inProgressTask = "scan:all";
     runScanAll()
-      .catch((e) => {
+      .catch(async (e) => {
         console.error("[scan:all]", e);
+        await setTaskState({
+          status: "failed",
+          message: `스캔 실패: ${e.message}`,
+          endedAt: Date.now(),
+        });
         emitEvent("scan:all:done", { ok: false, error: e.message });
       })
       .finally(async () => {
@@ -78,8 +83,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, started: true });
     inProgressTask = "bulk:remote";
     runBulkRemote(msg.selections || [])
-      .catch((e) => {
+      .catch(async (e) => {
         console.error("[bulk:remote]", e);
+        await setTaskState({
+          status: "failed",
+          message: `Bulk 다운로드 실패: ${e.message}`,
+          endedAt: Date.now(),
+        });
         emitEvent("bulk:remote:done", { ok: false, error: e.message });
       })
       .finally(async () => {
@@ -87,6 +97,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         inProgressTask = null;
       });
     return false;
+  }
+  if (msg?.type === "task:state:get") {
+    sendResponse({ ok: true, state: currentTaskState });
+    return false;
+  }
+  if (msg?.type === "task:state:clear") {
+    setTaskState({ ...INITIAL_TASK_STATE }).then(() => sendResponse({ ok: true }));
+    return true; // async
   }
   if (msg?.type === "list:pushed") {
     // popup 의 bulk 모드에서 "이미 받은 카드" 를 default 미체크로 두기 위한 사전 점검.
@@ -205,6 +223,62 @@ function emitEvent(type, payload) {
   chrome.runtime.sendMessage({ type, ...payload }).catch(() => {});
 }
 
+// ---------- task state — 옵션 페이지 진행 모니터용 ----------
+//
+// scan:all / bulk:remote 같은 background-orchestrated 작업의 진행 상태를
+// 단일 객체로 들고, 변경마다 chrome.storage.session 에 persist + "task:state"
+// runtime message 로 broadcast. 옵션 페이지는 (a) 첫 오픈 시 task:state:get
+// 으로 현재 상태 조회 (b) 이후 task:state 메시지로 라이브 갱신.
+
+const INITIAL_TASK_STATE = {
+  task: null,           // null | "scan:all" | "bulk:remote"
+  status: "idle",       // "idle" | "running" | "completed" | "failed"
+  phase: null,          // free-form (list / scan / open / download / done)
+  message: "",
+  total: 0,
+  done: 0,
+  notebookCount: 0,
+  cardCount: 0,
+  successCount: 0,
+  errorCount: 0,
+  errors: [],           // [{ url|episodeTitle, message }]
+  startedAt: null,
+  endedAt: null,
+};
+let currentTaskState = { ...INITIAL_TASK_STATE };
+
+// SW 재시작 시 마지막 상태 복원 (가능하면 session 우선 — 브라우저 종료 시 삭제됨,
+// idle 한 새 세션에 stale 상태가 안 남음). session 사용 불가 시 local fallback.
+(async () => {
+  try {
+    const r = await chrome.storage.session.get(["currentTaskState"]);
+    if (r.currentTaskState) currentTaskState = r.currentTaskState;
+  } catch {
+    try {
+      const r = await chrome.storage.local.get(["currentTaskState"]);
+      if (r.currentTaskState) currentTaskState = r.currentTaskState;
+    } catch {}
+  }
+})();
+
+async function setTaskState(updates) {
+  currentTaskState = { ...currentTaskState, ...updates };
+  // errors 누적 방지 — 마지막 20개만 유지.
+  if (currentTaskState.errors && currentTaskState.errors.length > 20) {
+    currentTaskState.errors = currentTaskState.errors.slice(-20);
+  }
+  try { await chrome.storage.session.set({ currentTaskState }); }
+  catch {
+    try { await chrome.storage.local.set({ currentTaskState }); } catch {}
+  }
+  chrome.runtime.sendMessage({ type: "task:state", state: currentTaskState }).catch(() => {});
+}
+
+function pushTaskError(err) {
+  const errors = [...(currentTaskState.errors || []), err];
+  return setTaskState({ errors, errorCount: (currentTaskState.errorCount || 0) + 1 });
+}
+
 function waitForTabComplete(tabId, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
@@ -307,25 +381,47 @@ async function scanOneNotebook(url) {
 }
 
 async function runScanAll() {
+  await setTaskState({
+    ...INITIAL_TASK_STATE,
+    task: "scan:all", status: "running", phase: "list",
+    message: "노트북 목록 수집 중…",
+    startedAt: Date.now(), endedAt: null,
+  });
   emitEvent("scan:all:progress", { phase: "list", message: "노트북 목록 수집 중…" });
+
   const urls = await scanHomePageForNotebookUrls();
+  await setTaskState({ phase: "list:done", total: urls.length, message: `노트북 ${urls.length}개 발견. 스캔 시작…` });
   emitEvent("scan:all:progress", { phase: "list:done", total: urls.length });
+
   const notebooks = [];
+  let cardCount = 0;
   for (let i = 0; i < urls.length; i++) {
+    await setTaskState({
+      phase: "scan", done: i,
+      message: `노트북 ${i + 1}/${urls.length} 스캔 중…`,
+    });
     emitEvent("scan:all:progress", {
-      phase: "scan",
-      done: i,
-      total: urls.length,
+      phase: "scan", done: i, total: urls.length,
       message: `노트북 ${i + 1}/${urls.length} 스캔 중…`,
     });
     try {
       const r = await scanOneNotebook(urls[i]);
       notebooks.push(r);
+      cardCount += (r.audios || []).length;
     } catch (e) {
       console.warn(`[scan:all] ${urls[i]} 실패:`, e.message);
       notebooks.push({ url: urls[i], cover: { title: "" }, audios: [], error: e.message });
+      await pushTaskError({ url: urls[i], message: e.message });
     }
   }
+
+  await setTaskState({
+    status: "completed", phase: "done",
+    done: urls.length,
+    notebookCount: urls.length, cardCount,
+    message: `스캔 완료 — 노트북 ${urls.length}개, 카드 ${cardCount}개`,
+    endedAt: Date.now(),
+  });
   emitEvent("scan:all:done", { ok: true, notebooks });
   return { notebooks };
 }
@@ -338,8 +434,18 @@ async function runBulkRemote(selections) {
     grouped.get(s.notebookUrl).push(s);
   }
   const total = selections.length;
+  await setTaskState({
+    ...INITIAL_TASK_STATE,
+    task: "bulk:remote", status: "running", phase: "open",
+    total, done: 0,
+    message: `${total}개 카드 다운로드 시작 — 노트북 ${grouped.size}개 순차 처리`,
+    startedAt: Date.now(), endedAt: null,
+  });
+
   let done = 0;
+  let success = 0;
   for (const [url, items] of grouped) {
+    await setTaskState({ phase: "open", message: `노트북 ${url.split("/notebook/")[1]?.slice(0, 8)}… 탭 여는 중` });
     emitEvent("bulk:remote:progress", {
       phase: "open", url, done, total,
       message: `${url.split("/").pop().slice(0, 8)}… 탭 여는 중`,
@@ -353,8 +459,10 @@ async function runBulkRemote(selections) {
           emitEvent("bulk:remote:result", {
             episodeTitle: item.episodeTitle, ok: false, error: "카드 로딩 타임아웃",
           });
+          await pushTaskError({ episodeTitle: item.episodeTitle, message: "카드 로딩 타임아웃" });
           done++;
         }
+        await setTaskState({ done });
         continue;
       }
     } catch (e) {
@@ -362,12 +470,15 @@ async function runBulkRemote(selections) {
         emitEvent("bulk:remote:result", {
           episodeTitle: item.episodeTitle, ok: false, error: `탭 열기 실패: ${e.message}`,
         });
+        await pushTaskError({ episodeTitle: item.episodeTitle, message: `탭 열기 실패: ${e.message}` });
         done++;
       }
+      await setTaskState({ done });
       continue;
     }
     try {
       for (const item of items) {
+        await setTaskState({ phase: "download", message: `다운로드 중: ${item.episodeTitle?.slice(0, 40) || "(제목 없음)"}` });
         emitEvent("bulk:remote:progress", {
           phase: "download", url, episodeTitle: item.episodeTitle, done, total,
         });
@@ -377,6 +488,7 @@ async function runBulkRemote(selections) {
             emitEvent("bulk:remote:result", {
               episodeTitle: item.episodeTitle, ok: false, error: r?.error || "메뉴 클릭 실패",
             });
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: r?.error || "메뉴 클릭 실패" });
             done++;
             continue;
           }
@@ -385,19 +497,32 @@ async function runBulkRemote(selections) {
             emitEvent("bulk:remote:result", {
               episodeTitle: item.episodeTitle, ok: false, error: "push 응답 타임아웃",
             });
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: "push 응답 타임아웃" });
+          } else if (result.ok || result.skipped) {
+            success++;
+          } else if (result.error) {
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: result.error });
           }
           done++;
         } catch (e) {
           emitEvent("bulk:remote:result", {
             episodeTitle: item.episodeTitle, ok: false, error: e.message,
           });
+          await pushTaskError({ episodeTitle: item.episodeTitle, message: e.message });
           done++;
         }
+        await setTaskState({ done, successCount: success });
       }
     } finally {
       await closeManagedTab(tabId);
     }
   }
+  await setTaskState({
+    status: "completed", phase: "done",
+    done, successCount: success,
+    message: `bulk 완료 — 성공 ${success} / 실패 ${done - success} / 총 ${done}`,
+    endedAt: Date.now(),
+  });
   emitEvent("bulk:remote:done", { ok: true, done });
   return { ok: true, done };
 }

@@ -128,3 +128,132 @@ function ghHeaders(token) {
     "X-GitHub-Api-Version": "2022-11-28",
   };
 }
+
+// ---------- 진행 모니터 (모든 노트북 스캔 / 일괄 다운로드) ----------
+
+const taskPanel = document.getElementById("task-panel");
+const taskTitleEl = document.getElementById("task-title");
+const taskStatusEl = document.getElementById("task-status");
+const taskElapsedEl = document.getElementById("task-elapsed");
+const taskMessageEl = document.getElementById("task-message");
+const progressFillEl = document.getElementById("progress-fill");
+const taskStatsEl = document.getElementById("task-stats");
+const taskErrorsEl = document.getElementById("task-errors");
+const taskActionsEl = document.getElementById("task-actions");
+const taskClearBtn = document.getElementById("task-clear");
+
+const TASK_LABELS = {
+  "scan:all": "모든 노트북 스캔",
+  "bulk:remote": "일괄 다운로드 (cross-notebook)",
+};
+const STATUS_LABELS = {
+  idle: "대기",
+  running: "진행 중",
+  completed: "완료",
+  failed: "실패",
+};
+
+let lastRenderedState = null;
+let elapsedTimer = null;
+
+function formatElapsed(ms) {
+  if (!ms || ms < 0) return "";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}초`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return `${min}분 ${remSec}초`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return `${hr}시간 ${remMin}분`;
+}
+
+function renderTaskState(state) {
+  lastRenderedState = state;
+  if (!state || state.task === null || state.status === "idle") {
+    taskPanel.style.display = "none";
+    stopElapsedTimer();
+    return;
+  }
+  taskPanel.style.display = "block";
+  taskPanel.className = "task-panel " + state.status;
+
+  taskTitleEl.textContent = TASK_LABELS[state.task] || state.task;
+  taskStatusEl.textContent = STATUS_LABELS[state.status] || state.status;
+
+  if (state.startedAt) {
+    const ms = (state.endedAt || Date.now()) - state.startedAt;
+    taskElapsedEl.textContent = formatElapsed(ms);
+  } else {
+    taskElapsedEl.textContent = "";
+  }
+
+  taskMessageEl.textContent = state.message || "";
+
+  const pct = state.total > 0 ? Math.min(100, (state.done / state.total) * 100) : (state.status === "completed" ? 100 : 0);
+  progressFillEl.style.width = pct.toFixed(1) + "%";
+
+  const stats = [];
+  if (state.total > 0) stats.push(`${state.done}/${state.total}`);
+  if (state.notebookCount > 0) stats.push(`노트북 ${state.notebookCount}개`);
+  if (state.cardCount > 0) stats.push(`카드 ${state.cardCount}개`);
+  if (state.successCount > 0) stats.push(`성공 ${state.successCount}`);
+  if (state.errorCount > 0) stats.push(`실패 ${state.errorCount}`);
+  taskStatsEl.textContent = stats.join(" · ");
+
+  if (state.errors && state.errors.length > 0) {
+    taskErrorsEl.style.display = "block";
+    taskErrorsEl.innerHTML = state.errors.map((err) => {
+      const label = err.episodeTitle || err.url || "(unknown)";
+      const safeLabel = String(label).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+      const safeMsg = String(err.message || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+      return `<div>· ${safeLabel}: ${safeMsg}</div>`;
+    }).join("");
+  } else {
+    taskErrorsEl.style.display = "none";
+  }
+
+  if (state.status === "completed" || state.status === "failed") {
+    taskActionsEl.style.display = "flex";
+    stopElapsedTimer();
+  } else {
+    taskActionsEl.style.display = "none";
+    startElapsedTimer();
+  }
+}
+
+function startElapsedTimer() {
+  if (elapsedTimer) return;
+  elapsedTimer = setInterval(() => {
+    if (lastRenderedState && lastRenderedState.status === "running" && lastRenderedState.startedAt) {
+      const ms = Date.now() - lastRenderedState.startedAt;
+      taskElapsedEl.textContent = formatElapsed(ms);
+    }
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+}
+
+taskClearBtn.addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "task:state:clear" });
+  // task:state 메시지가 broadcast 되어 renderTaskState 가 호출됨.
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === "task:state") {
+    renderTaskState(msg.state);
+  }
+});
+
+// 옵션 페이지 첫 오픈 시 현재 상태 조회 — sweep 진행 중에 옵션을 열면 진행률이 바로 보임.
+(async () => {
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "task:state:get" });
+    if (r?.state) renderTaskState(r.state);
+  } catch {}
+})();
