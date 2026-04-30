@@ -96,6 +96,19 @@
   </div>
 </div>
 
+<!-- 직전 스캔 결과 — 진행 모니터 바로 아래에 두어 작업 완료 직후 [신규 받기] 클릭 동선 단축. -->
+<div class="task-panel" id="last-scan-panel" style="display:none; margin-top:12px;">
+  <div class="task-head">
+    <span class="task-title">직전 스캔 결과</span>
+    <span class="task-elapsed" id="last-scan-when"></span>
+  </div>
+  <div class="task-message" id="last-scan-summary"></div>
+  <div class="task-actions">
+    <button type="button" id="last-scan-download" class="primary-action" style="background:#2563eb; color:#fff; border:0;">신규 받기</button>
+    <button type="button" id="last-scan-clear">지우기</button>
+  </div>
+</div>
+
 <form id="form">
   <label>GitHub Personal Access Token
     <div style="display: flex; gap: 6px; margin-top: 4px;">
@@ -236,18 +249,6 @@
   </div>
   <div id="meta-status" class="status" style="display:none"></div>
 </form>
-
-<div class="task-panel" id="last-scan-panel" style="display:none; margin-top:20px;">
-  <div class="task-head">
-    <span class="task-title">직전 스캔 결과</span>
-    <span class="task-elapsed" id="last-scan-when"></span>
-  </div>
-  <div class="task-message" id="last-scan-summary"></div>
-  <div class="task-actions">
-    <button type="button" id="last-scan-download" class="primary-action" style="background:#2563eb; color:#fff; border:0;">신규 받기</button>
-    <button type="button" id="last-scan-clear">지우기</button>
-  </div>
-</div>
 
 <p style="margin-top: 28px; font-size: 12px; color: #666;">
   처음 사용하시나요? <a href="../help/help.html" target="_blank">도움말 페이지</a> 에 GitHub repo 셋업 / Pages 활성화 / RSS feed 생성 방법이 있습니다.
