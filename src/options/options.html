@@ -40,6 +40,21 @@
     <div class="hint">아직 없으면 GitHub 에서 빈 public repo 를 먼저 만들고 입력하세요. Pages 활성화는 README 참고.</div>
   </label>
 
+  <label>내 RSS feed URL
+    <div style="display:flex; gap:6px; margin-top:4px; align-items:stretch;">
+      <input type="text" id="feed-url" readonly placeholder="repo 를 먼저 입력하세요"
+             style="margin-top:0; flex:1; background:#f9fafb; color:#111; cursor:text;">
+      <button type="button" id="copy-feed" title="클립보드에 복사"
+              style="margin-top:0; padding:0 14px; background:#fff; color:#2563eb; border:1px solid #ccc; border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;">복사</button>
+      <a id="open-feed" href="#" target="_blank" rel="noopener" title="새 탭에서 열기"
+         style="display:flex; align-items:center; padding:0 14px; background:#fff; color:#2563eb; border:1px solid #ccc; border-radius:4px; text-decoration:none; font-size:12px; pointer-events:none; opacity:0.4;">열기 ↗</a>
+    </div>
+    <div class="hint">
+      팟캐스트 앱에 등록할 주소. <strong>repo 의 GitHub Pages 활성화 + 첫 빌드</strong> 후 200 응답합니다.
+      custom domain 사용 시 <code>docs/podcast.json</code> 의 <code>baseUrl</code> 이 실제 주소 — 그땐 직접 확인.
+    </div>
+  </label>
+
   <label>RSS feed 생성 방식
     <select id="rss-mode">
       <option value="actions">GitHub Actions 에 위임 (권장)</option>

@@ -6,9 +6,13 @@ const fields = {
   committerEmail: document.getElementById("committer-email"),
 };
 const statusEl = document.getElementById("status");
+const feedUrlEl = document.getElementById("feed-url");
+const openFeedEl = document.getElementById("open-feed");
+const copyFeedBtn = document.getElementById("copy-feed");
 
 const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail"];
 const RSS_MODE_DEFAULT = "actions";
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 (async () => {
   const stored = await chrome.storage.local.get(KEYS);
@@ -16,12 +20,52 @@ const RSS_MODE_DEFAULT = "actions";
     if (stored[k]) fields[k].value = stored[k];
   }
   if (!stored.rssMode) fields.rssMode.value = RSS_MODE_DEFAULT;
+  refreshFeedUrl();
 })();
+
+function refreshFeedUrl() {
+  const repo = fields.repo.value.trim();
+  if (!REPO_RE.test(repo)) {
+    feedUrlEl.value = "";
+    openFeedEl.href = "#";
+    openFeedEl.style.pointerEvents = "none";
+    openFeedEl.style.opacity = "0.4";
+    copyFeedBtn.disabled = true;
+    copyFeedBtn.style.opacity = "0.4";
+    copyFeedBtn.style.cursor = "not-allowed";
+    return;
+  }
+  const [owner, name] = repo.split("/");
+  const url = `https://${owner}.github.io/${name}/feed.xml`;
+  feedUrlEl.value = url;
+  openFeedEl.href = url;
+  openFeedEl.style.pointerEvents = "";
+  openFeedEl.style.opacity = "1";
+  copyFeedBtn.disabled = false;
+  copyFeedBtn.style.opacity = "";
+  copyFeedBtn.style.cursor = "pointer";
+}
+
+fields.repo.addEventListener("input", refreshFeedUrl);
+
+copyFeedBtn.addEventListener("click", async () => {
+  if (!feedUrlEl.value) return;
+  try {
+    await navigator.clipboard.writeText(feedUrlEl.value);
+  } catch {
+    feedUrlEl.focus();
+    feedUrlEl.select();
+    document.execCommand("copy");
+  }
+  const original = copyFeedBtn.textContent;
+  copyFeedBtn.textContent = "✓ 복사됨";
+  setTimeout(() => { copyFeedBtn.textContent = original; }, 1400);
+});
 
 document.getElementById("form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const repo = fields.repo.value.trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+  if (!REPO_RE.test(repo)) {
     show("repo 형식이 잘못됐습니다 (owner/name)", "error");
     return;
   }
@@ -57,7 +101,7 @@ document.getElementById("verify").addEventListener("click", async () => {
   const token = fields.token.value.trim();
   const repo = fields.repo.value.trim();
   if (!token) return show("token 이 비어 있습니다.", "error");
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return show("repo 형식이 잘못됐습니다 (owner/name).", "error");
+  if (!REPO_RE.test(repo)) return show("repo 형식이 잘못됐습니다 (owner/name).", "error");
   show("검증 중…", "");
   try {
     const userR = await fetch("https://api.github.com/user", { headers: ghHeaders(token) });
