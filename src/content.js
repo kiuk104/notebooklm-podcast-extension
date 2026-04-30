@@ -57,6 +57,35 @@
     });
   }
 
+  // 노트북 list 페이지 (https://notebooklm.google.com/) 의 노트북 카드들에서
+  // 노트북 URL 만 뽑아내기. NotebookLM 의 list 페이지 DOM 클래스가 자주 바뀌므로
+  // `a[href*="/notebook/"]` 의 href 패턴 매칭으로 robust 하게 처리.
+  function getNotebookUrls() {
+    const urls = new Set();
+    for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
+      const href = a.getAttribute("href") || "";
+      if (/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) {
+        try {
+          urls.add(new URL(href, location.origin).href);
+        } catch {}
+      }
+    }
+    return Array.from(urls);
+  }
+
+  // home 페이지가 lazy render 인 경우 끝까지 스크롤해서 모든 카드를 DOM 에 올린다.
+  async function scrollToLoadAll() {
+    let lastHeight = -1;
+    for (let i = 0; i < 30; i++) {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await new Promise((r) => setTimeout(r, 350));
+      const h = document.documentElement.scrollHeight;
+      if (h === lastHeight) break;
+      lastHeight = h;
+    }
+    window.scrollTo(0, 0);
+  }
+
   function waitFor(predicate, timeoutMs = 3000, intervalMs = 80) {
     return new Promise((resolve, reject) => {
       const start = Date.now();
@@ -94,6 +123,23 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === "ping") {
+      // background 의 tab orchestration 에서 content script 가 살아 있는지 확인용.
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (msg?.type === "scan:list") {
+      // home 페이지에서 노트북 URL 일괄 수집. lazy render 대비 끝까지 스크롤.
+      (async () => {
+        try {
+          await scrollToLoadAll();
+          sendResponse({ ok: true, urls: getNotebookUrls() });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+      })();
+      return true; // async
+    }
     if (msg?.type === "scan") {
       sendResponse({ ok: true, cover: getCover(), audios: getAudioCards() });
       return false;

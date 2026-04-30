@@ -34,7 +34,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://notebooklm.google.com/notebook/*"],
+      "matches": ["https://notebooklm.google.com/*"],
       "js": ["src/content.js"],
       "run_at": "document_idle"
     }

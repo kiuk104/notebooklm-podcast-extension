@@ -52,6 +52,42 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, queued: expectedQueue.length });
     return false;
   }
+  if (msg?.type === "scan:all") {
+    if (inProgressTask) {
+      sendResponse({ ok: false, error: "이미 진행 중인 작업이 있습니다" });
+      return false;
+    }
+    sendResponse({ ok: true, started: true });
+    inProgressTask = "scan:all";
+    runScanAll()
+      .catch((e) => {
+        console.error("[scan:all]", e);
+        emitEvent("scan:all:done", { ok: false, error: e.message });
+      })
+      .finally(async () => {
+        await cleanupOwnedTabs();
+        inProgressTask = null;
+      });
+    return false;
+  }
+  if (msg?.type === "bulk:remote") {
+    if (inProgressTask) {
+      sendResponse({ ok: false, error: "이미 진행 중인 작업이 있습니다" });
+      return false;
+    }
+    sendResponse({ ok: true, started: true });
+    inProgressTask = "bulk:remote";
+    runBulkRemote(msg.selections || [])
+      .catch((e) => {
+        console.error("[bulk:remote]", e);
+        emitEvent("bulk:remote:done", { ok: false, error: e.message });
+      })
+      .finally(async () => {
+        await cleanupOwnedTabs();
+        inProgressTask = null;
+      });
+    return false;
+  }
   if (msg?.type === "list:pushed") {
     // popup 의 bulk 모드에서 "이미 받은 카드" 를 default 미체크로 두기 위한 사전 점검.
     // ghList 가 실패해도 popup 흐름이 멈추면 안 되므로 빈 배열로 fallback.
@@ -116,6 +152,240 @@ function notifyPush(detail) {
   chrome.runtime.sendMessage({ type: "push:result", ...detail }).catch(() => {
     // popup 이 닫혀 있으면 listener 없음 — 정상.
   });
+  // bulk:remote 흐름이 같은 SW 안에서 push 결과를 await 할 수 있도록 로컬 dispatch.
+  for (const fn of pushResultLocalListeners) {
+    try { fn(detail); } catch {}
+  }
+}
+
+const pushResultLocalListeners = new Set();
+function waitPushResultLocal(episodeTitle, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const handler = (detail) => {
+      if (done) return;
+      if (detail.episodeTitle !== episodeTitle) return;
+      done = true;
+      pushResultLocalListeners.delete(handler);
+      clearTimeout(timer);
+      resolve(detail);
+    };
+    pushResultLocalListeners.add(handler);
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      pushResultLocalListeners.delete(handler);
+      resolve({ timeout: true });
+    }, timeoutMs);
+  });
+}
+
+// ---------- cross-notebook scan + bulk download (Option 2) ----------
+//
+// 사용자가 NotebookLM 홈 (`/`) 의 모든 노트북을 한 번에 sweep 하려는 흐름. 팝업
+// 측 [모든 노트북 스캔] 클릭이 "scan:all" 메시지로 들어오면 백그라운드 탭을 순차로
+// 열어가며 (a) 홈에서 노트북 URL 들 수집 (b) 각 노트북 페이지에서 audio 카드 수집.
+// 결과는 progress 이벤트 ("scan:all:progress") 로 흘리고 마지막에 "scan:all:done".
+// bulk download 도 같은 패턴 — 선택된 카드를 노트북 별로 묶어 탭 한 번씩 다시
+// 열어 순차 다운로드.
+
+const TAB_OPEN_TIMEOUT = 15000;
+const CONTENT_PING_TIMEOUT = 8000;
+const NOTEBOOK_CARDS_TIMEOUT = 12000;
+const PUSH_RESULT_TIMEOUT = 180000;
+
+let inProgressTask = null;
+const ownedTabs = new Set(); // SW 가 연 탭 id — 정리용.
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function emitEvent(type, payload) {
+  chrome.runtime.sendMessage({ type, ...payload }).catch(() => {});
+}
+
+function waitForTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => { if (!done) { done = true; chrome.tabs.onUpdated.removeListener(listener); clearTimeout(timer); resolve(ok); } };
+    const listener = (tid, change) => {
+      if (tid === tabId && change.status === "complete") finish(true);
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab && tab.status === "complete") finish(true);
+    }).catch(() => finish(false));
+    const timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+async function waitForContentReady(tabId, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await chrome.tabs.sendMessage(tabId, { type: "ping" });
+      if (r?.ok) return true;
+    } catch {}
+    await sleep(250);
+  }
+  return false;
+}
+
+async function openManagedTab(url) {
+  const tab = await chrome.tabs.create({ url, active: false });
+  ownedTabs.add(tab.id);
+  await waitForTabComplete(tab.id, TAB_OPEN_TIMEOUT);
+  await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
+  return tab.id;
+}
+
+async function closeManagedTab(tabId) {
+  ownedTabs.delete(tabId);
+  try { await chrome.tabs.remove(tabId); } catch {}
+}
+
+async function cleanupOwnedTabs() {
+  for (const tid of Array.from(ownedTabs)) {
+    await closeManagedTab(tid);
+  }
+}
+
+async function scanHomePageForNotebookUrls() {
+  const tabId = await openManagedTab("https://notebooklm.google.com/");
+  try {
+    const r = await chrome.tabs.sendMessage(tabId, { type: "scan:list" });
+    return r?.urls || [];
+  } finally {
+    await closeManagedTab(tabId);
+  }
+}
+
+async function waitForAudioCards(tabId, timeoutMs) {
+  const start = Date.now();
+  let lastResult = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await chrome.tabs.sendMessage(tabId, { type: "scan" });
+      if (r?.ok) {
+        lastResult = r;
+        const audios = r.audios || [];
+        if (audios.length > 0) {
+          // 첫 카드라도 placeholder 가 아니면 OK 라고 본다.
+          if (audios.some((a) => !a.isPlaceholder)) return r;
+        }
+      }
+    } catch {}
+    await sleep(700);
+  }
+  return lastResult;
+}
+
+async function scanOneNotebook(url) {
+  const tabId = await openManagedTab(url);
+  try {
+    const r = await waitForAudioCards(tabId, NOTEBOOK_CARDS_TIMEOUT);
+    if (!r) return { url, cover: { title: "", dateAttr: "" }, audios: [] };
+    return { url, cover: r.cover, audios: r.audios };
+  } finally {
+    await closeManagedTab(tabId);
+  }
+}
+
+async function runScanAll() {
+  emitEvent("scan:all:progress", { phase: "list", message: "노트북 목록 수집 중…" });
+  const urls = await scanHomePageForNotebookUrls();
+  emitEvent("scan:all:progress", { phase: "list:done", total: urls.length });
+  const notebooks = [];
+  for (let i = 0; i < urls.length; i++) {
+    emitEvent("scan:all:progress", {
+      phase: "scan",
+      done: i,
+      total: urls.length,
+      message: `노트북 ${i + 1}/${urls.length} 스캔 중…`,
+    });
+    try {
+      const r = await scanOneNotebook(urls[i]);
+      notebooks.push(r);
+    } catch (e) {
+      console.warn(`[scan:all] ${urls[i]} 실패:`, e.message);
+      notebooks.push({ url: urls[i], cover: { title: "" }, audios: [], error: e.message });
+    }
+  }
+  emitEvent("scan:all:done", { ok: true, notebooks });
+  return { notebooks };
+}
+
+async function runBulkRemote(selections) {
+  // selections: [{ notebookUrl, cardIndex, episodeTitle }, ...]
+  const grouped = new Map();
+  for (const s of selections) {
+    if (!grouped.has(s.notebookUrl)) grouped.set(s.notebookUrl, []);
+    grouped.get(s.notebookUrl).push(s);
+  }
+  const total = selections.length;
+  let done = 0;
+  for (const [url, items] of grouped) {
+    emitEvent("bulk:remote:progress", {
+      phase: "open", url, done, total,
+      message: `${url.split("/").pop().slice(0, 8)}… 탭 여는 중`,
+    });
+    let tabId;
+    try {
+      tabId = await openManagedTab(url);
+      const ready = await waitForAudioCards(tabId, NOTEBOOK_CARDS_TIMEOUT);
+      if (!ready) {
+        for (const item of items) {
+          emitEvent("bulk:remote:result", {
+            episodeTitle: item.episodeTitle, ok: false, error: "카드 로딩 타임아웃",
+          });
+          done++;
+        }
+        continue;
+      }
+    } catch (e) {
+      for (const item of items) {
+        emitEvent("bulk:remote:result", {
+          episodeTitle: item.episodeTitle, ok: false, error: `탭 열기 실패: ${e.message}`,
+        });
+        done++;
+      }
+      continue;
+    }
+    try {
+      for (const item of items) {
+        emitEvent("bulk:remote:progress", {
+          phase: "download", url, episodeTitle: item.episodeTitle, done, total,
+        });
+        try {
+          const r = await chrome.tabs.sendMessage(tabId, { type: "download", index: item.cardIndex });
+          if (!r?.ok) {
+            emitEvent("bulk:remote:result", {
+              episodeTitle: item.episodeTitle, ok: false, error: r?.error || "메뉴 클릭 실패",
+            });
+            done++;
+            continue;
+          }
+          const result = await waitPushResultLocal(item.episodeTitle, PUSH_RESULT_TIMEOUT);
+          if (result.timeout) {
+            emitEvent("bulk:remote:result", {
+              episodeTitle: item.episodeTitle, ok: false, error: "push 응답 타임아웃",
+            });
+          }
+          done++;
+        } catch (e) {
+          emitEvent("bulk:remote:result", {
+            episodeTitle: item.episodeTitle, ok: false, error: e.message,
+          });
+          done++;
+        }
+      }
+    } finally {
+      await closeManagedTab(tabId);
+    }
+  }
+  emitEvent("bulk:remote:done", { ok: true, done });
+  return { ok: true, done };
 }
 
 async function pushEpisode(audioUrl, filename, dedupHints) {
