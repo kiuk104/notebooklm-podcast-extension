@@ -37,6 +37,18 @@
   .task-errors { margin-top: 8px; font-size: 11px; color: #991b1b; max-height: 100px; overflow-y: auto; padding: 4px 8px; background: #fff; border: 1px solid #fecaca; border-radius: 4px; }
   .task-errors div { padding: 2px 0; border-bottom: 1px solid #fee2e2; }
   .task-errors div:last-child { border-bottom: 0; }
+  .task-recent { margin-top: 8px; font-size: 11px; max-height: 180px; overflow-y: auto; padding: 6px 10px; background: #fff; border: 1px solid #e5e7eb; border-radius: 4px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  .task-recent .recent-item { padding: 2px 0; border-bottom: 1px solid #f3f4f6; line-height: 1.5; word-break: break-all; }
+  .task-recent .recent-item:last-child { border-bottom: 0; }
+  .task-recent .recent-item .icon { display: inline-block; width: 14px; text-align: center; }
+  .task-recent .recent-item.ok { color: #166534; }
+  .task-recent .recent-item.skip { color: #6b7280; }
+  .task-recent .recent-item.err { color: #991b1b; }
+  .task-recent .recent-item .size { color: #888; font-size: 10px; margin-left: 4px; }
+  .task-recent .recent-item .feed-tag { color: #2563eb; font-size: 10px; margin-left: 4px; }
+  .task-recent .recent-item .feed-tag.feed-err { color: #d97706; }
+  .task-recent .recent-item .ts { color: #aaa; font-size: 10px; margin-left: 4px; }
+  .task-recent-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; margin-bottom: 2px; font-size: 11px; color: #666; font-weight: 600; }
   .task-actions { margin-top: 10px; display: flex; gap: 6px; }
   .task-actions button { padding: 4px 10px; font-size: 11px; background: #fff; color: #444; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; margin-top: 0; }
   .task-actions button:hover { background: #f9fafb; }
@@ -59,6 +71,11 @@
   <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
   <div class="task-stats" id="task-stats"></div>
   <div class="task-errors" id="task-errors" style="display:none"></div>
+  <div class="task-recent-head" id="task-recent-head" style="display:none">
+    <span>최근 GitHub push 활동</span>
+    <span id="task-recent-summary" style="font-weight:normal; color:#888;"></span>
+  </div>
+  <div class="task-recent" id="task-recent" style="display:none"></div>
   <div class="task-actions" id="task-actions" style="display:none">
     <button type="button" id="task-clear">초기화</button>
   </div>

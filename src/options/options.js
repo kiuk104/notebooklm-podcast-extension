@@ -145,6 +145,9 @@ const taskMessageEl = document.getElementById("task-message");
 const progressFillEl = document.getElementById("progress-fill");
 const taskStatsEl = document.getElementById("task-stats");
 const taskErrorsEl = document.getElementById("task-errors");
+const taskRecentHeadEl = document.getElementById("task-recent-head");
+const taskRecentSummaryEl = document.getElementById("task-recent-summary");
+const taskRecentEl = document.getElementById("task-recent");
 const taskActionsEl = document.getElementById("task-actions");
 const taskClearBtn = document.getElementById("task-clear");
 
@@ -172,6 +175,74 @@ function formatElapsed(ms) {
   const hr = Math.floor(min / 60);
   const remMin = min % 60;
   return `${hr}시간 ${remMin}분`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) return "";
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+}
+
+function formatTimeAgo(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  if (sec < 60) return `${sec}초전`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}분전`;
+  const hr = Math.floor(min / 60);
+  return `${hr}시간전`;
+}
+
+function renderRecentPushes(recent) {
+  if (!recent || recent.length === 0) {
+    taskRecentHeadEl.style.display = "none";
+    taskRecentEl.style.display = "none";
+    return;
+  }
+  taskRecentHeadEl.style.display = "flex";
+  taskRecentEl.style.display = "block";
+
+  // 새 항목이 위로 오게 역순 표시.
+  const reversed = recent.slice().reverse();
+
+  // 누적 바이트 (성공 push 만)
+  let totalBytes = 0;
+  let okN = 0, skipN = 0, errN = 0;
+  for (const p of recent) {
+    if (p.ok && typeof p.size === "number") totalBytes += p.size;
+    if (p.ok) okN++;
+    else if (p.skipped) skipN++;
+    else errN++;
+  }
+  const summaryParts = [];
+  if (okN > 0) summaryParts.push(`✓ ${okN}`);
+  if (skipN > 0) summaryParts.push(`↻ ${skipN}`);
+  if (errN > 0) summaryParts.push(`✗ ${errN}`);
+  if (totalBytes > 0) summaryParts.push(formatBytes(totalBytes));
+  taskRecentSummaryEl.textContent = summaryParts.join(" · ");
+
+  taskRecentEl.innerHTML = reversed.map((p) => {
+    const cls = p.ok ? "ok" : p.skipped ? "skip" : "err";
+    const icon = p.ok ? "✓" : p.skipped ? "↻" : "✗";
+    const title = escapeHtml(p.episodeTitle || p.filename || "(제목 없음)");
+    let detail = "";
+    if (p.skipped) {
+      detail = `<span class="size">${escapeHtml(p.reason || "이미 있음")}</span>`;
+    } else if (!p.ok) {
+      detail = `<span class="size">${escapeHtml((p.error || "").slice(0, 80))}</span>`;
+    } else if (p.size != null) {
+      detail = `<span class="size">${formatBytes(p.size)}</span>`;
+    }
+    let feedTag = "";
+    if (p.feedOk) feedTag = '<span class="feed-tag">+ feed</span>';
+    else if (p.feedError) feedTag = `<span class="feed-tag feed-err" title="${escapeHtml(p.feedError)}">⚠ feed</span>`;
+    const ago = p.timestamp ? `<span class="ts">${formatTimeAgo(Date.now() - p.timestamp)}</span>` : "";
+    return `<div class="recent-item ${cls}"><span class="icon">${icon}</span> ${title}${detail}${feedTag}${ago}</div>`;
+  }).join("");
 }
 
 function renderTaskState(state) {
@@ -211,13 +282,13 @@ function renderTaskState(state) {
     taskErrorsEl.style.display = "block";
     taskErrorsEl.innerHTML = state.errors.map((err) => {
       const label = err.episodeTitle || err.url || "(unknown)";
-      const safeLabel = String(label).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-      const safeMsg = String(err.message || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-      return `<div>· ${safeLabel}: ${safeMsg}</div>`;
+      return `<div>· ${escapeHtml(label)}: ${escapeHtml(err.message || "")}</div>`;
     }).join("");
   } else {
     taskErrorsEl.style.display = "none";
   }
+
+  renderRecentPushes(state.recentPushes);
 
   if (state.status === "completed" || state.status === "failed") {
     taskActionsEl.style.display = "flex";
@@ -231,9 +302,14 @@ function renderTaskState(state) {
 function startElapsedTimer() {
   if (elapsedTimer) return;
   elapsedTimer = setInterval(() => {
-    if (lastRenderedState && lastRenderedState.status === "running" && lastRenderedState.startedAt) {
+    if (!lastRenderedState) return;
+    if (lastRenderedState.status === "running" && lastRenderedState.startedAt) {
       const ms = Date.now() - lastRenderedState.startedAt;
       taskElapsedEl.textContent = formatElapsed(ms);
+    }
+    // recent push 의 "X초전" 라벨도 갱신 — 진행 중에는 사용자가 시계처럼 활용.
+    if (lastRenderedState.recentPushes && lastRenderedState.recentPushes.length > 0) {
+      renderRecentPushes(lastRenderedState.recentPushes);
     }
   }, 1000);
 }

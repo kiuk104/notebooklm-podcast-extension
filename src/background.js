@@ -221,6 +221,26 @@ function notifyPush(detail) {
   for (const fn of pushResultLocalListeners) {
     try { fn(detail); } catch {}
   }
+  // 옵션 페이지의 진행 모니터에 라이브 push 활동 로그로 표시 — 마지막 30 건.
+  // 단일 [받기] / 일괄 받기 / 자동 다운로드 어느 경로든 모두 여기로 모임.
+  appendRecentPush(detail).catch(() => {});
+}
+
+async function appendRecentPush(detail) {
+  const entry = {
+    episodeTitle: detail.episodeTitle || "",
+    filename: detail.filename || "",
+    ok: !!detail.ok,
+    skipped: !!detail.skipped,
+    error: detail.error || "",
+    reason: detail.reason || "",
+    size: typeof detail.size === "number" ? detail.size : null,
+    feedOk: !!detail.feed?.ok,
+    feedError: detail.feedError || "",
+    timestamp: Date.now(),
+  };
+  const recentPushes = [...(currentTaskState.recentPushes || []), entry].slice(-30);
+  await setTaskState({ recentPushes });
 }
 
 const pushResultLocalListeners = new Set();
@@ -289,6 +309,7 @@ const INITIAL_TASK_STATE = {
   successCount: 0,
   errorCount: 0,
   errors: [],           // [{ url|episodeTitle, message }]
+  recentPushes: [],     // 최근 N 건의 push 결과 — 옵션 페이지에 라이브 활동 로그로 노출.
   startedAt: null,
   endedAt: null,
 };
