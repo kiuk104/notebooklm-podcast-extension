@@ -52,6 +52,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, queued: expectedQueue.length });
     return false;
   }
+  if (msg?.type === "list:pushed") {
+    // popup 의 bulk 모드에서 "이미 받은 카드" 를 default 미체크로 두기 위한 사전 점검.
+    // ghList 가 실패해도 popup 흐름이 멈추면 안 되므로 빈 배열로 fallback.
+    (async () => {
+      try {
+        const cfg = await chrome.storage.local.get(["token", "repo"]);
+        if (!cfg.token || !cfg.repo) {
+          sendResponse({ ok: true, shortIds: [], names: [], reason: "no-config" });
+          return;
+        }
+        const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
+        const shortIds = [];
+        for (const f of list) {
+          const m = /__([0-9a-f]{8})__/.exec(f.name);
+          if (m) shortIds.push(m[1]);
+        }
+        sendResponse({ ok: true, shortIds, names: list.map((f) => f.name) });
+      } catch (e) {
+        console.warn("[list:pushed] 실패:", e.message);
+        sendResponse({ ok: true, shortIds: [], names: [], reason: e.message });
+      }
+    })();
+    return true; // async
+  }
 });
 
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {

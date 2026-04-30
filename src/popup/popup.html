@@ -16,13 +16,22 @@
   .cover { margin-top: 10px; font-size: 12px; color: #444; }
   .cover .nb-title { font-weight: 600; color: #111; }
   .cover .nb-date { color: #888; font-size: 11px; }
+  .bulk-bar { display: none; align-items: center; gap: 8px; margin-top: 10px; padding: 6px 8px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; font-size: 11px; color: #444; }
+  .bulk-bar label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .bulk-bar .spacer { flex: 1; }
+  .bulk-bar button { padding: 4px 10px; font-size: 11px; background: #2563eb; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  .bulk-bar button:hover:not(:disabled) { background: #1d4ed8; }
+  .bulk-bar button:disabled { background: #9ca3af; cursor: not-allowed; }
   ul.cards { list-style: none; padding: 0; margin: 8px 0 0; }
   ul.cards li { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 12px; }
   ul.cards li:last-child { border-bottom: 0; }
+  ul.cards input.sel { margin: 0; cursor: pointer; }
+  ul.cards input.sel:disabled { cursor: not-allowed; }
   ul.cards .ep-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   ul.cards .ep-state { font-size: 10px; color: #666; min-width: 50px; text-align: right; }
   ul.cards .ep-state.ok { color: #166534; }
   ul.cards .ep-state.err { color: #991b1b; }
+  ul.cards .ep-state.muted { color: #9ca3af; }
   ul.cards button.dl { padding: 4px 8px; font-size: 11px; background: #fff; color: #2563eb; border: 1px solid #2563eb; border-radius: 4px; cursor: pointer; }
   ul.cards button.dl:hover:not(:disabled) { background: #eff6ff; }
   ul.cards button.dl:disabled { color: #9ca3af; border-color: #d1d5db; cursor: not-allowed; }
@@ -38,6 +47,11 @@
 <div class="cover" id="cover" style="display:none">
   <div class="nb-title" id="nb-title"></div>
   <div class="nb-date" id="nb-date"></div>
+</div>
+<div class="bulk-bar" id="bulk-bar">
+  <label><input type="checkbox" id="select-all"> 전체 선택</label>
+  <span class="spacer"></span>
+  <button id="bulk-dl" disabled>선택 받기 (0)</button>
 </div>
 <ul class="cards" id="cards"></ul>
 <a href="#" class="settings" id="open-options">⚙ GitHub 설정</a>
