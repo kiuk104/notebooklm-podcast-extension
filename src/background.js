@@ -583,13 +583,15 @@ let bulkWindowId = null;
 async function ensureBulkWindow() {
   if (bulkWindowId !== null) {
     try {
-      await chrome.windows.get(bulkWindowId);
+      const w = await chrome.windows.get(bulkWindowId);
+      console.log(`[bulkWindow] reuse id=${bulkWindowId} state=${w.state} focused=${w.focused}`);
       return bulkWindowId;
-    } catch {
-      // 사용자가 닫았거나 Chrome 재시작 — 다시 만들기
+    } catch (e) {
+      console.log(`[bulkWindow] stale id=${bulkWindowId}, recreating: ${e.message}`);
       bulkWindowId = null;
     }
   }
+  console.log(`[bulkWindow] creating new popup window`);
   const win = await withTabRetry(
     () => chrome.windows.create({
       url: "about:blank",
@@ -601,6 +603,8 @@ async function ensureBulkWindow() {
     "windows.create",
   );
   bulkWindowId = win.id;
+  console.log(`[bulkWindow] created id=${win.id} state=${win.state} focused=${win.focused} ` +
+    `top=${win.top} left=${win.left} w=${win.width} h=${win.height} tabs=${win.tabs?.length}`);
   // about:blank 첫 탭은 placeholder. 첫 openManagedTab 호출이 진짜 NotebookLM URL
   // 로 새 탭을 만들면서 placeholder 는 살아있어도 무해 (closeBulkWindow 가 결국 정리).
   return bulkWindowId;
