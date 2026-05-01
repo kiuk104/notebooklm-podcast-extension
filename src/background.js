@@ -584,6 +584,11 @@ async function ensureBulkWindow() {
   if (bulkWindowId !== null) {
     try {
       const w = await chrome.windows.get(bulkWindowId);
+      // 사용자가 메인 윈도우로 돌아갔을 수 있으니 매 reuse 마다 다시 focus —
+      // 그래야 노트북 #2, #3 ... 의 다운로드도 hasFocus() 통과.
+      if (!w.focused) {
+        try { await chrome.windows.update(bulkWindowId, { focused: true }); } catch {}
+      }
       console.log(`[bulkWindow] reuse id=${bulkWindowId} state=${w.state} focused=${w.focused}`);
       return bulkWindowId;
     } catch (e) {
@@ -592,13 +597,17 @@ async function ensureBulkWindow() {
     }
   }
   console.log(`[bulkWindow] creating new popup window`);
+  // focused:true — visibility 만으론 NotebookLM 의 다운로드 트리거 통과 못 함
+  // (popup 안 active 탭이라도 download 안 됨). 추정: hasFocus() 검사 또는
+  // userActivation 검사. 일단 focus 까지 가져가서 hasFocus() 만 통과시켜 보고,
+  // 그래도 안 되면 chrome.debugger API 로 trusted input 주입 (다음 단계).
+  // 단점: 사용자 메인 윈도우 focus 가 bulk 시작 시 popup 으로 빼앗김.
   const win = await withTabRetry(
     () => chrome.windows.create({
       url: "about:blank",
       type: "popup",
-      focused: false,         // 메인 윈도우 focus 유지
+      focused: true,
       width: 800, height: 600,
-      // top/left 미지정 — Chrome 이 적당히 배치
     }),
     "windows.create",
   );
