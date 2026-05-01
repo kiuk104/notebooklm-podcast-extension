@@ -1018,8 +1018,75 @@ async function ghPut(repo, path, contentB64, message, sha, token, committer) {
     },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`ghPut ${path}: ${r.status} ${(await r.text()).slice(0, 200)}`);
-  return r.json();
+  if (r.ok) return r.json();
+  const errText = (await r.text()).slice(0, 400);
+  // Contents API 는 raw 50 MiB / base64 inflation 으로 실질 ~37 MiB 한계.
+  // NotebookLM 의 m4a 는 종종 40~60 MB 라 대형 파일은 Git Data API 로 fallback.
+  // 422 + "too large" 메시지 ↔ 다른 422 (validation) 와 구분.
+  const isTooLarge = r.status === 422 && /too large/i.test(errText);
+  if (!isTooLarge) {
+    throw new Error(`ghPut ${path}: ${r.status} ${errText.slice(0, 200)}`);
+  }
+  console.log(`[ghPut] Contents API 422 too large, Git Data API 로 fallback`);
+  return ghPutLargeFile(repo, path, contentB64, message, token, committer);
+}
+
+// Git Data API (blobs/trees/commits/refs) 로 50 MiB 초과 파일 push.
+// Contents API 는 단일 PUT 으로 끝나지만 그쪽은 ~37 MiB 가 실질 한계라 NotebookLM
+// 의 더 긴 m4a 는 못 올림. Git Data API 는 5번의 chained API 호출이지만
+// 100 MiB 까지 지원 (blobs 의 hard limit).
+async function ghPutLargeFile(repo, path, contentB64, message, token, committer) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const ghCall = async (method, urlPath, body) => {
+    const r = await fetch(`https://api.github.com/repos/${repo}${urlPath}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    if (!r.ok) {
+      throw new Error(`${method} ${urlPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
+    }
+    return r.json();
+  };
+
+  // 1. default branch 확인 (main 가정 안 함 — 사용자 repo 가 master 일 수 있음).
+  const repoMeta = await ghCall("GET", "");
+  const branch = repoMeta.default_branch || "main";
+
+  // 2. 현재 ref 의 commit sha + tree sha.
+  const ref = await ghCall("GET", `/git/ref/heads/${branch}`);
+  const parentCommitSha = ref.object.sha;
+  const parentCommit = await ghCall("GET", `/git/commits/${parentCommitSha}`);
+  const baseTreeSha = parentCommit.tree.sha;
+
+  // 3. blob 생성 (base64 그대로 업로드).
+  const blob = await ghCall("POST", `/git/blobs`, { content: contentB64, encoding: "base64" });
+
+  // 4. 새 tree (기존 tree 위에 path 만 추가/덮어쓰기).
+  const tree = await ghCall("POST", `/git/trees`, {
+    base_tree: baseTreeSha,
+    tree: [{ path, mode: "100644", type: "blob", sha: blob.sha }],
+  });
+
+  // 5. 새 commit.
+  const commitBody = { message, tree: tree.sha, parents: [parentCommitSha] };
+  if (committer) {
+    commitBody.author = committer;
+    commitBody.committer = committer;
+  }
+  const commit = await ghCall("POST", `/git/commits`, commitBody);
+
+  // 6. ref 를 새 commit 으로 advance.
+  await ghCall("PATCH", `/git/refs/heads/${branch}`, { sha: commit.sha });
+
+  // Contents API 의 응답 형태를 흉내내 호출자가 기대하는 모양으로 반환 (size 등).
+  return { content: { sha: blob.sha, path }, commit };
 }
 
 function extOf(name) {

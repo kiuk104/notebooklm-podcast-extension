@@ -332,6 +332,48 @@ bulk:remote 가 175개 카드 중 0/175 에서 33분 멈춤. 진행 모니터는
 
 ---
 
+## 8. Contents API 50 MiB 한계 — Git Data API fallback (2026-05-01)
+
+### 증상
+
+```
+ghPut docs/episodes/...m4a: 422
+{"message":"Sorry, the file is too large to be processed.
+ Consider creating/updating the file in a local clone and pushing
+ it to GitHub."}
+```
+
+46.6 MB m4a 푸시 실패. NotebookLM 의 긴 음성개요 (20분+) 가 흔히 40~60 MB 라 빈발.
+
+### 원인
+
+GitHub Contents API 는 raw 50 MiB 한계가 있는데 base64 인코딩이 33% 부풀려 실질 한계는 ~37 MiB. 46.6 MB raw → 62 MB base64 → 한계 초과 → 422.
+
+### 대응
+
+`ghPut` 이 422 + "too large" 응답을 만나면 자동으로 `ghPutLargeFile` 로 fallback. Git Data API 의 5 단계 chained 호출:
+
+```
+1. GET   /repos/:repo                     → default_branch
+2. GET   /git/ref/heads/:branch           → parent commit sha
+3. GET   /git/commits/:sha                → base tree sha
+4. POST  /git/blobs                       → blob sha (큰 파일 ←)
+5. POST  /git/trees                       → new tree sha
+6. POST  /git/commits                     → new commit sha
+7. PATCH /git/refs/heads/:branch          → ref advance
+```
+
+Git Data API 는 100 MiB 까지 지원 (blobs hard limit). 호출이 7번이라 latency 는 길어지지만 large file 만 이 경로로 와서 평균 영향 작음.
+
+### 학습
+
+- **Contents API 는 small files 용**. 정확한 한계는 50 MiB raw 이지만 base64 inflation 으로 실질 ~37 MiB. Audio 같은 binary 는 Git Data API 가 정공법.
+- Fallback 트리거를 `r.status === 422` 만으론 부족 — 422 는 validation 오류 등 다른 원인도 있어 응답 본문의 "too large" 매칭으로 좁혀야 함.
+- default branch 가정 금지 (`main`/`master`/사용자 지정). `GET /repos/:repo` 의 `default_branch` 필드로 확인.
+- Race condition: `git/ref` GET 과 `PATCH` 사이에 다른 commit 이 들어오면 "not a fast-forward" 422. bulk:remote 는 직렬이라 현재는 무관하지만, 다중 client 환경에선 retry 필요.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```
