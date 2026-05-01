@@ -209,5 +209,79 @@
       })();
       return true; // async
     }
+    // bulk:remote 가 chrome.debugger API 로 진짜 user input 을 주입하기 위해 사용.
+    // content.js 는 카드 / 메뉴 항목의 viewport 좌표만 반환, click 자체는 background
+    // 에서 Input.dispatchMouseEvent 로. NotebookLM 이 programmatic click (isTrusted=
+    // false / no user activation) 을 거부하기 때문.
+    if (msg?.type === "download:prepare") {
+      (async () => {
+        try {
+          const cover = getCover();
+          const targetEl = await findCard({ artifactId: msg.artifactId, index: msg.index });
+          const cardData = {
+            title: targetEl.querySelector(SEL.cardTitle)?.textContent?.trim() ?? "",
+            artifactId: getArtifactId(targetEl),
+          };
+          if (PLACEHOLDER_TITLE_RE.test(cardData.title)) {
+            throw new Error("제목이 아직 'audio N' 플레이스홀더입니다.");
+          }
+          const more = targetEl.querySelector(SEL.moreButton);
+          if (!more) throw new Error("⋮ 버튼을 못 찾음");
+          more.scrollIntoView({ block: "center" });
+          // 스크롤이 layout 적용되도록 잠깐 양보 — 다음 frame 후 rect 측정.
+          await new Promise((r) => requestAnimationFrame(() => r()));
+          const rect = more.getBoundingClientRect();
+
+          // download:expect 를 여기서 등록 — 클릭이 background 에서 일어나도 큐는 같음.
+          await chrome.runtime.sendMessage({
+            type: "download:expect",
+            payload: {
+              notebookTitle: cover.title,
+              coverDateAttr: cover.dateAttr,
+              episodeTitle: cardData.title,
+              artifactId: cardData.artifactId,
+            },
+          });
+
+          sendResponse({
+            ok: true,
+            episodeTitle: cardData.title,
+            artifactId: cardData.artifactId,
+            moreX: rect.x + rect.width / 2,
+            moreY: rect.y + rect.height / 2,
+            // devicePixelRatio: chrome.debugger 의 Input.dispatchMouseEvent 는 CSS pixel
+            // 기준이라 변환 불필요. 디버깅용으로만 남김.
+            devicePixelRatio: window.devicePixelRatio || 1,
+          });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+      })();
+      return true; // async
+    }
+    if (msg?.type === "download:menucoords") {
+      // ⋮ 클릭 후 떠오른 popover 의 "다운로드" 메뉴 항목 좌표 반환.
+      (async () => {
+        try {
+          const item = await waitFor(() => {
+            for (const el of document.querySelectorAll(SEL.menuItem)) {
+              if (DL_LABEL_RE.test(el.textContent || "")) return el;
+            }
+            return null;
+          }, 3000).catch(() => {
+            throw new Error("'다운로드' 메뉴 항목을 못 찾음");
+          });
+          const rect = item.getBoundingClientRect();
+          sendResponse({
+            ok: true,
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2,
+          });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+      })();
+      return true; // async
+    }
   });
 })();

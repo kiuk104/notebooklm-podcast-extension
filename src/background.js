@@ -584,11 +584,6 @@ async function ensureBulkWindow() {
   if (bulkWindowId !== null) {
     try {
       const w = await chrome.windows.get(bulkWindowId);
-      // 사용자가 메인 윈도우로 돌아갔을 수 있으니 매 reuse 마다 다시 focus —
-      // 그래야 노트북 #2, #3 ... 의 다운로드도 hasFocus() 통과.
-      if (!w.focused) {
-        try { await chrome.windows.update(bulkWindowId, { focused: true }); } catch {}
-      }
       console.log(`[bulkWindow] reuse id=${bulkWindowId} state=${w.state} focused=${w.focused}`);
       return bulkWindowId;
     } catch (e) {
@@ -597,16 +592,14 @@ async function ensureBulkWindow() {
     }
   }
   console.log(`[bulkWindow] creating new popup window`);
-  // focused:true — visibility 만으론 NotebookLM 의 다운로드 트리거 통과 못 함
-  // (popup 안 active 탭이라도 download 안 됨). 추정: hasFocus() 검사 또는
-  // userActivation 검사. 일단 focus 까지 가져가서 hasFocus() 만 통과시켜 보고,
-  // 그래도 안 되면 chrome.debugger API 로 trusted input 주입 (다음 단계).
-  // 단점: 사용자 메인 윈도우 focus 가 bulk 시작 시 popup 으로 빼앗김.
+  // focused:false — chrome.debugger.Input.dispatchMouseEvent 가 trusted input 을
+  // 주입하므로 window focus 자체는 download 트리거에 불필요. 사용자 메인 윈도우
+  // focus 그대로 두는 게 덜 거추장.
   const win = await withTabRetry(
     () => chrome.windows.create({
       url: "about:blank",
       type: "popup",
-      focused: true,
+      focused: false,
       width: 800, height: 600,
     }),
     "windows.create",
@@ -627,9 +620,9 @@ async function closeBulkWindow() {
 }
 
 async function openManagedTab(url, opts = {}) {
-  // bulk:remote 는 opts.bulkWindow=true 로 전용 popup window 사용 → tab.active=true
-  // 로 만들어 NotebookLM 의 visibilityState 검사 통과. scan:all 은 main window
-  // background tab 으로 충분 (스캔은 download 트리거 안 함).
+  // bulk:remote 는 opts.bulkWindow=true 로 전용 popup window 사용 — NotebookLM 이
+  // background tab 의 download 트리거 거부 + programmatic click 도 거부 (isTrusted/
+  // userActivation). 둘 다 우회하려면 popup window + chrome.debugger 가 필요.
   const inBulkWindow = !!opts.bulkWindow;
   let createOpts;
   if (inBulkWindow) {
@@ -641,6 +634,16 @@ async function openManagedTab(url, opts = {}) {
   const tab = await withTabRetry(() => chrome.tabs.create(createOpts), "create");
   ownedTabs.add(tab.id);
   await waitForTabComplete(tab.id, TAB_OPEN_TIMEOUT);
+  if (inBulkWindow) {
+    // chrome.debugger.attach — Input.dispatchMouseEvent 로 진짜 user input 을 주입할
+    // 수 있게. 탭이 닫히면 자동 detach 라 lifecycle 추적 불필요. attach 시 노란
+    // "디버깅 중" 배너가 popup window 상단에 뜸 (사용자가 popup 안 봐도 무방).
+    try { await chrome.debugger.attach({ tabId: tab.id }, "1.3"); }
+    catch (e) {
+      console.warn(`[debugger] attach 실패 tab=${tab.id}: ${e.message}`);
+      // attach 실패해도 일단 진행 — clickViaDebugger 가 throw 하면 그 카드만 fail
+    }
+  }
   const ready = await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
   if (!ready) {
     let finalUrl = "";
@@ -658,9 +661,28 @@ async function openManagedTab(url, opts = {}) {
 
 async function closeManagedTab(tabId) {
   ownedTabs.delete(tabId);
+  // chrome.debugger 는 탭이 닫히면 자동 detach 지만, 명시적 detach 가 더 깔끔.
+  // 탭이 attached 가 아니면 throw — swallow.
+  try { await chrome.debugger.detach({ tabId }); } catch {}
   try {
     await withTabRetry(() => chrome.tabs.remove(tabId), "remove", 3);
   } catch {} // 끝까지 못 닫혀도 다음 흐름 막지 않음 — 사용자가 직접 닫을 수 있음.
+}
+
+// chrome.debugger 의 Input.dispatchMouseEvent 로 진짜 user input 을 주입.
+// programmatic .click() 은 isTrusted=false 라서 NotebookLM 이 거부 — 이 경로는
+// 브라우저 C++ 레벨에서 합성된 trusted input 이라 "진짜 사용자 클릭" 으로 인식됨.
+// CSS pixel 좌표 기준 (devicePixelRatio 변환 불필요).
+async function clickViaDebugger(tabId, x, y) {
+  const target = { tabId };
+  const base = { x, y, button: "left", clickCount: 1, buttons: 0 };
+  // 일부 페이지는 mouseMoved 가 선행되어야 hover state 진입. 안전하게 보냄.
+  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent",
+    { ...base, type: "mouseMoved", button: "none" });
+  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent",
+    { ...base, type: "mousePressed" });
+  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent",
+    { ...base, type: "mouseReleased" });
 }
 
 async function cleanupOwnedTabs() {
@@ -888,19 +910,36 @@ async function runBulkRemote(selections) {
           phase: "download", url, episodeTitle: item.episodeTitle, done, total,
         });
         try {
-          // sendMessageWithTimeout 으로 NotebookLM 탭이 freeze 됐을 때 영구 pending 차단.
-          // content.js 의 download 핸들러는 보통 1~3초 안에 응답 (메뉴 polling 포함) — 30초 timeout 충분.
-          // artifactId 는 UUID 매칭으로 lazy-render 인덱스 흔들림 방어 (content.js findCard).
+          // bulk:remote 는 chrome.debugger 로 진짜 user input 주입 (Input.dispatchMouseEvent).
+          // programmatic .click() 으론 NotebookLM 이 isTrusted=false / no user activation
+          // 으로 판단해 download 트리거를 안 발사. 실측 (focused popup window 안 active
+          // 탭 + .click()) 으로 모든 카드 push 응답 타임아웃 확인 후 이 경로로 전환.
           const r = await sendMessageWithTimeout(
             tabId,
-            { type: "download", index: item.cardIndex, artifactId: item.artifactId },
+            { type: "download:prepare", index: item.cardIndex, artifactId: item.artifactId },
             30000,
           );
           if (!r?.ok) {
             emitEvent("bulk:remote:result", {
-              episodeTitle: item.episodeTitle, ok: false, error: r?.error || "메뉴 클릭 실패",
+              episodeTitle: item.episodeTitle, ok: false, error: r?.error || "카드 prepare 실패",
             });
-            await pushTaskError({ episodeTitle: item.episodeTitle, message: r?.error || "메뉴 클릭 실패" });
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: r?.error || "카드 prepare 실패" });
+            done++;
+            continue;
+          }
+          // ⋮ 버튼을 chrome.debugger 로 진짜 클릭 → 메뉴 등장 → 메뉴 항목 좌표 받기 →
+          // 메뉴 항목도 진짜 클릭. 두 번의 trusted input 주입.
+          try {
+            await clickViaDebugger(tabId, r.moreX, r.moreY);
+            await sleep(400); // 메뉴 popover 가 떠오를 시간
+            const menuR = await sendMessageWithTimeout(tabId, { type: "download:menucoords" }, 5000);
+            if (!menuR?.ok) throw new Error(menuR?.error || "메뉴 좌표 조회 실패");
+            await clickViaDebugger(tabId, menuR.x, menuR.y);
+          } catch (clickErr) {
+            emitEvent("bulk:remote:result", {
+              episodeTitle: item.episodeTitle, ok: false, error: `debugger click 실패: ${clickErr.message}`,
+            });
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: `debugger click 실패: ${clickErr.message}` });
             done++;
             continue;
           }

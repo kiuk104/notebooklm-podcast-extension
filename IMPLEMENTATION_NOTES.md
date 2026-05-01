@@ -413,12 +413,81 @@ async function ensureBulkWindow() {
 
 `openManagedTab(url, { bulkWindow: true })` 로 bulk:remote 만 이 경로 사용. scan:all 은 background tab 으로 충분 (스캔은 download 트리거 안 함).
 
+### 학습 (이 fix 로 해결됨 — §10 으로 후속)
+
+popup window 자체는 *부분 진전* — chrome.debugger 와 함께 쓰는 셋업 의 first stage. visibility 통과만으론 안 되고 진짜 user input 까지 필요하다는 게 이 stage 에서 드러남 (§10).
+
+---
+
+## 10. NotebookLM 의 user-activation gate — chrome.debugger 로 trusted input 주입 (2026-05-01)
+
+### 증상
+
+§9 의 popup window (focused:false → focused:true 까지 시도) 에도 불구하고 bulk:remote 의 모든 카드가 timeout. SW 콘솔에 `[bulkWindow] created focused=true` 까지는 찍히지만 `[push] SW fetch host=...` 는 *전혀* 안 나옴. 즉 popup 이 visible + focused 인 상태인데도 NotebookLM 이 download 트리거를 발사 안 함.
+
+### 원인
+
+NotebookLM 의 download flow 는 `isTrusted=true` event 또는 `userActivation` 을 요구. content.js 의 `element.click()` 은 programmatic 호출이라 `isTrusted=false` 이고, background SW 에서 시작된 호출 chain 은 user activation token 을 가지지 않음. 단건 download (popup 모드) 는 사용자가 *익스텐션 popup 버튼을 직접 클릭* 한 활성화가 chain 으로 propagate 돼서 통과 — bulk 는 그 origin 이 없음.
+
+JS 에서 `isTrusted` / `userActivation` 은 read-only 로 fake 못 함. 브라우저 C++ 레벨의 input event 만 진짜 user gesture 로 인식됨.
+
+### 대응 — chrome.debugger.Input.dispatchMouseEvent
+
+`chrome.debugger` API 의 `Input.dispatchMouseEvent` 가 정확히 그 용도. 브라우저 input pipeline 에 mouse event 를 합성 — 페이지는 진짜 사용자 클릭으로 인식 (`isTrusted=true`, user activation 부여).
+
+흐름:
+
+```
+content.js                background SW (debugger)
+    │                            │
+    │ download:prepare           │
+    │   (find card, scroll,      │
+    │    return moreButton x,y)  │
+    │ ──────────────────────────▶│
+    │                            │ clickViaDebugger(x, y)
+    │                            │   = mouseMoved → mousePressed → mouseReleased
+    │                            │ (NotebookLM 이 진짜 클릭으로 인식)
+    │                            │
+    │ download:menucoords        │
+    │   (popover 메뉴의           │
+    │    "다운로드" 좌표 반환)    │
+    │ ──────────────────────────▶│
+    │                            │ clickViaDebugger(menuX, menuY)
+    │                            │
+    │   (NotebookLM 이 audio      │
+    │    fetch 시작 → Chrome      │
+    │    onDeterminingFilename)  │
+```
+
+핵심 코드:
+```js
+async function clickViaDebugger(tabId, x, y) {
+  const target = { tabId };
+  const base = { x, y, button: "left", clickCount: 1, buttons: 0 };
+  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent",
+    { ...base, type: "mouseMoved", button: "none" });
+  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent",
+    { ...base, type: "mousePressed" });
+  await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent",
+    { ...base, type: "mouseReleased" });
+}
+```
+
+`openManagedTab` 의 `bulkWindow:true` 경로에서 탭 생성 후 즉시 `chrome.debugger.attach({ tabId }, "1.3")` — 탭 닫히면 자동 detach.
+
+### 비용
+
+- `manifest.json` 의 `permissions` 에 `"debugger"` 추가 → 익스텐션 업데이트 시 사용자 재승인 필요 ("This extension can debug your browser").
+- attach 된 탭 상단에 노란 배너 *"Extension started debugging this browser"* 가 뜸 — popup window 안이라 메인 작업엔 안 보이지만 popup 봤을 때 거추장.
+- chrome.debugger 는 다른 attached debugger 와 충돌 — 사용자가 같은 탭에 DevTools 열고 있으면 attach 실패.
+
 ### 학습
 
-- **`active: false` ≠ `visibilityState: 'visible'`**: tab 의 active 상태와 페이지의 visibility 는 다름. tab.active 는 "그 윈도우 안에서 보이는 tab 인가"이고, visibility 는 "그 tab 이 화면에 나타나는가". popup 윈도우 안에서 tab 이 active 면 visibility 는 'visible' — focus 는 별개.
-- **`chrome.windows` API 는 별도 permission 안 필요** — base extension capability. manifest 수정 없음.
-- **검증되지 않은 background tab 호환**을 가정하지 말 것. content script 가 *click* 까지 성공해도 페이지 측 reaction 이 다를 수 있음. download 같은 Chrome API event 가 발화 여부로 진단해야 함.
-- **사용자 검증된 단건 흐름 vs bulk 의 차이는 *환경*** — 같은 코드라도 active vs background tab 에서 페이지가 다르게 동작할 수 있음.
+- **isTrusted / userActivation 은 read-only** — JS 에서 fake 불가. C++ 레벨 input pipeline 만 진짜 user gesture 부여.
+- **chrome.scripting.executeScript 도 부족** — `world: "MAIN"` 으로 page world 에서 실행해도 그 자체로 user activation 발급 안 됨. 같은 일을 페이지 JS 가 직접 하는 거랑 동등.
+- **단건 popup download 가 작동한 이유** — 사용자가 익스텐션 popup 버튼 클릭 → activation token → sendMessage chain 으로 content script 까지 전달 → click() 이 그 token 안에서 발사. bulk 는 SW 에서 시작이라 token 자체가 없음.
+- **chrome.debugger 는 "사용자 자동화" 의 정공법** — Selenium, Puppeteer, 모든 browser automation 이 같은 메커니즘. permission cost 가 있지만 회피 불가능한 케이스가 명확하면 받아들여야 함.
+- **§9 의 popup window 와 함께 써야 효과** — chrome.debugger 만 main window 의 background tab 에 attach 해도 NotebookLM 이 visibility 까지 검사할 수 있어 hybrid 가 안전. 둘 다 layered defense.
 
 ---
 
