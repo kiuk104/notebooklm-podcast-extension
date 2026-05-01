@@ -1120,30 +1120,50 @@ async function ghList(repo, dirPath, token) {
 }
 
 async function ghPut(repo, path, contentB64, message, sha, token, committer) {
-  const body = { message, content: contentB64 };
-  if (sha) body.sha = sha;
-  if (committer) body.committer = committer;
-  const r = await fetch(ghContentsUrl(repo, path), {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    body: JSON.stringify(body),
-  });
-  if (r.ok) return r.json();
-  const errText = (await r.text()).slice(0, 400);
-  // Contents API 는 raw 50 MiB / base64 inflation 으로 실질 ~37 MiB 한계.
-  // NotebookLM 의 m4a 는 종종 40~60 MB 라 대형 파일은 Git Data API 로 fallback.
-  // 422 + "too large" 메시지 ↔ 다른 422 (validation) 와 구분.
-  const isTooLarge = r.status === 422 && /too large/i.test(errText);
-  if (!isTooLarge) {
+  // 409 Conflict 는 동시 commit race 로 자주 발생 — bulk:remote 가 카드를 매
+  // 20-30초씩 push 하는 동안 feed-builder workflow 가 "auto: rebuild feed" 로
+  // repo HEAD 를 움직임. Contents API 는 stale parent 에 PUT 하면 409 + "is at
+  // X but expected Y". sha 를 새로 받아 backoff 재시도.
+  let currentSha = sha;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const body = { message, content: contentB64 };
+    if (currentSha) body.sha = currentSha;
+    if (committer) body.committer = committer;
+    const r = await fetch(ghContentsUrl(repo, path), {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) return r.json();
+    const errText = (await r.text()).slice(0, 400);
+    // Contents API 는 raw 50 MiB / base64 inflation 으로 실질 ~37 MiB 한계.
+    // NotebookLM 의 m4a 는 종종 40~60 MB 라 대형 파일은 Git Data API 로 fallback.
+    const isTooLarge = r.status === 422 && /too large/i.test(errText);
+    if (isTooLarge) {
+      console.log(`[ghPut] Contents API 422 too large, Git Data API 로 fallback`);
+      return ghPutLargeFile(repo, path, contentB64, message, token, committer);
+    }
+    // 409 = concurrent commit race. sha 를 새로 받아 재시도.
+    if (r.status === 409 && attempt < 3) {
+      const wait = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+      console.log(`[ghPut] 409 conflict (attempt ${attempt + 1}/4), refreshing sha + retry in ${wait}ms`);
+      await sleep(wait);
+      try {
+        const fresh = await ghGet(repo, path, token);
+        currentSha = fresh?.sha;
+      } catch {
+        currentSha = undefined;
+      }
+      continue;
+    }
     throw new Error(`ghPut ${path}: ${r.status} ${errText.slice(0, 200)}`);
   }
-  console.log(`[ghPut] Contents API 422 too large, Git Data API 로 fallback`);
-  return ghPutLargeFile(repo, path, contentB64, message, token, committer);
+  throw new Error(`ghPut ${path}: 409 conflict after 4 attempts (workflow commits racing too fast)`);
 }
 
 // Git Data API (blobs/trees/commits/refs) 로 50 MiB 초과 파일 push.
