@@ -64,13 +64,15 @@ NotebookLM 의 m4a 는 256k stereo 라 한 시간에 ~22MB 입니다. 음성개�
 ```json
 "retention": {
   "maxItems": 50,
-  "maxAgeDays": 365
+  "maxAgeDays": 365,
+  "maxTotalMB": 900
 }
 ```
 
 - `maxItems`: 최근 N 개만 유지. 그보다 오래된 episode 는 build 시점에 자동 삭제.
 - `maxAgeDays`: 오늘로부터 N 일 이내 episode 만 유지.
-- 둘 다 설정하면 둘 다 통과해야 keep — 더 짧은 정책이 효과적.
+- `maxTotalMB`: docs/episodes/ 의 합계 크기 상한 (MB). 최신 순으로 누적해서 cap 넘기면 거기서 자름. **GitHub Pages 권장 1 GB artifact 한도 회피용** — 64k mono mp3 평균 7 MB 기준 900 MB 면 ~130편 보존. 단일 파일이 cap 보다 커도 최신 1편은 무조건 살림 (feed 가 텅 비지 않게).
+- 셋 다 설정하면 모두 통과해야 keep — 더 짧은 정책이 효과적.
 - 한 쪽만 쓰려면 다른 쪽을 빼거나 `0` 으로. 필드 자체를 제거하면 정리 비활성.
 
 워크플로 모드는 build 시 파일 시스템에서 unlink + `git add -A docs/...` → 다음 commit 에 같이 들어갑니다. 익스텐션 모드는 audio push 직후 GitHub Contents API DELETE 로 같은 동작.

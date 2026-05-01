@@ -68,6 +68,20 @@ function applyRetention(items, retention) {
     const cutoff = Date.now() - retention.maxAgeDays * 86400 * 1000;
     keep = keep.filter((it) => it.pubDate.getTime() >= cutoff);
   }
+  // 용량 기반: 최신 순으로 누적해서 cap 넘으면 자름. GitHub Pages 1 GB artifact
+  // 한도 회피 목적. 최신 1편은 항상 보존 — cap 보다 큰 단일 파일이라도 feed 가
+  // 텅 비지 않게 (build_feed.py 의 apply_retention 과 byte-level 일치).
+  if (typeof retention.maxTotalMB === "number" && retention.maxTotalMB > 0) {
+    const cap = Math.floor(retention.maxTotalMB * 1024 * 1024);
+    const fitted = [];
+    let total = 0;
+    for (const it of keep) { // 이미 최신순
+      if (fitted.length > 0 && total + it.size > cap) break;
+      fitted.push(it);
+      total += it.size;
+    }
+    keep = fitted;
+  }
   const keepSet = new Set(keep.map((it) => it.filename));
   const drop = items.filter((it) => !keepSet.has(it.filename));
   return { keep, drop };
