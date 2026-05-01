@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Transcode (offscreen)</title>
+</head>
+<body>
+  <!--
+    bulk:remote 가 NotebookLM 의 m4a (256k stereo, 시간당 ~22MB) 를 받아 GitHub 에
+    PUT 할 때 ~40MB 초과 파일은 Contents API + Git Data API 양쪽 한계에 부딪힘.
+    이 offscreen document 가 background SW 의 의뢰를 받아 m4a → mp3 64k mono 로
+    재인코딩 (50MB → ~5MB). AudioContext.decodeAudioData 와 lamejs Mp3Encoder
+    가 둘 다 SW 환경에선 못 돌아 offscreen 이 필요.
+  -->
+  <script src="../../vendor/lamejs.js"></script>
+  <script src="transcode.js"></script>
+</body>
+</html>

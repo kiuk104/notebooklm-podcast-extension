@@ -4,3 +4,4 @@ dist/
 *.zip
 *.crx
 .vscode/
+.claude/settings.local.json

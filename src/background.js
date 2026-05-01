@@ -669,6 +669,46 @@ async function closeManagedTab(tabId) {
   } catch {} // 끝까지 못 닫혀도 다음 흐름 막지 않음 — 사용자가 직접 닫을 수 있음.
 }
 
+// ---- offscreen document 기반 transcode (m4a/mp4 → mp3 64k mono) ----
+// AudioContext + lamejs 를 SW 에선 못 써서 offscreen document 가 처리. 50MB
+// audio 가 ~5MB mp3 로 줄어 GitHub API 한계 사각지대를 회피. 한 번 생성한
+// document 는 bulk 끝까지 재사용해 startup overhead 최소화.
+
+const OFFSCREEN_URL = "src/offscreen/transcode.html";
+let offscreenCreating = null;
+
+async function ensureOffscreenDocument() {
+  // hasDocument 는 매번 호출 가능 (가벼움). createDocument 는 race 가능 — 한 번에
+  // 하나만 진행되도록 promise 캐시.
+  if (await chrome.offscreen.hasDocument()) return;
+  if (offscreenCreating) return offscreenCreating;
+  offscreenCreating = chrome.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: ["AUDIO_PLAYBACK"], // AudioContext.decodeAudioData 사용 — 가장 가까운 reason
+    justification: "Decode m4a/AAC and re-encode to MP3 to fit GitHub API size limits",
+  }).finally(() => { offscreenCreating = null; });
+  await offscreenCreating;
+}
+
+async function closeOffscreenDocument() {
+  try {
+    if (await chrome.offscreen.hasDocument()) await chrome.offscreen.closeDocument();
+  } catch {}
+}
+
+// background → offscreen 메시지 round-trip. ArrayBuffer 는 structured clone 으로
+// 이동 (transfer 가 아니라 copy — 50MB audio 면 SW + offscreen 둘 다에 사본).
+async function transcodeViaOffscreen(arrayBuffer, bitrate = 64, mono = true) {
+  await ensureOffscreenDocument();
+  const r = await chrome.runtime.sendMessage({
+    type: "offscreen:transcode",
+    audioBuffer: arrayBuffer,
+    bitrate, mono,
+  });
+  if (!r?.ok) throw new Error(r?.error || "transcode 실패");
+  return r.mp3;
+}
+
 // chrome.debugger 의 Input.dispatchMouseEvent 로 진짜 user input 을 주입.
 // programmatic .click() 은 isTrusted=false 라서 NotebookLM 이 거부 — 이 경로는
 // 브라우저 C++ 레벨에서 합성된 trusted input 이라 "진짜 사용자 클릭" 으로 인식됨.
@@ -691,6 +731,8 @@ async function cleanupOwnedTabs() {
   }
   // bulk window 는 작업 끝나면 닫는다 — placeholder 탭이 남아있어도 지저분하지 않게.
   await closeBulkWindow();
+  // offscreen 도 같이 정리 — bulk 동안 열어두고 finally 에서 close.
+  await closeOffscreenDocument();
 }
 
 async function scanHomePageForNotebookUrls() {
@@ -1021,10 +1063,9 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
     };
   }
 
-  const path = `docs/episodes/${filename}`;
-
   const t0 = Date.now();
-  const stageLog = (stage) => console.log(`[push] ${filename} ${stage} (+${Math.round((Date.now() - t0) / 1000)}s)`);
+  let stageFilename = filename;
+  const stageLog = (stage) => console.log(`[push] ${stageFilename} ${stage} (+${Math.round((Date.now() - t0) / 1000)}s)`);
 
   const urlHost = (() => { try { return new URL(audioUrl).host; } catch { return "(invalid)"; } })();
   console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
@@ -1032,9 +1073,35 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   if (!r.ok) {
     throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost} final=${r.url.slice(0, 80)}… redirected=${r.redirected}`);
   }
-  const buf = await r.arrayBuffer();
-  const size = buf.byteLength;
+  let buf = await r.arrayBuffer();
+  let size = buf.byteLength;
   stageLog(`fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
+
+  // m4a/mp4 (NotebookLM 기본 256k stereo) → mp3 64k mono 재인코딩. 50MB 가 ~5MB 로
+  // 줄어 GitHub Contents API 한계 (~37 MiB) 와 Git Data API blob 한계 (~40 MiB)
+  // 사이 사각지대를 회피. offscreen document 가 AudioContext.decodeAudioData +
+  // lamejs 로 처리. v1 의 src/audio_tools.py:transcode_to_mp3 와 동등.
+  const filenameExt = (filename.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
+  if (filenameExt === "m4a" || filenameExt === "mp4") {
+    try {
+      stageLog(`transcoding m4a→mp3 64k mono...`);
+      const mp3Buf = await transcodeViaOffscreen(buf, 64, true);
+      const newSize = mp3Buf.byteLength;
+      const oldFilename = filename;
+      filename = filename.replace(/\.(m4a|mp4)$/i, ".mp3");
+      stageFilename = filename;
+      buf = mp3Buf;
+      size = newSize;
+      stageLog(`transcoded ${(r.headers.get("content-length") || "?")} → ${(newSize / 1024 / 1024).toFixed(1)}MB`);
+      // dedup hint 의 ext 도 mp3 으로 동기 — legacy 매칭이 일관되도록.
+      if (dedupHints) dedupHints.ext = ".mp3";
+    } catch (e) {
+      console.warn(`[push] transcode 실패, 원본 m4a 그대로 시도: ${e.message}`);
+      // transcode 실패 → 원본 buf 로 폴백. 50MB 초과면 ghPut 가 어차피 fail.
+    }
+  }
+
+  const path = `docs/episodes/${filename}`;
   const b64 = arrayBufferToBase64(buf);
   stageLog(`base64 encoded`);
 
@@ -1049,7 +1116,7 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
     await ghPut(cfg.repo, path, b64,
       `Add episode ${filename}`, existing?.sha, cfg.token, committer);
     stageLog(`pushed ${(size / 1024 / 1024).toFixed(1)}MB`);
-    pushResult = { ok: true, size };
+    pushResult = { ok: true, size, filename };
   }
 
   // rssMode === "extension" 이면 audio push 가 끝난 직후 같은 SW 안에서 feed 도 재빌드.
