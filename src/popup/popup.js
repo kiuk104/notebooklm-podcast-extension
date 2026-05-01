@@ -9,6 +9,14 @@ const bulkBarEl = document.getElementById("bulk-bar");
 const selectAllEl = document.getElementById("select-all");
 const bulkDlBtn = document.getElementById("bulk-dl");
 
+// 버전은 manifest 가 single source of truth. popup.html 에 하드코딩하면 매번
+// 동기 잊어버려서 사용자에게 stale 표시 — runtime 에 주입.
+const versionLineEl = document.getElementById("version-line");
+if (versionLineEl) {
+  const v = chrome.runtime.getManifest().version;
+  versionLineEl.textContent = `v${v} · ${versionLineEl.textContent}`;
+}
+
 // episodeTitle → state span. background 의 push:result 메시지를 받았을 때 매칭용.
 const stateByTitle = new Map();
 // episodeTitle → { checkbox, btn }. bulk 진행 중 disable / re-enable.
