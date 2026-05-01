@@ -572,15 +572,64 @@ async function withTabRetry(fn, label, maxAttempts = 5) {
   throw lastErr;
 }
 
-async function openManagedTab(url) {
-  const tab = await withTabRetry(() => chrome.tabs.create({ url, active: false }), "create");
+// bulk:remote 전용 popup window. NotebookLM 이 background tab (tab.active=false)
+// 에서 download menu 클릭을 거부 — `chrome.downloads.onDeterminingFilename` 자체가
+// fire 안 됨. 검증된 우회: 별도 popup window 를 focused:false 로 띄우면 *그 윈도우
+// 안의 tab 은 active 상태* 를 유지하면서 메인 윈도우 focus 는 그대로. 페이지 측
+// `document.visibilityState` 가 'visible' 로 보이고, NotebookLM 이 download 트리거
+// 를 정상 발사. 작업 끝나면 윈도우 close — 사용자 메인 작업 흐름 방해 최소화.
+let bulkWindowId = null;
+
+async function ensureBulkWindow() {
+  if (bulkWindowId !== null) {
+    try {
+      await chrome.windows.get(bulkWindowId);
+      return bulkWindowId;
+    } catch {
+      // 사용자가 닫았거나 Chrome 재시작 — 다시 만들기
+      bulkWindowId = null;
+    }
+  }
+  const win = await withTabRetry(
+    () => chrome.windows.create({
+      url: "about:blank",
+      type: "popup",
+      focused: false,         // 메인 윈도우 focus 유지
+      width: 800, height: 600,
+      // top/left 미지정 — Chrome 이 적당히 배치
+    }),
+    "windows.create",
+  );
+  bulkWindowId = win.id;
+  // about:blank 첫 탭은 placeholder. 첫 openManagedTab 호출이 진짜 NotebookLM URL
+  // 로 새 탭을 만들면서 placeholder 는 살아있어도 무해 (closeBulkWindow 가 결국 정리).
+  return bulkWindowId;
+}
+
+async function closeBulkWindow() {
+  if (bulkWindowId === null) return;
+  const id = bulkWindowId;
+  bulkWindowId = null;
+  try { await chrome.windows.remove(id); } catch {}
+}
+
+async function openManagedTab(url, opts = {}) {
+  // bulk:remote 는 opts.bulkWindow=true 로 전용 popup window 사용 → tab.active=true
+  // 로 만들어 NotebookLM 의 visibilityState 검사 통과. scan:all 은 main window
+  // background tab 으로 충분 (스캔은 download 트리거 안 함).
+  const inBulkWindow = !!opts.bulkWindow;
+  let createOpts;
+  if (inBulkWindow) {
+    const winId = await ensureBulkWindow();
+    createOpts = { url, windowId: winId, active: true };
+  } else {
+    createOpts = { url, active: false };
+  }
+  const tab = await withTabRetry(() => chrome.tabs.create(createOpts), "create");
   ownedTabs.add(tab.id);
   await waitForTabComplete(tab.id, TAB_OPEN_TIMEOUT);
   const ready = await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
   if (!ready) {
-    // content script 가 ping 에 응답하지 않음 — 보통 (a) 로그인 redirect 로 페이지가
-    // accounts.google.com 등 host_permissions 밖으로 나갔거나 (b) NotebookLM 이
-    // 다른 도메인으로 redirect (c) 페이지 로드 자체 실패. 친화적 에러로 변환.
     let finalUrl = "";
     try { finalUrl = (await chrome.tabs.get(tab.id))?.url || ""; } catch {}
     if (finalUrl.includes("accounts.google.com") || finalUrl.includes("ServiceLogin")) {
@@ -605,6 +654,8 @@ async function cleanupOwnedTabs() {
   for (const tid of Array.from(ownedTabs)) {
     await closeManagedTab(tid);
   }
+  // bulk window 는 작업 끝나면 닫는다 — placeholder 탭이 남아있어도 지저분하지 않게.
+  await closeBulkWindow();
 }
 
 async function scanHomePageForNotebookUrls() {
@@ -772,7 +823,9 @@ async function runBulkRemote(selections) {
     });
     let tabId;
     try {
-      tabId = await openManagedTab(url);
+      // bulkWindow:true — NotebookLM 이 background tab 의 download 클릭을 거부하므로
+      // 전용 popup window 안에서 active tab 으로 띄움. 메인 윈도우 focus 는 그대로.
+      tabId = await openManagedTab(url, { bulkWindow: true });
       consecTabErrors = 0;
       const ready = await waitForAudioCards(tabId, NOTEBOOK_CARDS_TIMEOUT);
       if (!ready) {

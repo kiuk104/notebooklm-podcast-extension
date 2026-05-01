@@ -374,6 +374,54 @@ Git Data API 는 100 MiB 까지 지원 (blobs hard limit). 호출이 7번이라 
 
 ---
 
+## 9. NotebookLM 이 background tab 의 download 트리거 거부 (2026-05-01)
+
+### 증상
+
+bulk:remote 가 모든 카드에서 "push 응답 타임아웃" 으로 실패 — 단건 popup download (active tab) 는 정상 작동. SW 콘솔에 `[scan:all] auto-download: 206 카드 시작` 로그만 있고 `[push] SW fetch host=...` 가 *전혀* 안 찍힘. `chrome://downloads` 에 NotebookLM 출처 다운로드가 *zero*.
+
+### 원인
+
+NotebookLM 내부 JS 가 다운로드 트리거 시 `document.visibilityState` (또는 유사한 가시성 검사) 를 확인하는 것으로 보임. content.js 가 background tab 에서 ⋮ → 다운로드 메뉴 클릭은 *성공* 시키지만 (메뉴 DOM 자체는 클릭 가능) NotebookLM 이 audio 스트림을 시작하지 않음 → `chrome.downloads.onDeterminingFilename` 자체가 발화 안 함 → pushEpisode 호출 안 됨 → waitPushResultLocal 영원히 대기.
+
+`chrome.tabs.create({ active: false })` 는 tab 을 background 로 두는데, `document.visibilityState === 'hidden'` 이 됨. NotebookLM 은 이 상태에서 download 를 거부.
+
+### 대응 — 전용 popup window
+
+해결책: `chrome.windows.create({ focused: false, type: 'popup' })` 로 별도 popup window 를 띄우고 그 안에서 tab 을 만든다. 결과:
+
+- 메인 윈도우 focus 유지 (사용자 작업 흐름 안 끊김)
+- popup window 는 화면에 visible (background 라도 visibilityState='visible')
+- 그 안의 tab 은 active (그 윈도우의 유일/현재 탭)
+- NotebookLM 이 download 트리거 발사 → onDeterminingFilename 발화 → pushEpisode 정상
+
+```js
+let bulkWindowId = null;
+async function ensureBulkWindow() {
+  if (bulkWindowId !== null) {
+    try { await chrome.windows.get(bulkWindowId); return bulkWindowId; }
+    catch { bulkWindowId = null; }
+  }
+  const win = await chrome.windows.create({
+    url: "about:blank", type: "popup", focused: false,
+    width: 800, height: 600,
+  });
+  bulkWindowId = win.id;
+  return bulkWindowId;
+}
+```
+
+`openManagedTab(url, { bulkWindow: true })` 로 bulk:remote 만 이 경로 사용. scan:all 은 background tab 으로 충분 (스캔은 download 트리거 안 함).
+
+### 학습
+
+- **`active: false` ≠ `visibilityState: 'visible'`**: tab 의 active 상태와 페이지의 visibility 는 다름. tab.active 는 "그 윈도우 안에서 보이는 tab 인가"이고, visibility 는 "그 tab 이 화면에 나타나는가". popup 윈도우 안에서 tab 이 active 면 visibility 는 'visible' — focus 는 별개.
+- **`chrome.windows` API 는 별도 permission 안 필요** — base extension capability. manifest 수정 없음.
+- **검증되지 않은 background tab 호환**을 가정하지 말 것. content script 가 *click* 까지 성공해도 페이지 측 reaction 이 다를 수 있음. download 같은 Chrome API event 가 발화 여부로 진단해야 함.
+- **사용자 검증된 단건 흐름 vs bulk 의 차이는 *환경*** — 같은 코드라도 active vs background tab 에서 페이지가 다르게 동작할 수 있음.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```
