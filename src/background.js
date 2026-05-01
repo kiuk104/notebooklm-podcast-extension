@@ -305,7 +305,11 @@ function waitPushResultLocal(episodeTitle, timeoutMs) {
 const TAB_OPEN_TIMEOUT = 15000;
 const CONTENT_PING_TIMEOUT = 8000;
 const NOTEBOOK_CARDS_TIMEOUT = 12000;
-const PUSH_RESULT_TIMEOUT = 180000;
+// 단일 카드의 SW fetch + base64 + ghPut/ghPutLargeFile (Git Data API 7-call) +
+// rebuildFeed 까지 합산. 긴 m4a (40분짜리 ~75 MB) 가 기준선이라 100~200초가
+// 정상 범위. 마진 포함 600초 (10분). 실측: 사용자 bulk 에서 첫 2 카드가 195초
+// 부근에서 180초 timeout 에 걸렸음 → 600 이면 안전.
+const PUSH_RESULT_TIMEOUT = 600000;
 
 let inProgressTask = null;
 const ownedTabs = new Set(); // SW 가 연 탭 id — 정리용.
@@ -914,6 +918,9 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
 
   const path = `docs/episodes/${filename}`;
 
+  const t0 = Date.now();
+  const stageLog = (stage) => console.log(`[push] ${filename} ${stage} (+${Math.round((Date.now() - t0) / 1000)}s)`);
+
   const urlHost = (() => { try { return new URL(audioUrl).host; } catch { return "(invalid)"; } })();
   console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
   const r = await fetch(audioUrl, { credentials: "include" });
@@ -922,11 +929,13 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   }
   const buf = await r.arrayBuffer();
   const size = buf.byteLength;
+  stageLog(`fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
   const b64 = arrayBufferToBase64(buf);
-  console.log(`[push] fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
+  stageLog(`base64 encoded`);
 
   // 정확 path 에 같은 크기 파일이 있으면 skip (list 실패 시 fallback 경로 + 이중 안전망).
   const existing = await ghGet(cfg.repo, path, cfg.token);
+  stageLog(`ghGet existing=${existing ? existing.size : 'none'}`);
   let pushResult;
   if (existing && existing.size === size) {
     console.log(`[push] ${filename} 이미 존재 (같은 크기), skip`);
@@ -934,7 +943,7 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   } else {
     await ghPut(cfg.repo, path, b64,
       `Add episode ${filename}`, existing?.sha, cfg.token, committer);
-    console.log(`[push] ${filename} pushed (${(size / 1024 / 1024).toFixed(1)}MB)`);
+    stageLog(`pushed ${(size / 1024 / 1024).toFixed(1)}MB`);
     pushResult = { ok: true, size };
   }
 
@@ -946,13 +955,14 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
       const feed = await rebuildFeed({ repo: cfg.repo, token: cfg.token, committer });
       pushResult.feed = feed;
       if (feed.skipped) console.log(`[feed] skip (${feed.reason})`);
-      else console.log(`[feed] rebuilt with ${feed.episodes} episodes`);
+      else stageLog(`feed rebuilt (${feed.episodes} episodes)`);
       if (feed.missingMeta) console.warn("[feed] docs/podcast.json 없음 — default 메타로 생성됨. examples/feed-builder/docs/podcast.json 참고해서 추가 권장.");
     } catch (e) {
       console.error("[feed]", e);
       pushResult.feedError = e.message;
     }
   }
+  stageLog(`done`);
   return pushResult;
 }
 
@@ -1034,15 +1044,19 @@ async function ghPut(repo, path, contentB64, message, sha, token, committer) {
 // Git Data API (blobs/trees/commits/refs) 로 50 MiB 초과 파일 push.
 // Contents API 는 단일 PUT 으로 끝나지만 그쪽은 ~37 MiB 가 실질 한계라 NotebookLM
 // 의 더 긴 m4a 는 못 올림. Git Data API 는 5번의 chained API 호출이지만
-// 100 MiB 까지 지원 (blobs 의 hard limit).
+// 100 MiB 까지 지원 (blobs 의 hard limit). 큰 파일 push 의 timing 진단을 위해
+// 각 단계의 elapsed 를 로그.
 async function ghPutLargeFile(repo, path, contentB64, message, token, committer) {
+  const t0 = Date.now();
+  const elapsed = () => `+${Math.round((Date.now() - t0) / 1000)}s`;
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
     "Content-Type": "application/json",
     "X-GitHub-Api-Version": "2022-11-28",
   };
-  const ghCall = async (method, urlPath, body) => {
+  const ghCall = async (method, urlPath, body, label) => {
+    const before = Date.now();
     const r = await fetch(`https://api.github.com/repos/${repo}${urlPath}`, {
       method,
       headers,
@@ -1052,27 +1066,30 @@ async function ghPutLargeFile(repo, path, contentB64, message, token, committer)
     if (!r.ok) {
       throw new Error(`${method} ${urlPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
     }
-    return r.json();
+    const out = await r.json();
+    console.log(`[ghPutLargeFile] ${label} ${Math.round((Date.now() - before) / 1000)}s (total ${elapsed()})`);
+    return out;
   };
 
   // 1. default branch 확인 (main 가정 안 함 — 사용자 repo 가 master 일 수 있음).
-  const repoMeta = await ghCall("GET", "");
+  const repoMeta = await ghCall("GET", "", null, "repo meta");
   const branch = repoMeta.default_branch || "main";
 
   // 2. 현재 ref 의 commit sha + tree sha.
-  const ref = await ghCall("GET", `/git/ref/heads/${branch}`);
+  const ref = await ghCall("GET", `/git/ref/heads/${branch}`, null, `ref ${branch}`);
   const parentCommitSha = ref.object.sha;
-  const parentCommit = await ghCall("GET", `/git/commits/${parentCommitSha}`);
+  const parentCommit = await ghCall("GET", `/git/commits/${parentCommitSha}`, null, "parent commit");
   const baseTreeSha = parentCommit.tree.sha;
 
-  // 3. blob 생성 (base64 그대로 업로드).
-  const blob = await ghCall("POST", `/git/blobs`, { content: contentB64, encoding: "base64" });
+  // 3. blob 생성 (base64 그대로 업로드 — 큰 페이로드, 보통 가장 오래 걸림).
+  const blob = await ghCall("POST", `/git/blobs`,
+    { content: contentB64, encoding: "base64" }, `blob (${(contentB64.length / 1024 / 1024).toFixed(1)}MB b64)`);
 
   // 4. 새 tree (기존 tree 위에 path 만 추가/덮어쓰기).
   const tree = await ghCall("POST", `/git/trees`, {
     base_tree: baseTreeSha,
     tree: [{ path, mode: "100644", type: "blob", sha: blob.sha }],
-  });
+  }, "tree");
 
   // 5. 새 commit.
   const commitBody = { message, tree: tree.sha, parents: [parentCommitSha] };
@@ -1080,10 +1097,10 @@ async function ghPutLargeFile(repo, path, contentB64, message, token, committer)
     commitBody.author = committer;
     commitBody.committer = committer;
   }
-  const commit = await ghCall("POST", `/git/commits`, commitBody);
+  const commit = await ghCall("POST", `/git/commits`, commitBody, "commit");
 
   // 6. ref 를 새 commit 으로 advance.
-  await ghCall("PATCH", `/git/refs/heads/${branch}`, { sha: commit.sha });
+  await ghCall("PATCH", `/git/refs/heads/${branch}`, { sha: commit.sha }, "ref advance");
 
   // Contents API 의 응답 형태를 흉내내 호출자가 기대하는 모양으로 반환 (size 등).
   return { content: { sha: blob.sha, path }, commit };
