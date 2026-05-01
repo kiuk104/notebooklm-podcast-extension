@@ -1148,10 +1148,16 @@ async function ghPut(repo, path, contentB64, message, sha, token, committer) {
       console.log(`[ghPut] Contents API 422 too large, Git Data API 로 fallback`);
       return ghPutLargeFile(repo, path, contentB64, message, token, committer);
     }
-    // 409 = concurrent commit race. sha 를 새로 받아 재시도.
-    if (r.status === 409 && attempt < 3) {
+    // Transient 재시도 케이스:
+    //   409 = concurrent commit race (workflow rebuild 중 push)
+    //   403 + "Rule was unable to be completed" = repo rule (workflow files
+    //       restriction 등) 검증이 10초 안에 못 끝남, GitHub 측 부하
+    const isRuleTimeout = r.status === 403 && /Rule was unable to be completed/i.test(errText);
+    const isTransient = r.status === 409 || isRuleTimeout;
+    if (isTransient && attempt < 3) {
       const wait = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
-      console.log(`[ghPut] 409 conflict (attempt ${attempt + 1}/4), refreshing sha + retry in ${wait}ms`);
+      const kind = r.status === 409 ? "409 conflict" : "403 rule timeout";
+      console.log(`[ghPut] ${kind} (attempt ${attempt + 1}/4), refreshing sha + retry in ${wait}ms`);
       await sleep(wait);
       try {
         const fresh = await ghGet(repo, path, token);
@@ -1163,7 +1169,7 @@ async function ghPut(repo, path, contentB64, message, sha, token, committer) {
     }
     throw new Error(`ghPut ${path}: ${r.status} ${errText.slice(0, 200)}`);
   }
-  throw new Error(`ghPut ${path}: 409 conflict after 4 attempts (workflow commits racing too fast)`);
+  throw new Error(`ghPut ${path}: transient errors after 4 attempts (workflow racing or rule timeouts)`);
 }
 
 // Git Data API (blobs/trees/commits/refs) 로 50 MiB 초과 파일 push.
@@ -1189,7 +1195,18 @@ async function ghPutLargeFile(repo, path, contentB64, message, token, committer)
       cache: "no-store",
     });
     if (!r.ok) {
-      throw new Error(`${method} ${urlPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
+      const errText = (await r.text()).slice(0, 300);
+      // /git/blobs 가 422 + "too large to process" 던지면 그건 GitHub 의 raw blob
+      // 한계 (~40 MiB 실질). Contents API (~37 MiB) 와 사이에 좁은 사각지대.
+      // 사용자가 어떤 카드가 한계 초과인지 알 수 있도록 친화적 메시지.
+      if (urlPath === "/git/blobs" && r.status === 422 && /too large/i.test(errText)) {
+        const sizeMB = (contentB64.length * 0.75 / 1024 / 1024).toFixed(1);
+        throw new Error(
+          `${path.split("/").pop()}: ~${sizeMB}MB 가 GitHub blob API 한계 (~40MB) 초과. ` +
+          `client transcode (m4a→mp3 64k mono) 또는 외부 호스팅 필요. EXTERNAL_HOSTING.md 참고.`,
+        );
+      }
+      throw new Error(`${method} ${urlPath}: ${r.status} ${errText.slice(0, 200)}`);
     }
     const out = await r.json();
     console.log(`[ghPutLargeFile] ${label} ${Math.round((Date.now() - before) / 1000)}s (total ${elapsed()})`);
