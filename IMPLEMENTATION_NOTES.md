@@ -274,6 +274,64 @@ async function sendMessageWithTimeout(tabId, msg, timeoutMs = 30000) {
 
 ---
 
+## 7. Zombie task — keepalive 가 stale 검지를 우회 (2026-05-01)
+
+### 증상
+
+bulk:remote 가 175개 카드 중 0/175 에서 33분 멈춤. 진행 모니터는 "진행 중" 배지 + `다운로드 중: <첫 카드 제목>` 메시지 + 경과 시간만 흐름. §6 fix (sendMessageWithTimeout + chrome.alarms keepalive + heartbeat stale 검지) 가 모두 들어간 상태에서 발생.
+
+### 원인 — §6 fix 의 미스 매칭
+
+§6 의 두 방어선이 서로 충돌:
+
+- **chrome.alarms onAlarm handler 가 heartbeat 를 맹목적 갱신**:
+  ```js
+  if (currentTaskState.status === "running") {
+    currentTaskState.lastHeartbeatAt = Date.now();
+  }
+  ```
+  alarm 은 SW 죽음을 넘어 persist (Chrome 이 alarm 등록을 따로 보관). 그래서 SW 가 죽었다 살아나면 — `inProgressTask = null`, runBulkRemote 의 await 체인은 GC 됐는데 — alarm 만 30초 주기로 계속 발화하며 heartbeat 를 갱신.
+
+- **startup IIFE 의 stale 검지가 90초 threshold 사용**:
+  ```js
+  if (stale > STALE_HEARTBEAT_MS) restored.status = "failed";
+  ```
+  alarm 이 30초마다 갱신하므로 heartbeat 는 항상 30초 이내 → 90초 threshold 에 안 걸림 → status: "running" 그대로 보존.
+
+- **task:cancel handler 가 inProgressTask 만 봄**:
+  ```js
+  if (!inProgressTask) sendResponse({ ok: false, error: "진행 중인 작업이 없습니다" });
+  ```
+  Zombie 상태에서 `inProgressTask = null` 이라 [강제 중단] 클릭해도 "no task" 응답만 받고 UI 변화 없음 — 사용자가 익스텐션 reload 외에 빠져나갈 길 없음.
+
+### 대응 (3 군데 동시 패치)
+
+1. **Startup IIFE 강화**: heartbeat threshold 제거. `restored.status === "running"` 자체를 zombie 신호로 봄 — MV3 SW 재시작은 항상 script 재실행 = in-flight Promise/timer 모두 GC. 어떤 heartbeat 값이든 의미 없음.
+   ```js
+   if (restored.status === "running") {
+     restored.status = "failed";
+     restored.message = `SW 재시작으로 작업이 중단됐습니다 (진행 ${done}/${total}).`;
+   }
+   ```
+
+2. **Alarm handler 가 inProgressTask 로 게이트**: zombie alarm 이 heartbeat 갱신해버리는 경로 차단. inProgressTask 가 null 이면 alarm 자체를 정리.
+   ```js
+   if (!inProgressTask) {
+     await chrome.alarms.clear(KEEPALIVE_ALARM);
+     return;
+   }
+   ```
+
+3. **task:cancel zombie 탈출구**: `inProgressTask` 는 없는데 `currentTaskState.status === "running"` 인 경우 force-fail 처리. UI 의 [강제 중단] 이 zombie 상태에서도 작동하게.
+
+### 학습
+
+- **방어선이 여러 개일 때 서로 무력화하지 않는지 검토.** §6 의 keepalive (proactive) 와 stale 검지 (reactive) 가 상호작용해서 stale 검지가 무력화됨. 각 방어선의 trigger 조건을 분리해야 함.
+- **`inProgressTask` 가 SW liveness 의 ground truth**. 모듈 스코프 변수라 SW 재시작에 살아남지 못함 = 재시작 직후 항상 null = zombie 검지에 활용 가능. heartbeat 값 자체는 alarm 에 오염되므로 신뢰하지 말 것.
+- **SW 재시작 자체를 root cause 로 두지 말 것.** keepalive 가 있어도 아주 드물게 SW 가 죽을 수 있음 (Chrome 시스템 종료, 프로파일 sync, 메모리 압박, 사용자 알람 권한 회수 등). "절대 일어나면 안 됨" 이 아니라 "일어나도 회복 가능" 이 목표.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```

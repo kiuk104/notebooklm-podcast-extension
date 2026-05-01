@@ -55,6 +55,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "task:cancel") {
     // 진행 중인 task 의 다음 iteration 에서 빠져나가도록 플래그 set.
     if (!inProgressTask) {
+      // Zombie 탈출구: UI 는 "running" 인데 in-memory 루프는 없음 (SW 재시작 후
+      // task:state 가 storage 에서 복원돼 그렇게 보이는 케이스). 이 경로 없으면
+      // 사용자가 익스텐션 reload 외에 빠져나갈 방법이 없음.
+      if (currentTaskState.status === "running") {
+        setTaskState({
+          status: "failed",
+          message: `강제 중단 — SW 재시작으로 인한 zombie 상태 정리 (진행 ${currentTaskState.done || 0}/${currentTaskState.total || "?"}).`,
+          endedAt: Date.now(),
+        }).then(() => sendResponse({ ok: true, forced: true }));
+        try { chrome.alarms.clear(KEEPALIVE_ALARM); } catch {}
+        return true; // async sendResponse
+      }
       sendResponse({ ok: false, error: "진행 중인 작업이 없습니다" });
       return false;
     }
@@ -337,7 +349,15 @@ async function stopKeepalive() {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
-  // 발화 자체가 SW wake. running task 이면 heartbeat 갱신 + 작업이 흘렀는지 점검.
+  // 발화 자체가 SW wake. inProgressTask 가 null 이면 zombie alarm — SW 재시작
+  // 으로 task 의 in-memory 루프는 죽었는데 alarm 만 살아남은 상태. heartbeat 를
+  // 갱신하지 말고 alarm 자체를 정리. (heartbeat 를 갱신하면 startup 의 zombie
+  // 검지를 우회할 수 있는데, fix 후엔 startup 이 status==="running" 자체로 검지
+  // 하므로 heartbeat 무관 — 그래도 무용한 alarm 발화는 끄는 게 깔끔.)
+  if (!inProgressTask) {
+    try { await chrome.alarms.clear(KEEPALIVE_ALARM); } catch {}
+    return;
+  }
   if (currentTaskState.status === "running") {
     currentTaskState.lastHeartbeatAt = Date.now();
     try { await chrome.storage.session.set({ currentTaskState }); } catch {}
@@ -378,10 +398,13 @@ let currentTaskState = { ...INITIAL_TASK_STATE };
 // 시작 시 체크해서 즉시 빠져나간다.
 let cancelRequested = false;
 
-// SW 재시작 시 마지막 상태 복원. heartbeat 가 너무 오래된 "running" 은 SW 가
-// 죽었다 살아난 케이스로 보고 stalled (failed) 로 마킹 — UI 가 영구 "진행 중" 에
-// 갇히는 사고 방지.
-const STALE_HEARTBEAT_MS = 90 * 1000; // 1.5분 — runBulkRemote 의 push timeout (3분) 보다 짧게
+// SW 재시작 시 마지막 상태 복원. status === "running" 이 살아남았다는 건 SW 가
+// 한 번 죽었다 살아났다는 뜻 — MV3 SW 재시작은 항상 script 재실행이라 in-flight
+// runBulkRemote/runScanAll 의 await 체인 (Promise / setTimeout 전부) 이 GC 됨.
+// 즉 어떤 heartbeat 값이든 무관하게 "running" 은 zombie. heartbeat threshold 를
+// 두고 90초 이내면 살려두려던 ad46faf 의 시도는 chrome.alarms keepalive 가 alarm
+// handler 에서 heartbeat 를 갱신해버리기 때문에 우회당함 — UI 는 영원히 "진행 중"
+// 으로 보이는데 실제 루프는 죽은 상태.
 
 (async () => {
   try {
@@ -399,15 +422,11 @@ const STALE_HEARTBEAT_MS = 90 * 1000; // 1.5분 — runBulkRemote 의 push timeo
     if (!restored) return;
 
     if (restored.status === "running") {
-      const heartbeat = restored.lastHeartbeatAt || restored.startedAt || 0;
-      const stale = Date.now() - heartbeat;
-      if (stale > STALE_HEARTBEAT_MS) {
-        restored.status = "failed";
-        restored.message =
-          `이전 작업이 SW 재시작으로 중단됐습니다 ` +
-          `(마지막 heartbeat ${Math.round(stale / 60000)}분 전). 새로 시작하세요.`;
-        restored.endedAt = Date.now();
-      }
+      restored.status = "failed";
+      restored.message =
+        `SW 재시작으로 작업이 중단됐습니다 ` +
+        `(진행 ${restored.done || 0}/${restored.total || "?"}). [초기화] 후 다시 시작하세요.`;
+      restored.endedAt = Date.now();
     }
     currentTaskState = restored;
 
