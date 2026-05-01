@@ -702,17 +702,32 @@ let epItems = [];                    // 서버에서 받은 원본 (정렬 대�
 let epSortKey = "date";              // date / notebook / title / format / size
 let epSortDir = "desc";              // asc / desc
 let epGroupOn = false;
-const epEditOpen = new Set();        // 편집창 열려있는 filename 들
+let epNotebookUrlMap = new Map();    // notebookSlug → notebookUrl (직전 스캔 결과 기반)
 
-// background.js 의 slugify 와 동등 — 파일명 segment 가 호환되어야 dedup / RSS
-// 파싱이 깨지지 않음. SLUG_MAX = 40.
-const EP_SLUG_MAX = 40;
+// background.js 의 slugify 와 동일 — 파일명의 노트북-슬러그를 lastScanResult 의
+// 노트북 cover.title 과 매칭하기 위해 클라이언트에서도 같은 변환 필요. SLUG_MAX=40.
 function epSlugify(text) {
-  if (!text) return "episode";
+  if (!text) return "";
   let s = text.trim().replace(/\s+/g, "-");
   s = s.replace(/[^0-9A-Za-z가-힣\-_]/g, "");
-  return s.slice(0, EP_SLUG_MAX) || "episode";
+  return s.slice(0, 40);
 }
+
+async function refreshNotebookUrlMap() {
+  // 직전 스캔 결과 (background.js 의 lastScanResult) 에서 notebookSlug → URL.
+  // 30분 freshness 안의 결과만 — stale 이면 빈 맵, [편집] 클릭 시 fallback (홈 열기).
+  epNotebookUrlMap.clear();
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "scan:result:get" });
+    const result = r?.result;
+    if (!result?.notebooks) return;
+    for (const nb of result.notebooks) {
+      const slug = epSlugify(nb.cover?.title || "");
+      if (slug && nb.url) epNotebookUrlMap.set(slug, nb.url);
+    }
+  } catch {}
+}
+
 function epFmtSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -728,6 +743,8 @@ async function loadEpisodeList() {
   epShowStatus("목록 로드 중…", "");
   epReloadBtn.disabled = true;
   try {
+    // 직전 스캔 결과 매핑을 동시에 새로고침 — [편집] 버튼이 노트북 URL 을 알 수 있게.
+    await refreshNotebookUrlMap();
     const r = await chrome.runtime.sendMessage({ type: "episodes:list:full" });
     if (!r?.ok) {
       epShowStatus(`로드 실패: ${r?.error || "알 수 없음"}`, "error");
@@ -790,8 +807,12 @@ function renderEpisodeTable() {
       return `<tr class="group-header"><td colspan="7">📓 ${escapeHtml(it.notebook)}  (${it.count}개)</td></tr>`;
     }
     const ymd = it.date;
-    const editOpen = epEditOpen.has(it.filename);
     const fmtClass = `format-tag ${escapeHtml(it.format)}`;
+    const notebookSlug = epSlugify(it.notebook);
+    const nbUrl = epNotebookUrlMap.get(notebookSlug);
+    const editAttrs = nbUrl
+      ? `data-nb-url="${escapeHtml(nbUrl)}" title="NotebookLM 에서 이 노트북 열기"`
+      : `disabled title="노트북 URL 미상 — [모든 노트북 스캔] 후 다시 시도"`;
     return `
       <tr class="ep-row" data-filename="${escapeHtml(it.filename)}" data-sha="${escapeHtml(it.sha)}">
         <td class="col-check"><input type="checkbox" class="ep-check"></td>
@@ -801,19 +822,8 @@ function renderEpisodeTable() {
         <td><span class="${fmtClass}">${escapeHtml(it.format)}</span></td>
         <td class="num">${escapeHtml(epFmtSize(it.size))}</td>
         <td class="col-actions">
-          <button type="button" class="ep-action edit">편집</button>
+          <button type="button" class="ep-action edit" ${editAttrs}>편집 ↗</button>
           <button type="button" class="ep-action danger">삭제</button>
-        </td>
-      </tr>
-      <tr class="edit-row${editOpen ? " open" : ""}" data-for="${escapeHtml(it.filename)}">
-        <td colspan="7">
-          <div class="edit-grid">
-            <label>날짜<input type="date" class="edit-date" value="${escapeHtml(ymd)}"></label>
-            <label>노트북<input type="text" class="edit-notebook" value="${escapeHtml(it.notebook)}"></label>
-            <label>제목<input type="text" class="edit-title" value="${escapeHtml(it.title)}"></label>
-            <button type="button" class="edit-save">저장</button>
-            <button type="button" class="cancel">취소</button>
-          </div>
         </td>
       </tr>`;
   }).join("");
@@ -861,70 +871,16 @@ epTbody.addEventListener("change", (e) => {
 });
 
 epTbody.addEventListener("click", async (e) => {
-  // 편집 토글
-  if (e.target.classList.contains("edit") || e.target.closest("button.edit")) {
-    const row = e.target.closest("tr.ep-row");
-    if (!row) return;
-    const fn = row.dataset.filename;
-    if (epEditOpen.has(fn)) epEditOpen.delete(fn); else epEditOpen.add(fn);
-    const er = epTbody.querySelector(`tr.edit-row[data-for="${CSS.escape(fn)}"]`);
-    if (er) er.classList.toggle("open");
+  // [편집 ↗] — 해당 NotebookLM 노트북을 새 탭으로 연다 (제목/내용 편집은 거기서).
+  // 노트북 URL 은 직전 스캔 결과의 cover.title slug 매칭으로 lookup. 미스 시
+  // 버튼이 disabled 상태로 렌더되어 여기까지 안 옴.
+  if (e.target.classList.contains("edit")) {
+    const nbUrl = e.target.dataset.nbUrl;
+    if (nbUrl) chrome.tabs.create({ url: nbUrl });
     return;
   }
-  // 편집 취소
-  if (e.target.classList.contains("cancel")) {
-    const er = e.target.closest("tr.edit-row");
-    if (er) {
-      er.classList.remove("open");
-      epEditOpen.delete(er.dataset.for);
-    }
-    return;
-  }
-  // 편집 저장 (rename)
-  if (e.target.classList.contains("edit-save")) {
-    const er = e.target.closest("tr.edit-row");
-    if (!er) return;
-    const oldFilename = er.dataset.for;
-    const item = epItems.find((x) => x.filename === oldFilename);
-    if (!item) return;
-    const dateStr = er.querySelector(".edit-date").value; // YYYY-MM-DD
-    const nbStr = er.querySelector(".edit-notebook").value.trim();
-    const titleStr = er.querySelector(".edit-title").value.trim();
-    if (!dateStr || !nbStr || !titleStr) {
-      epShowStatus("날짜·노트북·제목 모두 채워야 합니다.", "error");
-      return;
-    }
-    const dateRaw = dateStr.replace(/-/g, "");
-    const nbSlug = epSlugify(nbStr);
-    const titleSlug = epSlugify(titleStr);
-    // 4-segment 포맷 보존: shortId 가 있으면 가운데 끼워넣음. 없으면 3-segment.
-    const newFilename = item.shortId
-      ? `${dateRaw}__${nbSlug}__${item.shortId}__${titleSlug}.${item.format}`
-      : `${dateRaw}__${nbSlug}__${titleSlug}.${item.format}`;
-    if (newFilename === oldFilename) {
-      epShowStatus("변경 사항 없음.", "");
-      er.classList.remove("open");
-      epEditOpen.delete(oldFilename);
-      return;
-    }
-    e.target.disabled = true;
-    epShowStatus(`이름 변경 중: ${oldFilename} → ${newFilename}…`, "");
-    try {
-      const r = await chrome.runtime.sendMessage({
-        type: "episodes:rename",
-        oldFilename, newFilename, blobSha: item.sha,
-      });
-      if (!r?.ok) throw new Error(r?.error || "rename 실패");
-      epShowStatus(`✓ rename 완료 — feed 워크플로가 재빌드합니다.`, "success");
-      epEditOpen.delete(oldFilename);
-      await loadEpisodeList();
-    } catch (err) {
-      epShowStatus(`rename 실패: ${err.message}`, "error");
-      e.target.disabled = false;
-    }
-    return;
-  }
-  // 단일 삭제
+  // 단일 삭제 — 편집 (제목 변경) 은 NotebookLM 원본에서. 잘못 받은 카드만
+  // 여기서 ghDelete 하고, 다음 sweep 에서 새 제목으로 다시 받아오는 흐름.
   if (e.target.classList.contains("danger")) {
     const row = e.target.closest("tr.ep-row");
     if (!row) return;

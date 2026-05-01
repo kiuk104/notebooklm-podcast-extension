@@ -37,6 +37,7 @@
     <li><a href="#usage">사용법 (단일 / 일괄 / 전체 스윕)</a></li>
     <li><a href="#rss">RSS feed 생성</a></li>
     <li><a href="#meta">팟캐스트 메타 (제목 / 작성자 / 커버)</a></li>
+    <li><a href="#episodes">푸시된 에피소드 목록 관리 (편집 / 삭제)</a></li>
     <li><a href="#retention">보관 정책 (rolling window)</a></li>
     <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
     <li><a href="#filename">파일명 규약</a></li>
@@ -117,14 +118,23 @@
 </ul>
 
 <h3>3-3. 모든 노트북 스윕 (cross-notebook, v1 cron 동등)</h3>
-<p>NotebookLM 의 어떤 페이지에서든 popup 의 <strong>[모든 노트북 스캔]</strong> 클릭. 익스텐션이 백그라운드 탭으로:</p>
+<p>NotebookLM 의 어떤 페이지에서든 popup 의 <strong>[모든 노트북 스캔]</strong> 클릭. 익스텐션이 두 단계로 동작합니다:</p>
+
+<p><strong>스캔 단계</strong> (메인 윈도우의 background tab 사용):</p>
 <ol>
   <li>NotebookLM 홈 (<code>/</code>) 을 열어 모든 노트북 URL 수집.</li>
   <li>각 노트북 페이지를 순차로 열어 음성개요 카드 수집 (5~10초/노트북).</li>
-  <li>탭 닫기 + 다음 노트북 진행. 30개 노트북이면 약 2~7분.</li>
+  <li>탭 닫기 + 다음 노트북 진행. 200개 노트북이면 약 10~15분.</li>
   <li>완료 후 노트북별로 그룹핑된 카드 목록이 popup 에 뜸 — 결과는 30분간 자동 보존되어, popup 을 닫았다 다시 열어도 같은 결과를 보여줍니다 (재스캔 안 해도 됨).</li>
   <li>체크박스로 받을 카드 선택 (이미 받은 카드는 default 미체크) → <strong>[선택 받기]</strong>.</li>
-  <li>선택된 카드들을 노트북별로 다시 묶어 탭 한 번씩 열어가며 다운로드.</li>
+</ol>
+
+<p><strong>다운로드 단계</strong> (별도 popup window 사용):</p>
+<ol>
+  <li>익스텐션이 <code>chrome.windows.create({type:"popup", focused:false})</code> 로 작은 popup window 를 띄움 (메인 윈도우 focus 그대로 유지). NotebookLM 의 download 트리거가 <code>visibilityState='visible'</code> + 사용자 input gesture 둘 다 요구하기 때문 — background tab 의 <code>active:false</code> 상태로는 download 가 발사되지 않습니다.</li>
+  <li>그 popup 안에서 노트북 탭을 차례로 열어 ⋮ → "다운로드" 메뉴를 <code>chrome.debugger</code> 의 <code>Input.dispatchMouseEvent</code> 로 클릭 — 브라우저 C++ 레벨에서 <em>진짜 사용자 클릭</em> 을 합성해 NotebookLM 이 <code>isTrusted=true</code> 로 인식.</li>
+  <li>각 카드: NotebookLM 이 audio 스트리밍 시작 → SW 가 같은 URL 을 재fetch → <code>m4a/mp4</code> 면 offscreen document 가 mp3 (64k mono) 로 transcode → GitHub 에 push.</li>
+  <li>모든 카드 완료 후 popup window 자동 닫힘.</li>
 </ol>
 
 <div class="tip">
@@ -132,7 +142,7 @@
 </div>
 
 <div class="warn">
-  <strong>백그라운드 탭이 잠깐 깜빡일 수 있습니다.</strong> Chrome 의 <code>chrome.tabs.create({active:false})</code> 가 포커스만 막을 뿐 가시성은 못 막아서, 탭 바에 새 탭이 잠시 나타났다 사라집니다. 정상 동작이며 사용자가 클릭하지 않아도 자동으로 닫힙니다.
+  <strong>"디버깅 중" 노란 배너</strong> 가 popup window 의 NotebookLM 탭 상단에 뜹니다 — Chrome 이 <code>chrome.debugger</code> 사용 익스텐션을 알리는 표준 표시. 정상 동작이며 popup 닫히면 자동 해제. 메인 윈도우엔 영향 없음.
 </div>
 
 <div class="tip">
@@ -210,9 +220,48 @@
 </div>
 
 <h3>5-3. 폼에 노출되지 않는 필드</h3>
-<p><code>retention</code> (보관 정책, §6) 과 <code>transcode</code> (m4a→mp3, §7) 는 폼에 없습니다 — 자주 바꾸지 않는 기술 옵션이라 podcast.json 직접 편집 권장. 메타 [저장] 시 이 필드들은 그대로 보존됩니다 (덮어쓰지 않음).</p>
+<p><code>retention</code> (보관 정책, §7) 과 <code>transcode</code> (m4a→mp3, §8) 는 폼에 없습니다 — 자주 바꾸지 않는 기술 옵션이라 podcast.json 직접 편집 권장. 메타 [저장] 시 이 필드들은 그대로 보존됩니다 (덮어쓰지 않음).</p>
 
-<h2 id="retention">6. 보관 정책 (rolling window)</h2>
+<h2 id="episodes">6. 푸시된 에피소드 목록 관리</h2>
+
+<p>관리 페이지의 <strong>"푸시된 에피소드"</strong> 섹션은 본인 repo 의 <code>docs/episodes/</code> 에 저장된 모든 음성개요를 표 형태로 보여줍니다 — v1 admin 페이지의 episode 표와 같은 구조. token + repo 가 저장된 상태에서 페이지 진입 시 자동 fetch.</p>
+
+<h3>6-1. 표 컬럼과 정보</h3>
+<ul>
+  <li><strong>날짜</strong>: 파일명 prefix 의 <code>YYYYMMDD</code> 를 ISO 형식으로.</li>
+  <li><strong>노트북</strong>: 파일명에서 추출한 노트북 슬러그 (하이픈을 공백으로).</li>
+  <li><strong>제목</strong>: 음성개요 제목 슬러그 (마우스 hover 시 전체 파일명 표시).</li>
+  <li><strong>형식</strong>: <code>m4a</code> / <code>mp3</code> / <code>mp4</code> 컬러 태그 — 큰 m4a 는 노란색, transcode 된 mp3 는 초록색이라 한눈에 식별.</li>
+  <li><strong>크기</strong>: 바이트 → MB 표시.</li>
+</ul>
+
+<h3>6-2. 정렬 / 그룹화</h3>
+<ul>
+  <li>모든 컬럼 헤더 클릭 → asc / desc 토글. 화살표가 ▲▼ → ▲ / ▼ 로 강조.</li>
+  <li>[정렬 초기화 (날짜 ↓)] — 기본 (최신순) 으로 한 번에 복귀.</li>
+  <li>[노트북별 그룹화] 토글 → 같은 노트북 카드들이 묶이고 헤더 row 에 <code>📓 노트북명 (N개)</code> 표시.</li>
+</ul>
+
+<h3>6-3. 편집 (NotebookLM 원본으로 이동)</h3>
+<p>각 행의 <strong>[편집 ↗]</strong> 버튼은 <em>새 탭</em> 으로 해당 NotebookLM 노트북을 엽니다. 음성개요 제목이나 내용 편집은 NotebookLM 이 source of truth — 거기서 수정한 뒤 이쪽에서 옛 카드를 [삭제] 하면 다음 sweep 에서 새 제목으로 다시 push 됩니다.</p>
+
+<div class="warn">
+  <strong>[편집 ↗] 이 비활성 (회색)</strong> 이면 직전 스캔 결과가 없어서 노트북 URL 을 매칭 못 한 상태입니다. popup 의 [모든 노트북 스캔] 한 번 돌리면 노트북 URL 매핑이 30분간 유지되어 활성화됩니다.
+</div>
+
+<h3>6-4. 삭제 (단일 / 일괄)</h3>
+<ul>
+  <li>각 행의 <strong>[삭제]</strong> — 단일 ghDelete (확인 dialog → 1번 호출 → ✓).</li>
+  <li>좌측 체크박스 + 상단의 <strong>[선택 삭제]</strong> — 다중 선택 후 일괄. 진행 중에 status 표시 (1/N → 2/N…). 부분 실패 시 성공/실패 카운트 표시.</li>
+  <li>제일 위 <strong>전체 선택</strong> 체크박스 — 한 번에 모든 row 토글.</li>
+  <li>삭제 후 자동으로 [↻ 새로고침] 트리거 → 표 갱신.</li>
+</ul>
+
+<div class="tip">
+  삭제는 repo 의 파일만 제거 — NotebookLM 의 카드는 그대로 살아 있습니다. 다음 sweep 시 [받기] 를 누르면 다시 받아옵니다 (중복 push 는 shortId dedup 으로 알아서 방지). 잘못 받은 카드 / 오디오 placeholder 상태로 받힌 카드 정리에 유용.
+</div>
+
+<h2 id="retention">7. 보관 정책 (rolling window)</h2>
 
 <p>repo 용량을 통제하려면 <code>docs/podcast.json</code> 에 <code>retention</code> 필드를 추가하세요. 두 RSS 모드 (4-1, 4-2) 모두 같은 정책을 따르므로, 모드를 바꿔도 정리 동작은 동일합니다.</p>
 
@@ -229,19 +278,37 @@
   <tr><th>필드</th><th>의미</th></tr>
   <tr><td><code>maxItems</code></td><td>최근 N 개의 episode 만 유지. 그보다 오래된 파일은 build 시점에 자동 삭제.</td></tr>
   <tr><td><code>maxAgeDays</code></td><td>오늘로부터 N 일 이내 episode 만 유지.</td></tr>
+  <tr><td><code>maxTotalMB</code></td><td>docs/episodes/ 합계 크기 상한 (MB). 최신 순으로 누적해 cap 넘기면 거기서 자름. <strong>GitHub Pages 1 GB artifact 한도 회피</strong>용. 64k mono mp3 평균 ~5 MB 기준 900 MB 면 ~180 편 보존. 단일 파일이 cap 보다 커도 최신 1편은 무조건 유지.</td></tr>
 </table>
 
-<p>둘 다 설정하면 <strong>둘 다 통과해야 유지</strong> (AND) — 더 짧은 정책이 실질적으로 적용됩니다. 한 쪽만 쓰려면 다른 쪽을 빼거나 <code>0</code> 으로. <code>retention</code> 필드 자체를 제거하면 정리 비활성 (모든 episode 영구 보관).</p>
+<p>셋 다 설정하면 <strong>모두 통과해야 유지</strong> (AND) — 더 짧은 정책이 실질적으로 적용됩니다. 한 쪽만 쓰려면 다른 쪽을 빼거나 <code>0</code> 으로. <code>retention</code> 필드 자체를 제거하면 정리 비활성 (모든 episode 영구 보관).</p>
 
 <div class="tip">
   NotebookLM 의 카드 자체를 지우는 것과는 무관합니다 — repo 의 파일만 정리. 보관 정책 밖으로 나간 episode 는 RSS 에서 사라지지만 NotebookLM 에 카드가 살아 있다면 [받기] 를 다시 누를 때 또 push 됩니다.
 </div>
 
-<h2 id="transcode">7. Transcode (m4a → mp3)</h2>
+<h2 id="transcode">8. Transcode (m4a → mp3)</h2>
 
-<p>NotebookLM 의 m4a 는 256k stereo 라 한 시간에 ~22MB. 음성개요는 사람 목소리 위주라 64k mono mp3 (~5MB) 로도 충분히 들립니다 — repo 1GB 한도가 약 4배 늘어나는 효과.</p>
+<p>NotebookLM 의 m4a 는 256k stereo 라 한 시간에 ~22MB. 음성개요는 사람 목소리 위주라 64k mono mp3 (~5MB) 로도 충분히 들립니다 — repo 1GB 한도가 약 4배 늘어나는 효과. 게다가 GitHub Contents API 는 ~37 MiB / Git Data API blob 도 ~40 MiB 가 실질 상한이라 NotebookLM 의 1.5~2.5h 음성개요 (40~50 MB) 가 *둘 다 거절* 되는 사각지대 — transcode 가 그 사각지대를 회피하는 핵심 수단.</p>
 
-<p><strong>워크플로 측 native ffmpeg 모드 (권장)</strong> — <code>docs/podcast.json</code> 의 <code>transcode</code> 필드를 켜면 워크플로의 transcode step 이 <code>docs/episodes/</code> 안 m4a/mp4 를 같은 이름의 mp3 로 변환합니다 (원본 삭제). <code>ubuntu-latest</code> 의 native ffmpeg (libmp3lame 포함) 가 처리해서 1시간 audio 가 5~10초. RSS 모드는 <a href="#rss">4-1 (Actions 위임)</a> 사용 전제.</p>
+<p>두 가지 모드가 있고 함께 켜져도 무방 (먼저 적용된 쪽이 이미 mp3 로 만들어 두면 다음 단계는 no-op).</p>
+
+<h3>8-1. 익스텐션 측 (offscreen + lamejs, 자동 적용)</h3>
+<p>v0.4.11 부터 익스텐션이 *자체적으로* m4a/mp4 를 mp3 로 변환한 뒤 GitHub 에 push 합니다. 별도 설정 불필요 — m4a/mp4 형식이면 자동.</p>
+
+<ul>
+  <li><strong>위치</strong>: SW 가 audio fetch 후 offscreen document 로 ArrayBuffer 전달 → <code>AudioContext.decodeAudioData</code> 로 PCM 디코드 → <code>lamejs</code> Mp3Encoder 로 64k mono mp3 인코드 → SW 로 회신 → ghPut.</li>
+  <li><strong>속도</strong>: 30분 분량 ~10초, 60분 분량 ~20초. SW 메모리 peak 50 MB 입력 + 5 MB 출력.</li>
+  <li><strong>파일명</strong>: <code>.m4a</code> / <code>.mp4</code> 가 자동으로 <code>.mp3</code> 로 교체되어 push.</li>
+  <li><strong>실패 시 fallback</strong>: transcode 가 실패하면 원본 m4a 그대로 push 시도 — Git Data API blob 한계에 막히면 그 카드만 fail (드뭄).</li>
+</ul>
+
+<div class="tip">
+  <strong>이미 repo 에 들어가 있는 m4a/mp4 는 익스텐션 측 transcode 의 대상이 아닙니다</strong> (transcode 는 push 흐름에서만 적용). 옛 m4a/mp4 를 mp3 로 정리하려면 아래 §8-2 의 워크플로 측 transcode 를 켜세요 — 다음 워크플로 트리거 때 <code>docs/episodes/</code> 의 모든 옛 m4a/mp4 를 mp3 로 변환합니다.
+</div>
+
+<h3>8-2. 워크플로 측 native ffmpeg (백워드 호환)</h3>
+<p><code>docs/podcast.json</code> 의 <code>transcode</code> 필드를 켜면 워크플로의 transcode step 이 <code>docs/episodes/</code> 안 m4a/mp4 를 같은 이름의 mp3 로 변환합니다 (원본 삭제). <code>ubuntu-latest</code> 의 native ffmpeg (libmp3lame 포함) 가 처리해서 1시간 audio 가 5~10초. RSS 모드는 <a href="#rss">4-1 (Actions 위임)</a> 사용 전제. 옛 v0.4.11 이전 버전이 push 한 m4a 를 정리할 때 유용 — 한 번 켜고 다음 push 한 번이면 모두 mp3 로 일괄 변환됩니다.</p>
 
 <pre>{
   ...
@@ -265,7 +332,7 @@
 
 <p><strong>익스텐션 내장 (ffmpeg.wasm) 모드</strong>: 미구현. 패키지 +25MB / SW 메모리 100~200MB / 첫 [받기] 응답 30초~수분 등 트레이드오프가 커서 후순위. 워크플로 셋업이 어려운 사용자만을 위한 옵션.</p>
 
-<h2 id="filename">8. 파일명 규약</h2>
+<h2 id="filename">9. 파일명 규약</h2>
 <pre>YYYYMMDD__노트북-슬러그__shortId__제목-슬러그.{m4a|mp3}</pre>
 
 <table>
@@ -282,7 +349,7 @@
   <strong>옛 포맷과의 호환:</strong> v0.4.0 이전 버전이 push 한 파일은 <code>shortId</code> 없이 3-segment <code>YYYYMMDD__노트북__제목.{ext}</code> 로 저장돼 있을 수 있습니다. RSS 빌더 (익스텐션 / GitHub Actions 워크플로) 모두 두 포맷을 동시에 인식하므로 그대로 두어도 무방합니다. 새 push 부터만 4-segment 포맷이 적용됩니다.
 </div>
 
-<h2 id="troubleshoot">9. 트러블슈팅</h2>
+<h2 id="troubleshoot">10. 트러블슈팅</h2>
 
 <h3>"현재 탭이 NotebookLM 노트북 페이지가 아닙니다"</h3>
 <p>NotebookLM 의 노트북 상세 페이지 (<code>/notebook/&lt;id&gt;</code>) 에서만 동작합니다. 홈 / 검색 페이지에서는 스캔 안 됨.</p>
@@ -314,14 +381,30 @@
   <li>에러 메시지 (host, status) 가 다음 차단 호스트나 권한 문제를 노출함.</li>
 </ol>
 
-<h2 id="privacy">10. 권한 &amp; 프라이버시</h2>
+<h3>bulk 가 모든 카드에서 "push 응답 타임아웃"</h3>
+<p>Sweep 직후 bulk 다운로드가 시작됐는데 카드마다 push 응답 타임아웃 → SW 콘솔에 <code>[push] SW fetch host=...</code> 로그가 *전혀* 안 찍히는 케이스. 이건 NotebookLM 이 background tab 의 download 트리거를 거부했다는 신호 — popup window 가 안 떴거나 <code>chrome.debugger</code> attach 가 실패한 상태일 가능성. <code>chrome://extensions/</code> 의 본 익스텐션 카드 → 권한 (debugger / offscreen) 이 부여돼 있는지 확인 후 익스텐션 새로고침. 자세한 매커니즘: <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §9, §10</a>.</p>
+
+<h3>특정 카드만 "이 file 은 ~XX MB 가 GitHub blob API 한계 (~40MB) 초과"</h3>
+<p>NotebookLM 이 1.5~2.5 시간짜리 음성개요로 만든 m4a 가 GitHub Contents API (~37 MiB) 와 Git Data API blob (~40 MiB) 사이 사각지대에 떨어진 케이스. v0.4.11 의 client-side transcode 가 자동으로 mp3 64k mono 로 줄여 회피하는데, 그 transcode 가 실패하면 이 에러가 노출됩니다. 흔치 않지만 발생 시:</p>
+<ol>
+  <li>transcode 자체가 깨졌는지 → SW 콘솔의 <code>[transcode]</code> 또는 offscreen document 콘솔 확인 (offscreen 은 별도 DevTools 창).</li>
+  <li>워크플로 측 transcode (§8-2) 를 같이 켜서 backstop — m4a 가 어쩌다 push 됐어도 다음 워크플로 트리거 때 mp3 로 변환됨.</li>
+  <li>NotebookLM 에서 더 짧은 음성개요로 재생성, 또는 외부 호스팅 (R2 등) 으로 이동.</li>
+</ol>
+
+<h3>"is at X but expected Y" (HTTP 409) 또는 "Rule was unable to be completed" (HTTP 403)</h3>
+<p>bulk 가 매 20-30초씩 카드를 push 하는 동안 GitHub Actions 의 <code>auto: rebuild feed</code> 워크플로가 동시에 commit 을 만들어 race 가 발생한 케이스. 또는 GitHub repo ruleset 검증이 10초 안에 못 끝난 timeout. v0.4.10+ 부터 ghPut 가 자동으로 1s/2s/4s backoff 재시도하므로 보통 사용자가 볼 일 없습니다. 활동 로그에 <code>409 conflict (attempt 1/4), refreshing sha + retry</code> 같은 줄이 보이면 retry 가 작동 중인 것 — 보통 1-2회 안에 통과. 4회 모두 실패하면 그 카드만 fail 표시.</p>
+
+<h2 id="privacy">11. 권한 &amp; 프라이버시</h2>
 
 <table>
   <tr><th>권한</th><th>용도</th></tr>
-  <tr><td><code>activeTab</code>, <code>scripting</code></td><td>현재 NotebookLM 탭에 content script 주입 + 모든 노트북 sweep 시 백그라운드 탭으로 각 노트북 방문.</td></tr>
+  <tr><td><code>activeTab</code>, <code>scripting</code></td><td>현재 NotebookLM 탭에 content script 주입 + 모든 노트북 sweep 시 background tab / popup window 로 각 노트북 방문.</td></tr>
   <tr><td><code>storage</code></td><td>GitHub token / repo 설정을 브라우저 로컬에 저장.</td></tr>
   <tr><td><code>downloads</code></td><td>NotebookLM audio 받기 + 파일명 rename.</td></tr>
   <tr><td><code>alarms</code></td><td>장시간 bulk 작업 (5분~2시간+) 중 service worker 가 idle 종료되지 않도록 30초 주기 wake — 알람 자체가 "활성" 신호. 작업 종료 즉시 자동 해제.</td></tr>
+  <tr><td><code>debugger</code></td><td>bulk 다운로드 시 NotebookLM 의 ⋮ → "다운로드" 메뉴 클릭을 <code>Input.dispatchMouseEvent</code> 로 합성. NotebookLM 이 isTrusted=true / user activation 검사로 programmatic .click() 을 거부하기 때문에 필수. attach 시 popup window 의 노트북 탭 상단에 노란 "디버깅 중" 배너가 뜸 (Chrome 표준) — bulk 종료 시 자동 detach. 단건 popup 다운로드는 사용자 활성화 chain 이 살아있어 debugger 불필요.</td></tr>
+  <tr><td><code>offscreen</code></td><td>m4a/mp4 → mp3 client-side transcode. SW 환경엔 <code>AudioContext</code> 가 없어 offscreen document 가 디코드 + lamejs 인코드. bulk 작업 동안만 활성, 종료 시 close.</td></tr>
   <tr><td><code>host_permissions: notebooklm.google.com</code></td><td>NotebookLM 페이지 DOM 에서 카드 정보 읽기.</td></tr>
   <tr><td><code>host_permissions: *.googleusercontent.com, *.usercontent.google.com, accounts.google.com, lh3.google.com</code></td><td>audio CDN / 인증 redirect 체인 통과 (자세한 이유: IMPLEMENTATION_NOTES §2).</td></tr>
   <tr><td><code>host_permissions: api.github.com</code></td><td>본인 repo 에 audio / RSS push.</td></tr>

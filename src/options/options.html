@@ -82,15 +82,6 @@
   table.episodes .col-check { width: 24px; text-align: center; padding-right: 0; }
   table.episodes .col-actions { width: 100px; text-align: right; white-space: nowrap; }
   table.episodes tr.group-header td { background: #f4f7fb; font-size: 11px; font-weight: 600; color: #1e3a8a; padding: 5px 8px; border-top: 1px solid #d8e4f4; }
-  table.episodes tr.edit-row { display: none; }
-  table.episodes tr.edit-row.open { display: table-row; }
-  table.episodes tr.edit-row td { background: #fffbeb; padding: 10px; border-bottom: 1px solid #fcd34d; }
-  table.episodes tr.edit-row .edit-grid { display: grid; grid-template-columns: 110px 1fr 1fr auto auto; gap: 6px; align-items: end; }
-  table.episodes tr.edit-row label { margin-top: 0; font-size: 10px; }
-  table.episodes tr.edit-row input { padding: 5px 7px; font-size: 12px; margin-top: 2px; }
-  table.episodes tr.edit-row button { margin-top: 0; padding: 6px 12px; font-size: 12px; }
-  table.episodes tr.edit-row button.cancel { background: #6b7280; }
-  table.episodes tr.edit-row button.cancel:hover { background: #4b5563; }
   .ep-toolbar { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
   .ep-toolbar button { margin-top: 0; padding: 5px 10px; font-size: 11px; background: #fff; color: #444; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; }
   .ep-toolbar button:hover:not(:disabled) { background: #f9fafb; }
@@ -100,8 +91,9 @@
   .ep-toolbar button:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
   .ep-toolbar .selected-count { font-size: 11px; color: #555; margin-left: auto; }
   button.ep-action { margin: 0; padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 0; cursor: pointer; }
-  button.ep-action.edit { background: #6b7280; color: #fff; margin-right: 4px; }
-  button.ep-action.edit:hover:not(:disabled) { background: #4b5563; }
+  button.ep-action.edit { background: #0ea5e9; color: #fff; margin-right: 4px; text-decoration: none; display: inline-block; }
+  button.ep-action.edit:hover:not(:disabled) { background: #0284c7; }
+  button.ep-action.edit:disabled { background: #cbd5e1; cursor: not-allowed; }
   button.ep-action.danger { background: #dc2626; color: #fff; }
   button.ep-action.danger:hover:not(:disabled) { background: #b91c1c; }
   .ep-summary { font-size: 11px; color: #666; }
@@ -294,7 +286,7 @@
 </form>
 
 <h2 class="section">푸시된 에피소드</h2>
-<p class="sub">repo 의 <code>docs/episodes/</code> 에 저장된 음성개요 목록. 클릭으로 정렬, 노트북별 그룹, 다중 선택 삭제 가능. 편집은 파일명 (날짜·노트북·제목) 변경이라 RSS GUID 가 새로 잡혀 팟캐스트 앱에서 새 에피소드로 보일 수 있습니다.</p>
+<p class="sub">repo 의 <code>docs/episodes/</code> 에 저장된 음성개요 목록. 클릭으로 정렬, 노트북별 그룹, 다중 선택 삭제 가능. <strong>[편집]</strong> 은 해당 NotebookLM 노트북을 새 탭으로 열어 — 제목/내용은 거기서 직접 수정하시고, 잘못 받은 카드는 여기서 삭제 후 다음 sweep 에서 새로 받습니다.</p>
 
 <div class="ep-toolbar">
   <button type="button" id="ep-reload">↻ 새로고침</button>
