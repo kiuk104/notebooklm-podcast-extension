@@ -66,6 +66,49 @@
   .task-actions { margin-top: 10px; display: flex; gap: 6px; }
   .task-actions button { padding: 4px 10px; font-size: 11px; background: #fff; color: #444; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; margin-top: 0; }
   .task-actions button:hover { background: #f9fafb; }
+
+  /* 에피소드 목록 — v1 admin 과 같은 패턴 (sortable / group / bulk / rename). */
+  table.episodes { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+  table.episodes th, table.episodes td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
+  table.episodes th { background: #fafafa; font-weight: 600; font-size: 11px; color: #555; }
+  table.episodes th.sortable { cursor: pointer; user-select: none; }
+  table.episodes th.sortable:hover { background: #f0f0f0; }
+  table.episodes th.sortable .arrow { color: #ccc; margin-left: 4px; font-size: 10px; }
+  table.episodes th.sortable.sort-asc .arrow,
+  table.episodes th.sortable.sort-desc .arrow { color: #2563eb; }
+  table.episodes td.num { text-align: right; color: #666; font-variant-numeric: tabular-nums; }
+  table.episodes .title { color: #111; font-weight: 500; word-break: break-word; }
+  table.episodes .notebook { color: #666; font-size: 11px; word-break: break-word; }
+  table.episodes .col-check { width: 24px; text-align: center; padding-right: 0; }
+  table.episodes .col-actions { width: 100px; text-align: right; white-space: nowrap; }
+  table.episodes tr.group-header td { background: #f4f7fb; font-size: 11px; font-weight: 600; color: #1e3a8a; padding: 5px 8px; border-top: 1px solid #d8e4f4; }
+  table.episodes tr.edit-row { display: none; }
+  table.episodes tr.edit-row.open { display: table-row; }
+  table.episodes tr.edit-row td { background: #fffbeb; padding: 10px; border-bottom: 1px solid #fcd34d; }
+  table.episodes tr.edit-row .edit-grid { display: grid; grid-template-columns: 110px 1fr 1fr auto auto; gap: 6px; align-items: end; }
+  table.episodes tr.edit-row label { margin-top: 0; font-size: 10px; }
+  table.episodes tr.edit-row input { padding: 5px 7px; font-size: 12px; margin-top: 2px; }
+  table.episodes tr.edit-row button { margin-top: 0; padding: 6px 12px; font-size: 12px; }
+  table.episodes tr.edit-row button.cancel { background: #6b7280; }
+  table.episodes tr.edit-row button.cancel:hover { background: #4b5563; }
+  .ep-toolbar { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .ep-toolbar button { margin-top: 0; padding: 5px 10px; font-size: 11px; background: #fff; color: #444; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; }
+  .ep-toolbar button:hover:not(:disabled) { background: #f9fafb; }
+  .ep-toolbar button.toggle.on { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+  .ep-toolbar button.batch-delete { background: #dc2626; color: #fff; border-color: #dc2626; }
+  .ep-toolbar button.batch-delete:hover:not(:disabled) { background: #b91c1c; }
+  .ep-toolbar button:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+  .ep-toolbar .selected-count { font-size: 11px; color: #555; margin-left: auto; }
+  button.ep-action { margin: 0; padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 0; cursor: pointer; }
+  button.ep-action.edit { background: #6b7280; color: #fff; margin-right: 4px; }
+  button.ep-action.edit:hover:not(:disabled) { background: #4b5563; }
+  button.ep-action.danger { background: #dc2626; color: #fff; }
+  button.ep-action.danger:hover:not(:disabled) { background: #b91c1c; }
+  .ep-summary { font-size: 11px; color: #666; }
+  .ep-empty { color: #888; font-size: 12px; padding: 16px 0; text-align: center; font-style: italic; }
+  .format-tag { display: inline-block; padding: 1px 5px; font-size: 10px; border-radius: 3px; background: #e5e7eb; color: #374151; font-family: ui-monospace, Consolas, monospace; }
+  .format-tag.mp3 { background: #dcfce7; color: #166534; }
+  .format-tag.m4a, .format-tag.mp4 { background: #fef3c7; color: #92400e; }
 </style>
 </head>
 <body>
@@ -249,6 +292,34 @@
   </div>
   <div id="meta-status" class="status" style="display:none"></div>
 </form>
+
+<h2 class="section">푸시된 에피소드</h2>
+<p class="sub">repo 의 <code>docs/episodes/</code> 에 저장된 음성개요 목록. 클릭으로 정렬, 노트북별 그룹, 다중 선택 삭제 가능. 편집은 파일명 (날짜·노트북·제목) 변경이라 RSS GUID 가 새로 잡혀 팟캐스트 앱에서 새 에피소드로 보일 수 있습니다.</p>
+
+<div class="ep-toolbar">
+  <button type="button" id="ep-reload">↻ 새로고침</button>
+  <button type="button" class="toggle" id="ep-group-toggle">노트북별 그룹화</button>
+  <button type="button" id="ep-reset-sort">정렬 초기화 (날짜 ↓)</button>
+  <span class="ep-summary" id="ep-summary"></span>
+  <span class="selected-count" id="ep-selected-count"></span>
+  <button type="button" class="batch-delete" id="ep-batch-delete" disabled>선택 삭제</button>
+</div>
+<div id="ep-status" class="status" style="display:none"></div>
+<table class="episodes" id="ep-table" style="display:none">
+  <thead>
+    <tr>
+      <th class="col-check"><input type="checkbox" id="ep-check-all"></th>
+      <th class="sortable" data-key="date">날짜<span class="arrow">▲▼</span></th>
+      <th class="sortable" data-key="notebook">노트북<span class="arrow">▲▼</span></th>
+      <th class="sortable" data-key="title">제목<span class="arrow">▲▼</span></th>
+      <th class="sortable" data-key="format">형식<span class="arrow">▲▼</span></th>
+      <th class="sortable num" data-key="size">크기<span class="arrow">▲▼</span></th>
+      <th class="col-actions"></th>
+    </tr>
+  </thead>
+  <tbody id="ep-tbody"></tbody>
+</table>
+<p class="ep-empty" id="ep-empty" style="display:none">아직 푸시된 에피소드가 없거나 token/repo 설정 후 [↻ 새로고침] 클릭하세요.</p>
 
 <p style="margin-top: 28px; font-size: 12px; color: #666;">
   처음 사용하시나요? <a href="../help/help.html" target="_blank">도움말 페이지</a> 에 GitHub repo 셋업 / Pages 활성화 / RSS feed 생성 방법이 있습니다.

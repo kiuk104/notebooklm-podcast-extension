@@ -680,5 +680,293 @@ metaImageUploadEl.addEventListener("change", async (e) => {
   const stored = await chrome.storage.local.get(["token", "repo"]);
   if (stored.token && stored.repo && REPO_RE.test(stored.repo)) {
     loadPodcastMeta();
+    loadEpisodeList();
   }
 })();
+
+// ---------- 에피소드 목록 (push 된 docs/episodes/ 의 row-level 관리) ----------
+
+const epReloadBtn = document.getElementById("ep-reload");
+const epGroupToggleBtn = document.getElementById("ep-group-toggle");
+const epResetSortBtn = document.getElementById("ep-reset-sort");
+const epSummaryEl = document.getElementById("ep-summary");
+const epSelectedCountEl = document.getElementById("ep-selected-count");
+const epBatchDeleteBtn = document.getElementById("ep-batch-delete");
+const epStatusEl = document.getElementById("ep-status");
+const epTableEl = document.getElementById("ep-table");
+const epTbody = document.getElementById("ep-tbody");
+const epEmptyEl = document.getElementById("ep-empty");
+const epCheckAll = document.getElementById("ep-check-all");
+
+let epItems = [];                    // 서버에서 받은 원본 (정렬 대상)
+let epSortKey = "date";              // date / notebook / title / format / size
+let epSortDir = "desc";              // asc / desc
+let epGroupOn = false;
+const epEditOpen = new Set();        // 편집창 열려있는 filename 들
+
+// background.js 의 slugify 와 동등 — 파일명 segment 가 호환되어야 dedup / RSS
+// 파싱이 깨지지 않음. SLUG_MAX = 40.
+const EP_SLUG_MAX = 40;
+function epSlugify(text) {
+  if (!text) return "episode";
+  let s = text.trim().replace(/\s+/g, "-");
+  s = s.replace(/[^0-9A-Za-z가-힣\-_]/g, "");
+  return s.slice(0, EP_SLUG_MAX) || "episode";
+}
+function epFmtSize(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function epShowStatus(text, kind) {
+  if (!text) { epStatusEl.style.display = "none"; return; }
+  epStatusEl.textContent = text;
+  epStatusEl.className = "status " + (kind || "");
+  epStatusEl.style.display = "block";
+}
+
+async function loadEpisodeList() {
+  epShowStatus("목록 로드 중…", "");
+  epReloadBtn.disabled = true;
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "episodes:list:full" });
+    if (!r?.ok) {
+      epShowStatus(`로드 실패: ${r?.error || "알 수 없음"}`, "error");
+      epTableEl.style.display = "none";
+      epEmptyEl.style.display = "none";
+      return;
+    }
+    epItems = r.items || [];
+    const totalMB = (r.totalSize || 0) / 1024 / 1024;
+    epSummaryEl.textContent = `${epItems.length}개 · ${totalMB.toFixed(1)} MB`;
+    if (epItems.length === 0) {
+      epTableEl.style.display = "none";
+      epEmptyEl.style.display = "block";
+      epShowStatus("");
+      return;
+    }
+    epTableEl.style.display = "";
+    epEmptyEl.style.display = "none";
+    renderEpisodeTable();
+    epShowStatus("");
+  } catch (e) {
+    epShowStatus(`로드 실패: ${e.message}`, "error");
+  } finally {
+    epReloadBtn.disabled = false;
+  }
+}
+
+function epSortedItems() {
+  const sorted = epItems.slice().sort((a, b) => {
+    let va = a[epSortKey], vb = b[epSortKey];
+    if (epSortKey === "size") { va = +va; vb = +vb; }
+    else { va = String(va || "").toLowerCase(); vb = String(vb || "").toLowerCase(); }
+    if (va < vb) return epSortDir === "asc" ? -1 : 1;
+    if (va > vb) return epSortDir === "asc" ? 1 : -1;
+    return 0;
+  });
+  if (!epGroupOn) return sorted;
+  // group on: notebook 안에서 이미 정렬된 순서 유지하면서 그룹 묶음.
+  const groups = new Map();
+  for (const it of sorted) {
+    if (!groups.has(it.notebook)) groups.set(it.notebook, []);
+    groups.get(it.notebook).push(it);
+  }
+  // 그룹 키 자체는 알파벳 순으로 정렬해 안정적.
+  return Array.from(groups.keys()).sort().flatMap((nb) =>
+    [{ __groupHeader: true, notebook: nb, count: groups.get(nb).length }, ...groups.get(nb)]
+  );
+}
+
+function renderEpisodeTable() {
+  // 정렬 화살표 표시.
+  document.querySelectorAll("#ep-table th.sortable").forEach((th) => {
+    th.classList.remove("sort-asc", "sort-desc");
+    if (th.dataset.key === epSortKey) th.classList.add(epSortDir === "asc" ? "sort-asc" : "sort-desc");
+  });
+
+  const items = epSortedItems();
+  const html = items.map((it) => {
+    if (it.__groupHeader) {
+      return `<tr class="group-header"><td colspan="7">📓 ${escapeHtml(it.notebook)}  (${it.count}개)</td></tr>`;
+    }
+    const ymd = it.date;
+    const editOpen = epEditOpen.has(it.filename);
+    const fmtClass = `format-tag ${escapeHtml(it.format)}`;
+    return `
+      <tr class="ep-row" data-filename="${escapeHtml(it.filename)}" data-sha="${escapeHtml(it.sha)}">
+        <td class="col-check"><input type="checkbox" class="ep-check"></td>
+        <td>${escapeHtml(ymd)}</td>
+        <td class="notebook">${escapeHtml(it.notebook)}</td>
+        <td class="title" title="${escapeHtml(it.filename)}">${escapeHtml(it.title)}</td>
+        <td><span class="${fmtClass}">${escapeHtml(it.format)}</span></td>
+        <td class="num">${escapeHtml(epFmtSize(it.size))}</td>
+        <td class="col-actions">
+          <button type="button" class="ep-action edit">편집</button>
+          <button type="button" class="ep-action danger">삭제</button>
+        </td>
+      </tr>
+      <tr class="edit-row${editOpen ? " open" : ""}" data-for="${escapeHtml(it.filename)}">
+        <td colspan="7">
+          <div class="edit-grid">
+            <label>날짜<input type="date" class="edit-date" value="${escapeHtml(ymd)}"></label>
+            <label>노트북<input type="text" class="edit-notebook" value="${escapeHtml(it.notebook)}"></label>
+            <label>제목<input type="text" class="edit-title" value="${escapeHtml(it.title)}"></label>
+            <button type="button" class="edit-save">저장</button>
+            <button type="button" class="cancel">취소</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+  epTbody.innerHTML = html;
+  refreshBatchUI();
+}
+
+function refreshBatchUI() {
+  const checked = epTbody.querySelectorAll(".ep-check:checked").length;
+  const total = epTbody.querySelectorAll(".ep-check").length;
+  epSelectedCountEl.textContent = checked ? `${checked}개 선택됨` : "";
+  epBatchDeleteBtn.disabled = checked === 0;
+  epCheckAll.indeterminate = checked > 0 && checked < total;
+  epCheckAll.checked = checked > 0 && checked === total;
+}
+
+epReloadBtn.addEventListener("click", () => loadEpisodeList());
+
+document.querySelectorAll("#ep-table th.sortable").forEach((th) => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (epSortKey === key) epSortDir = epSortDir === "asc" ? "desc" : "asc";
+    else { epSortKey = key; epSortDir = "asc"; }
+    renderEpisodeTable();
+  });
+});
+
+epResetSortBtn.addEventListener("click", () => {
+  epSortKey = "date"; epSortDir = "desc"; renderEpisodeTable();
+});
+
+epGroupToggleBtn.addEventListener("click", () => {
+  epGroupOn = !epGroupOn;
+  epGroupToggleBtn.classList.toggle("on", epGroupOn);
+  renderEpisodeTable();
+});
+
+epCheckAll.addEventListener("change", () => {
+  epTbody.querySelectorAll(".ep-check").forEach((cb) => { cb.checked = epCheckAll.checked; });
+  refreshBatchUI();
+});
+
+epTbody.addEventListener("change", (e) => {
+  if (e.target.classList.contains("ep-check")) refreshBatchUI();
+});
+
+epTbody.addEventListener("click", async (e) => {
+  // 편집 토글
+  if (e.target.classList.contains("edit") || e.target.closest("button.edit")) {
+    const row = e.target.closest("tr.ep-row");
+    if (!row) return;
+    const fn = row.dataset.filename;
+    if (epEditOpen.has(fn)) epEditOpen.delete(fn); else epEditOpen.add(fn);
+    const er = epTbody.querySelector(`tr.edit-row[data-for="${CSS.escape(fn)}"]`);
+    if (er) er.classList.toggle("open");
+    return;
+  }
+  // 편집 취소
+  if (e.target.classList.contains("cancel")) {
+    const er = e.target.closest("tr.edit-row");
+    if (er) {
+      er.classList.remove("open");
+      epEditOpen.delete(er.dataset.for);
+    }
+    return;
+  }
+  // 편집 저장 (rename)
+  if (e.target.classList.contains("edit-save")) {
+    const er = e.target.closest("tr.edit-row");
+    if (!er) return;
+    const oldFilename = er.dataset.for;
+    const item = epItems.find((x) => x.filename === oldFilename);
+    if (!item) return;
+    const dateStr = er.querySelector(".edit-date").value; // YYYY-MM-DD
+    const nbStr = er.querySelector(".edit-notebook").value.trim();
+    const titleStr = er.querySelector(".edit-title").value.trim();
+    if (!dateStr || !nbStr || !titleStr) {
+      epShowStatus("날짜·노트북·제목 모두 채워야 합니다.", "error");
+      return;
+    }
+    const dateRaw = dateStr.replace(/-/g, "");
+    const nbSlug = epSlugify(nbStr);
+    const titleSlug = epSlugify(titleStr);
+    // 4-segment 포맷 보존: shortId 가 있으면 가운데 끼워넣음. 없으면 3-segment.
+    const newFilename = item.shortId
+      ? `${dateRaw}__${nbSlug}__${item.shortId}__${titleSlug}.${item.format}`
+      : `${dateRaw}__${nbSlug}__${titleSlug}.${item.format}`;
+    if (newFilename === oldFilename) {
+      epShowStatus("변경 사항 없음.", "");
+      er.classList.remove("open");
+      epEditOpen.delete(oldFilename);
+      return;
+    }
+    e.target.disabled = true;
+    epShowStatus(`이름 변경 중: ${oldFilename} → ${newFilename}…`, "");
+    try {
+      const r = await chrome.runtime.sendMessage({
+        type: "episodes:rename",
+        oldFilename, newFilename, blobSha: item.sha,
+      });
+      if (!r?.ok) throw new Error(r?.error || "rename 실패");
+      epShowStatus(`✓ rename 완료 — feed 워크플로가 재빌드합니다.`, "success");
+      epEditOpen.delete(oldFilename);
+      await loadEpisodeList();
+    } catch (err) {
+      epShowStatus(`rename 실패: ${err.message}`, "error");
+      e.target.disabled = false;
+    }
+    return;
+  }
+  // 단일 삭제
+  if (e.target.classList.contains("danger")) {
+    const row = e.target.closest("tr.ep-row");
+    if (!row) return;
+    const fn = row.dataset.filename;
+    const sha = row.dataset.sha;
+    if (!confirm(`정말 삭제할까요?\n${fn}`)) return;
+    e.target.disabled = true;
+    epShowStatus(`삭제 중: ${fn}…`, "");
+    try {
+      const r = await chrome.runtime.sendMessage({
+        type: "episodes:delete", filename: fn, sha,
+      });
+      if (!r?.ok) throw new Error(r?.error || "삭제 실패");
+      epShowStatus(`✓ 삭제됨: ${fn}`, "success");
+      await loadEpisodeList();
+    } catch (err) {
+      epShowStatus(`삭제 실패: ${err.message}`, "error");
+      e.target.disabled = false;
+    }
+    return;
+  }
+});
+
+epBatchDeleteBtn.addEventListener("click", async () => {
+  const targets = Array.from(epTbody.querySelectorAll(".ep-check:checked")).map((cb) => {
+    const row = cb.closest("tr.ep-row");
+    return { filename: row.dataset.filename, sha: row.dataset.sha };
+  });
+  if (targets.length === 0) return;
+  if (!confirm(`${targets.length}개 에피소드를 삭제할까요?`)) return;
+  epBatchDeleteBtn.disabled = true;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < targets.length; i++) {
+    epShowStatus(`삭제 중 (${i + 1}/${targets.length}): ${targets[i].filename.slice(0, 50)}…`, "");
+    try {
+      const r = await chrome.runtime.sendMessage({
+        type: "episodes:delete",
+        filename: targets[i].filename, sha: targets[i].sha,
+      });
+      if (r?.ok) ok++; else fail++;
+    } catch { fail++; }
+  }
+  epShowStatus(`✓ 삭제 완료 — 성공 ${ok} / 실패 ${fail}`, fail > 0 ? "error" : "success");
+  await loadEpisodeList();
+});

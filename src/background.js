@@ -181,6 +181,102 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return false;
   }
+  if (msg?.type === "episodes:list:full") {
+    // 옵션 페이지의 "푸시된 에피소드" 목록용. 파일명 4-segment 포맷을 풀어서
+    // date / notebook / shortId / title / sha / size / format 까지 노출.
+    // 옛 3-segment 포맷도 호환 (shortId 없음 — 표에선 빈칸).
+    (async () => {
+      try {
+        const cfg = await chrome.storage.local.get(["token", "repo"]);
+        if (!cfg.token || !cfg.repo) {
+          sendResponse({ ok: false, error: "GitHub 설정 없음 (token/repo)" });
+          return;
+        }
+        const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
+        const FILENAME_RE = /^(\d{8})__(.+?)__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$/i;
+        const items = [];
+        for (const f of list) {
+          const m = FILENAME_RE.exec(f.name);
+          if (!m) continue;
+          const [, date, notebookSlug, shortId, titleSlug, ext] = m;
+          items.push({
+            filename: f.name,
+            sha: f.sha,
+            size: f.size,
+            date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`,
+            dateRaw: date,
+            notebook: notebookSlug.replace(/-/g, " "),
+            shortId: shortId || "",
+            title: titleSlug.replace(/-/g, " "),
+            format: ext.toLowerCase(),
+          });
+        }
+        // 최신순
+        items.sort((a, b) => b.dateRaw.localeCompare(a.dateRaw) || b.filename.localeCompare(a.filename));
+        sendResponse({ ok: true, items, totalSize: items.reduce((s, i) => s + i.size, 0) });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // async
+  }
+  if (msg?.type === "episodes:rename") {
+    // Tree-based rename — 같은 blob 을 새 경로로 가리키고 옛 경로는 제거. 콘텐츠
+    // 전송 없음, 5 API call 로 ~3-5초. v1 admin 의 inline edit (date/notebook/
+    // title) 와 동등.
+    (async () => {
+      try {
+        const cfg = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+        if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음");
+        const { oldFilename, newFilename, blobSha } = msg;
+        if (!oldFilename || !newFilename || !blobSha) {
+          throw new Error("oldFilename/newFilename/blobSha 누락");
+        }
+        if (oldFilename === newFilename) {
+          sendResponse({ ok: true, unchanged: true });
+          return;
+        }
+        const committer = cfg.committerName && cfg.committerEmail
+          ? { name: cfg.committerName, email: cfg.committerEmail } : null;
+        await renameViaGitData(
+          cfg.repo,
+          `docs/episodes/${oldFilename}`,
+          `docs/episodes/${newFilename}`,
+          blobSha,
+          cfg.token,
+          committer,
+        );
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // async
+  }
+  if (msg?.type === "episodes:delete") {
+    // 단일 파일 ghDelete. 옵션 페이지의 [삭제] 버튼.
+    (async () => {
+      try {
+        const cfg = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+        if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음");
+        if (!msg.filename || !msg.sha) throw new Error("filename/sha 누락");
+        const committer = cfg.committerName && cfg.committerEmail
+          ? { name: cfg.committerName, email: cfg.committerEmail } : null;
+        await ghDelete(
+          cfg.repo,
+          `docs/episodes/${msg.filename}`,
+          msg.sha,
+          `Drop episode: ${msg.filename}`,
+          cfg.token,
+          committer,
+        );
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // async
+  }
   if (msg?.type === "list:pushed") {
     // popup 의 bulk 모드에서 "이미 받은 카드" 를 default 미체크로 두기 위한 사전 점검.
     // ghList 가 실패해도 popup 흐름이 멈추면 안 되므로 빈 배열로 fallback.
@@ -1313,6 +1409,49 @@ async function ghPutLargeFile(repo, path, contentB64, message, token, committer)
 
   // Contents API 의 응답 형태를 흉내내 호출자가 기대하는 모양으로 반환 (size 등).
   return { content: { sha: blob.sha, path }, commit };
+}
+
+// Git Data API 로 path-only rename (blob 그대로, content 전송 없음).
+// Tree 에 [old: sha=null (delete), new: sha=oldBlobSha (add)] 한 번에 → commit
+// → ref. v1 admin 의 inline edit 와 동등한 결과 (date/notebook/title 변경 시).
+async function renameViaGitData(repo, oldPath, newPath, blobSha, token, committer) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  const ghCall = async (method, urlPath, body) => {
+    const r = await fetch(`https://api.github.com/repos/${repo}${urlPath}`, {
+      method, headers,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    if (!r.ok) throw new Error(`${method} ${urlPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
+    return r.json();
+  };
+  const repoMeta = await ghCall("GET", "");
+  const branch = repoMeta.default_branch || "main";
+  const ref = await ghCall("GET", `/git/ref/heads/${branch}`);
+  const parentCommitSha = ref.object.sha;
+  const parentCommit = await ghCall("GET", `/git/commits/${parentCommitSha}`);
+  const baseTreeSha = parentCommit.tree.sha;
+  const tree = await ghCall("POST", "/git/trees", {
+    base_tree: baseTreeSha,
+    tree: [
+      { path: oldPath, mode: "100644", type: "blob", sha: null },     // delete
+      { path: newPath, mode: "100644", type: "blob", sha: blobSha },  // add (same blob)
+    ],
+  });
+  const commitBody = {
+    message: `Rename episode: ${oldPath.split("/").pop()} → ${newPath.split("/").pop()}`,
+    tree: tree.sha,
+    parents: [parentCommitSha],
+  };
+  if (committer) { commitBody.author = committer; commitBody.committer = committer; }
+  const commit = await ghCall("POST", "/git/commits", commitBody);
+  await ghCall("PATCH", `/git/refs/heads/${branch}`, { sha: commit.sha });
+  return { content: { sha: blobSha, path: newPath }, commit };
 }
 
 function extOf(name) {
