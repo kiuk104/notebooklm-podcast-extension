@@ -101,10 +101,40 @@
     });
   }
 
-  async function clickDownload(index) {
-    const cards = getAudioCardEls();
-    const card = cards[index];
-    if (!card) throw new Error(`card #${index} 없음`);
+  // artifactId (UUID) 가 주어지면 그걸로 카드 찾고, 없으면 index 로 fallback.
+  // 이 두 단계를 한 번 시도해 실패하면 lazy-render 가 미완료된 케이스를 가정해
+  // scrollToLoadAll 후 재탐색. NotebookLM 이 카드를 비동기로 추가하는 동안
+  // bulk:remote 가 download 메시지를 보내면 첫 시도는 빈 DOM 을 본다.
+  async function findCard({ artifactId, index }) {
+    const tryFind = () => {
+      const cards = getAudioCardEls();
+      if (artifactId) {
+        const byId = cards.find((c) => getArtifactId(c) === artifactId);
+        if (byId) return byId;
+      }
+      if (typeof index === "number" && cards[index]) return cards[index];
+      return null;
+    };
+
+    let card = tryFind();
+    if (card) return card;
+
+    // 첫 탐색 실패 — 페이지가 lazy render 중일 가능성. 짧게 한 번 더 기다려본다.
+    await new Promise((r) => setTimeout(r, 800));
+    card = tryFind();
+    if (card) return card;
+
+    // 여전히 없음 — scrollToLoadAll 로 강제 렌더 후 마지막 시도.
+    await scrollToLoadAll();
+    card = tryFind();
+    if (card) return card;
+
+    if (artifactId) throw new Error(`artifact ${artifactId.slice(0, 8)} 카드 못 찾음 (lazy render 미완료 또는 카드 삭제됨)`);
+    throw new Error(`card #${index} 없음`);
+  }
+
+  async function clickDownload({ artifactId, index }) {
+    const card = await findCard({ artifactId, index });
 
     const more = card.querySelector(SEL.moreButton);
     if (!more) throw new Error("⋮ 버튼을 못 찾음");
@@ -148,10 +178,16 @@
       (async () => {
         try {
           const cover = getCover();
-          const cards = getAudioCards();
-          const card = cards[msg.index];
-          if (!card) throw new Error(`card #${msg.index} 없음`);
-          if (card.isPlaceholder) {
+          // artifactId 우선 매칭 + lazy render fallback. msg.artifactId 가 없으면
+          // 옛 popup (single download) 처럼 index 만으로 동작.
+          const targetEl = await findCard({ artifactId: msg.artifactId, index: msg.index });
+          const cardData = {
+            title: targetEl.querySelector(SEL.cardTitle)?.textContent?.trim() ?? "",
+            artifactId: getArtifactId(targetEl),
+            isPlaceholder: false,
+          };
+          cardData.isPlaceholder = PLACEHOLDER_TITLE_RE.test(cardData.title);
+          if (cardData.isPlaceholder) {
             throw new Error("제목이 아직 'audio N' 플레이스홀더입니다. 잠시 후 다시 시도하세요.");
           }
 
@@ -160,13 +196,13 @@
             payload: {
               notebookTitle: cover.title,
               coverDateAttr: cover.dateAttr,
-              episodeTitle: card.title,
-              artifactId: card.artifactId,
+              episodeTitle: cardData.title,
+              artifactId: cardData.artifactId,
             },
           });
 
-          await clickDownload(msg.index);
-          sendResponse({ ok: true, episodeTitle: card.title });
+          await clickDownload({ artifactId: cardData.artifactId, index: msg.index });
+          sendResponse({ ok: true, episodeTitle: cardData.title });
         } catch (e) {
           sendResponse({ ok: false, error: e.message });
         }

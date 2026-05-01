@@ -91,9 +91,13 @@ function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId
   btn.addEventListener("click", () => {
     if (isRemote) {
       // remote 단건도 bulk:remote 1건으로 처리.
-      runBulkRemote([{ notebookUrl, cardIndex: idx, episodeTitle: audio.title }]);
+      runBulkRemote([{
+        notebookUrl, cardIndex: idx,
+        artifactId: audio.artifactId || "",
+        episodeTitle: audio.title,
+      }]);
     } else {
-      downloadOneSingle(tabId, idx);
+      downloadOneSingle(tabId, idx, audio.artifactId);
     }
   });
 
@@ -103,6 +107,7 @@ function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId
   cardMeta.set(li, {
     notebookUrl,
     cardIndex: idx,
+    artifactId: audio.artifactId || "",
     episodeTitle: audio.title,
     isPlaceholder: audio.isPlaceholder,
     alreadyPushed,
@@ -162,7 +167,7 @@ selectAllEl.addEventListener("change", () => {
 
 // ----- Single 모드 다운로드 (active 탭의 content script 직접 호출) -----
 
-async function downloadOneSingle(tabId, index) {
+async function downloadOneSingle(tabId, index, artifactId) {
   const liEls = cardsEl.querySelectorAll("li");
   // single 모드는 헤더 없이 카드만 있으므로 nth li = idx 와 일치 — viewMode === "single".
   const li = liEls[index];
@@ -175,7 +180,7 @@ async function downloadOneSingle(tabId, index) {
   setRow(state, "", "받는 중…");
   let resp;
   try {
-    resp = await chrome.tabs.sendMessage(tabId, { type: "download", index });
+    resp = await chrome.tabs.sendMessage(tabId, { type: "download", index, artifactId });
   } catch (e) {
     setRow(state, "err", "✗", e.message);
     if (btn) btn.disabled = false;
@@ -227,7 +232,8 @@ bulkDlBtn.addEventListener("click", async () => {
     await runBulkLocal(tab.id, items);
   } else {
     runBulkRemote(items.map((i) => ({
-      notebookUrl: i.notebookUrl, cardIndex: i.cardIndex, episodeTitle: i.episodeTitle,
+      notebookUrl: i.notebookUrl, cardIndex: i.cardIndex,
+      artifactId: i.artifactId, episodeTitle: i.episodeTitle,
     })));
   }
 });
@@ -251,7 +257,7 @@ async function runBulkLocal(tabId, items) {
   setStatus(`bulk: ${items.length}개 다운로드 중 (0/${items.length})`, "");
   let done = 0;
   for (const item of items) {
-    await downloadOneSingle(tabId, item.cardIndex);
+    await downloadOneSingle(tabId, item.cardIndex, item.artifactId);
     done += 1;
     setStatus(`bulk: ${items.length}개 다운로드 중 (${done}/${items.length})`, "");
   }

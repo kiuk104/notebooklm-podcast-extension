@@ -507,6 +507,9 @@ async function buildNewSelections(notebooks, repo, token) {
       selections.push({
         notebookUrl: nb.url,
         cardIndex: idx,
+        // artifactId 가 함께 가야 다운로드 시점에 lazy-render 로 인덱스가 바뀌어도
+        // UUID 매칭으로 정확한 카드를 짚는다 (content.js findCard).
+        artifactId: audio.artifactId || "",
         episodeTitle: audio.title,
       });
     });
@@ -817,7 +820,12 @@ async function runBulkRemote(selections) {
         try {
           // sendMessageWithTimeout 으로 NotebookLM 탭이 freeze 됐을 때 영구 pending 차단.
           // content.js 의 download 핸들러는 보통 1~3초 안에 응답 (메뉴 polling 포함) — 30초 timeout 충분.
-          const r = await sendMessageWithTimeout(tabId, { type: "download", index: item.cardIndex }, 30000);
+          // artifactId 는 UUID 매칭으로 lazy-render 인덱스 흔들림 방어 (content.js findCard).
+          const r = await sendMessageWithTimeout(
+            tabId,
+            { type: "download", index: item.cardIndex, artifactId: item.artifactId },
+            30000,
+          );
           if (!r?.ok) {
             emitEvent("bulk:remote:result", {
               episodeTitle: item.episodeTitle, ok: false, error: r?.error || "메뉴 클릭 실패",
