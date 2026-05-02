@@ -759,17 +759,26 @@ async function closeOffscreenDocument() {
   } catch {}
 }
 
-// background → offscreen 메시지 round-trip. ArrayBuffer 는 structured clone 으로
-// 이동 (transfer 가 아니라 copy — 50MB audio 면 SW + offscreen 둘 다에 사본).
+// background → offscreen 메시지 round-trip. chrome.runtime.sendMessage 는 JSON
+// 직렬화를 사용해서 ArrayBuffer 가 prototype 을 잃고 빈 `{}` 로 도착함 — 그래서
+// 양쪽 모두 base64 로 인코딩해서 string 으로 넘긴다. 50MB raw → 67MB b64 string
+// (Chrome 메시지 크기 한도 ~128MB 안). chrome.runtime 의 알려진 함정.
 async function transcodeViaOffscreen(arrayBuffer, bitrate = 64, mono = true) {
   await ensureOffscreenDocument();
+  const audioBufferB64 = arrayBufferToBase64(arrayBuffer);
   const r = await chrome.runtime.sendMessage({
     type: "offscreen:transcode",
-    audioBuffer: arrayBuffer,
-    bitrate, mono,
+    audioBufferB64, bitrate, mono,
   });
   if (!r?.ok) throw new Error(r?.error || "transcode 실패");
-  return r.mp3;
+  return base64ToArrayBuffer(r.mp3B64);
+}
+
+function base64ToArrayBuffer(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 }
 
 // chrome.debugger 의 Input.dispatchMouseEvent 로 진짜 user input 을 주입.

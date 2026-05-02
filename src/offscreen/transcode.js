@@ -1,27 +1,46 @@
 // offscreen document — m4a/mp4 → mp3 64k mono 재인코딩.
-// SW (background) 에서 메시지로 ArrayBuffer 받아 디코드 + 인코드 후 ArrayBuffer
-// 로 회신. structured clone 이 ArrayBuffer 를 처리하지만 ownership transfer 는
-// 안 일어나서 SW 와 offscreen 메모리에 각각 사본이 생김 — 50MB audio 면 일시적
-// 으로 ~150MB peak. 더 큰 파일은 chunk 분할 필요할 수 있지만 NotebookLM 의
-// 일반적인 m4a 는 60MB 이하라 1-shot 으로 충분.
+// SW (background) 와는 base64 string 으로 주고받는다 — chrome.runtime.sendMessage
+// 가 JSON 직렬화를 써서 ArrayBuffer 를 그대로 못 보내기 때문 (binary → 빈 object
+// 로 도착). 50MB raw m4a → 67MB b64 string → 디코드 → ArrayBuffer → AudioContext
+// + lamejs → mp3 ArrayBuffer → 다시 base64 → SW 회신. 회신쪽 mp3 는 5MB 정도라
+// 저렴.
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type !== "offscreen:transcode") return false;
   (async () => {
     const t0 = Date.now();
     try {
+      const arrBuf = base64ToArrayBuffer(msg.audioBufferB64 || "");
       const mp3 = await transcodeM4aToMp3(
-        msg.audioBuffer,
+        arrBuf,
         msg.bitrate || 64,
         msg.mono !== false,
       );
-      sendResponse({ ok: true, mp3, elapsedMs: Date.now() - t0 });
+      const mp3B64 = arrayBufferToBase64(mp3);
+      sendResponse({ ok: true, mp3B64, elapsedMs: Date.now() - t0 });
     } catch (e) {
       sendResponse({ ok: false, error: e.message, elapsedMs: Date.now() - t0 });
     }
   })();
   return true; // async sendResponse
 });
+
+function base64ToArrayBuffer(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 0x8000;
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
 
 async function transcodeM4aToMp3(arrayBuffer, bitrateKbps, mono) {
   // 1. decode m4a/AAC → AudioBuffer (PCM Float32). Web Audio API 는 m4a 컨테이너
