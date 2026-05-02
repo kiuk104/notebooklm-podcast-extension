@@ -759,16 +759,16 @@ async function closeOffscreenDocument() {
   } catch {}
 }
 
-// background → offscreen 메시지 round-trip. chrome.runtime.sendMessage 는 JSON
-// 직렬화를 사용해서 ArrayBuffer 가 prototype 을 잃고 빈 `{}` 로 도착함 — 그래서
-// 양쪽 모두 base64 로 인코딩해서 string 으로 넘긴다. 50MB raw → 67MB b64 string
-// (Chrome 메시지 크기 한도 ~128MB 안). chrome.runtime 의 알려진 함정.
-async function transcodeViaOffscreen(arrayBuffer, bitrate = 64, mono = true) {
+// background → offscreen: URL 만 보내고 offscreen 이 직접 fetch + transcode.
+// 이전 시도 (SW 가 fetch 후 base64 string 으로 ArrayBuffer 전달) 는 큰 카드
+// (30MB+ raw → 40MB+ b64) 에서 chrome.runtime 메시지 채널이 끊어져 잦은
+// transcode 실패 + m4a 원본 fallback 으로 빠짐. 이 경로는 메시지 크기를 작게
+// (~200 byte URL + ~5MB mp3 b64 응답) 유지해서 채널 안정성 확보.
+async function transcodeViaOffscreen(audioUrl, bitrate = 64, mono = true) {
   await ensureOffscreenDocument();
-  const audioBufferB64 = arrayBufferToBase64(arrayBuffer);
   const r = await chrome.runtime.sendMessage({
-    type: "offscreen:transcode",
-    audioBufferB64, bitrate, mono,
+    type: "offscreen:transcode-url",
+    audioUrl, bitrate, mono,
   });
   if (!r?.ok) throw new Error(r?.error || "transcode 실패");
   return base64ToArrayBuffer(r.mp3B64);
@@ -1140,37 +1140,51 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   const stageLog = (stage) => console.log(`[push] ${stageFilename} ${stage} (+${Math.round((Date.now() - t0) / 1000)}s)`);
 
   const urlHost = (() => { try { return new URL(audioUrl).host; } catch { return "(invalid)"; } })();
-  console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
-  const r = await fetch(audioUrl, { credentials: "include" });
-  if (!r.ok) {
-    throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost} final=${r.url.slice(0, 80)}… redirected=${r.redirected}`);
-  }
-  let buf = await r.arrayBuffer();
-  let size = buf.byteLength;
-  stageLog(`fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
 
-  // m4a/mp4 (NotebookLM 기본 256k stereo) → mp3 64k mono 재인코딩. 50MB 가 ~5MB 로
-  // 줄어 GitHub Contents API 한계 (~37 MiB) 와 Git Data API blob 한계 (~40 MiB)
-  // 사이 사각지대를 회피. offscreen document 가 AudioContext.decodeAudioData +
-  // lamejs 로 처리. v1 의 src/audio_tools.py:transcode_to_mp3 와 동등.
+  // m4a/mp4 (NotebookLM 기본 256k stereo) 는 offscreen 이 직접 fetch + transcode
+  // 한 mp3 buffer 를 받아온다. SW 가 fetch 후 b64 string 을 offscreen 으로 보내던
+  // 이전 방식은 큰 카드 (30MB+) 에서 chrome.runtime 메시지 채널을 자주 끊어버림.
+  // 이 경로는 SW↔offscreen 사이 메시지를 작게 (URL 200 byte + mp3 b64 ~5MB 응답)
+  // 유지해서 채널 안정성 확보. v1 의 src/audio_tools.py:transcode_to_mp3 와 동등한
+  // 결과 (64k mono mp3, ~5MB / 30분).
+  let buf;
+  let size;
   const filenameExt = (filename.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
-  if (filenameExt === "m4a" || filenameExt === "mp4") {
+  const isAac = filenameExt === "m4a" || filenameExt === "mp4";
+
+  if (isAac) {
     try {
-      stageLog(`transcoding m4a→mp3 64k mono...`);
-      const mp3Buf = await transcodeViaOffscreen(buf, 64, true);
-      const newSize = mp3Buf.byteLength;
-      const oldFilename = filename;
+      stageLog(`fetch+transcode (offscreen) m4a→mp3 64k mono...`);
+      buf = await transcodeViaOffscreen(audioUrl, 64, true);
+      size = buf.byteLength;
       filename = filename.replace(/\.(m4a|mp4)$/i, ".mp3");
       stageFilename = filename;
-      buf = mp3Buf;
-      size = newSize;
-      stageLog(`transcoded ${(r.headers.get("content-length") || "?")} → ${(newSize / 1024 / 1024).toFixed(1)}MB`);
+      stageLog(`transcoded → ${(size / 1024 / 1024).toFixed(1)}MB`);
       // dedup hint 의 ext 도 mp3 으로 동기 — legacy 매칭이 일관되도록.
       if (dedupHints) dedupHints.ext = ".mp3";
     } catch (e) {
-      console.warn(`[push] transcode 실패, 원본 m4a 그대로 시도: ${e.message}`);
-      // transcode 실패 → 원본 buf 로 폴백. 50MB 초과면 ghPut 가 어차피 fail.
+      console.warn(`[push] offscreen transcode 실패, SW 가 원본 m4a 직접 fetch: ${e.message}`);
+      // Fallback: SW 가 fetch 후 그대로 push. 큰 m4a 면 ghPut 가 GitHub blob 한계
+      // 에러로 떨어질 수 있음.
+      console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
+      const r = await fetch(audioUrl, { credentials: "include" });
+      if (!r.ok) {
+        throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost}`);
+      }
+      buf = await r.arrayBuffer();
+      size = buf.byteLength;
+      stageLog(`fallback fetched ${(size / 1024 / 1024).toFixed(1)}MB (m4a 그대로)`);
     }
+  } else {
+    // mp3 / 기타 — SW 가 fetch + push (transcode 불필요).
+    console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
+    const r = await fetch(audioUrl, { credentials: "include" });
+    if (!r.ok) {
+      throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost} final=${r.url.slice(0, 80)}… redirected=${r.redirected}`);
+    }
+    buf = await r.arrayBuffer();
+    size = buf.byteLength;
+    stageLog(`fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
   }
 
   const path = `docs/episodes/${filename}`;

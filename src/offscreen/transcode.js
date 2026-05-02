@@ -1,36 +1,36 @@
 // offscreen document — m4a/mp4 → mp3 64k mono 재인코딩.
-// SW (background) 와는 base64 string 으로 주고받는다 — chrome.runtime.sendMessage
-// 가 JSON 직렬화를 써서 ArrayBuffer 를 그대로 못 보내기 때문 (binary → 빈 object
-// 로 도착). 50MB raw m4a → 67MB b64 string → 디코드 → ArrayBuffer → AudioContext
-// + lamejs → mp3 ArrayBuffer → 다시 base64 → SW 회신. 회신쪽 mp3 는 5MB 정도라
-// 저렴.
+// SW 가 audio URL 만 보내고 여기서 직접 fetch + 디코드 + 인코드. SW↔offscreen
+// 사이 메시지는 URL ~200 byte (요청) + ~5MB mp3 b64 (응답) 로 작게 유지 →
+// 큰 m4a 30-50MB 를 base64 string 으로 양방향 보내던 이전 방식이 chrome.runtime
+// 메시지 채널을 자주 끊어버린 문제 해소. credentials:include 는 익스텐션 컨텍스트
+// 의 .google.com 세션 쿠키를 redirect 체인에 동행시키는 용도 (SW fetch 와 동일).
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== "offscreen:transcode") return false;
+  if (msg?.type !== "offscreen:transcode-url") return false;
   (async () => {
     const t0 = Date.now();
     try {
-      const arrBuf = base64ToArrayBuffer(msg.audioBufferB64 || "");
+      const r = await fetch(msg.audioUrl, { credentials: "include" });
+      if (!r.ok) throw new Error(`fetch ${r.status} ${r.statusText}`);
+      const arrBuf = await r.arrayBuffer();
       const mp3 = await transcodeM4aToMp3(
         arrBuf,
         msg.bitrate || 64,
         msg.mono !== false,
       );
       const mp3B64 = arrayBufferToBase64(mp3);
-      sendResponse({ ok: true, mp3B64, elapsedMs: Date.now() - t0 });
+      sendResponse({
+        ok: true, mp3B64,
+        sourceSize: arrBuf.byteLength,
+        mp3Size: mp3.byteLength,
+        elapsedMs: Date.now() - t0,
+      });
     } catch (e) {
       sendResponse({ ok: false, error: e.message, elapsedMs: Date.now() - t0 });
     }
   })();
   return true; // async sendResponse
 });
-
-function base64ToArrayBuffer(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
 
 function arrayBufferToBase64(buf) {
   const bytes = new Uint8Array(buf);
