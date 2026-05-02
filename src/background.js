@@ -743,14 +743,39 @@ let offscreenCreating = null;
 async function ensureOffscreenDocument() {
   // hasDocument 는 매번 호출 가능 (가벼움). createDocument 는 race 가능 — 한 번에
   // 하나만 진행되도록 promise 캐시.
-  if (await chrome.offscreen.hasDocument()) return;
+  // ⚠ createDocument resolve 됐어도 페이지의 JS (transcode.js) 가 로딩 끝났다는
+  // 보장 없음 — listener 등록 전에 sendMessage 보내면 "channel closed" 즉시 에러.
+  // 그래서 ping 폴링으로 listener alive 확인까지 한 다음 반환.
+  if (await chrome.offscreen.hasDocument()) {
+    // 이미 떠 있으면 ping 한 번만 — listener 가 살아있는지 확인.
+    if (await pingOffscreen()) return;
+    // 떠 있는데 응답 안 함 → 닫고 새로 만든다.
+    try { await chrome.offscreen.closeDocument(); } catch {}
+  }
   if (offscreenCreating) return offscreenCreating;
-  offscreenCreating = chrome.offscreen.createDocument({
-    url: OFFSCREEN_URL,
-    reasons: ["AUDIO_PLAYBACK"], // AudioContext.decodeAudioData 사용 — 가장 가까운 reason
-    justification: "Decode m4a/AAC and re-encode to MP3 to fit GitHub API size limits",
-  }).finally(() => { offscreenCreating = null; });
+  offscreenCreating = (async () => {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: ["AUDIO_PLAYBACK"],
+      justification: "Decode m4a/AAC and re-encode to MP3 to fit GitHub API size limits",
+    });
+    // 100ms 폴링 × 30회 = 최대 3초 대기. 실측 ~100~300ms 안에 ready.
+    for (let i = 0; i < 30; i++) {
+      if (await pingOffscreen()) return;
+      await sleep(100);
+    }
+    throw new Error("offscreen 준비 시간 초과 (3초)");
+  })().finally(() => { offscreenCreating = null; });
   await offscreenCreating;
+}
+
+async function pingOffscreen() {
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "offscreen:ping" });
+    return r?.ok === true;
+  } catch {
+    return false;
+  }
 }
 
 async function closeOffscreenDocument() {

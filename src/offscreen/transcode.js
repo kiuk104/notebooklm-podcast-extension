@@ -6,6 +6,12 @@
 // 의 .google.com 세션 쿠키를 redirect 체인에 동행시키는 용도 (SW fetch 와 동일).
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // SW 의 ensureOffscreenDocument 가 createDocument 직후 ping 을 보내 listener 가
+  // alive 한지 확인하는 용도 — 첫 카드 race ("channel closed") 방지.
+  if (msg?.type === "offscreen:ping") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg?.type !== "offscreen:transcode-url") return false;
   (async () => {
     const t0 = Date.now();
