@@ -18,11 +18,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
+// Chrome 이 offscreen 을 30초 idle 에 종료하는 걸 방지. 한 번 시작 후 transcode
+// 작업 중엔 계속 재생, 작업 없을 때만 멈춰서 background 음원 부담 없음. 음량 0
+// data URL 이라 사용자에겐 들리지 않음.
+let _silentAudio = null;
+function ensureSilentAudio() {
+  if (_silentAudio && !_silentAudio.paused) return;
+  if (!_silentAudio) {
+    _silentAudio = new Audio();
+    // 짧은 silence WAV (1KB 미만), 무한 loop.
+    _silentAudio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+    _silentAudio.loop = true;
+    _silentAudio.volume = 0;
+  }
+  _silentAudio.play().catch(() => {});
+}
+function stopSilentAudio() {
+  try { _silentAudio?.pause(); } catch {}
+}
+
+let _activeTranscodes = 0;
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "transcode") return;
   port.onMessage.addListener(async (msg) => {
     const t0 = Date.now();
     if (msg?.type !== "transcode") return;
+    _activeTranscodes++;
+    ensureSilentAudio();
     try {
       const r = await fetch(msg.audioUrl, { credentials: "include" });
       if (!r.ok) throw new Error(`fetch ${r.status} ${r.statusText}`);
@@ -47,6 +70,12 @@ chrome.runtime.onConnect.addListener((port) => {
       try {
         port.postMessage({ ok: false, error: e.message, elapsedMs: Date.now() - t0 });
       } catch {}
+    } finally {
+      _activeTranscodes--;
+      if (_activeTranscodes <= 0) {
+        _activeTranscodes = 0;
+        stopSilentAudio();
+      }
     }
   });
 });

@@ -756,7 +756,12 @@ async function ensureOffscreenDocument() {
   offscreenCreating = (async () => {
     await chrome.offscreen.createDocument({
       url: OFFSCREEN_URL,
-      reasons: ["AUDIO_PLAYBACK"],
+      // Multi-reason — Chrome 은 OR 시멘틱 (어느 한 쪽이라도 active 면 살림).
+      // AUDIO_PLAYBACK 만 쓰면 30초 안에 *실제 재생* 없으면 종료 → 큰 m4a (40초+
+      // transcode) 가 못 넘김. BLOBS (ArrayBuffer 작업) + WORKERS 추가로 lifetime
+      // 안정. offscreen 측에서 silent audio 도 같이 돌려 AUDIO_PLAYBACK 도 명시적
+      // 만족 (belt-and-suspenders).
+      reasons: ["AUDIO_PLAYBACK", "BLOBS", "WORKERS"],
       justification: "Decode m4a/AAC and re-encode to MP3 to fit GitHub API size limits",
     });
     // 100ms 폴링 × 30회 = 최대 3초 대기. 실측 ~100~300ms 안에 ready.
