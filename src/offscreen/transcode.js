@@ -5,16 +5,24 @@
 // 메시지 채널을 자주 끊어버린 문제 해소. credentials:include 는 익스텐션 컨텍스트
 // 의 .google.com 세션 쿠키를 redirect 체인에 동행시키는 용도 (SW fetch 와 동일).
 
+// SW ↔ offscreen 메시징은 두 가지 — sendMessage (ping 만) + connect/port (transcode).
+// transcode 는 long-lived port 사용 — port 가 열려있는 동안 SW 도 살아있어서
+// 30+초 transcode 도 idle 종료 race 안 걸림. ping 은 createDocument 직후 listener
+// alive 확인용이라 sendMessage 한 번이면 충분.
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  // SW 의 ensureOffscreenDocument 가 createDocument 직후 ping 을 보내 listener 가
-  // alive 한지 확인하는 용도 — 첫 카드 race ("channel closed") 방지.
   if (msg?.type === "offscreen:ping") {
     sendResponse({ ok: true });
     return false;
   }
-  if (msg?.type !== "offscreen:transcode-url") return false;
-  (async () => {
+  return false;
+});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "transcode") return;
+  port.onMessage.addListener(async (msg) => {
     const t0 = Date.now();
+    if (msg?.type !== "transcode") return;
     try {
       const r = await fetch(msg.audioUrl, { credentials: "include" });
       if (!r.ok) throw new Error(`fetch ${r.status} ${r.statusText}`);
@@ -25,17 +33,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         msg.mono !== false,
       );
       const mp3B64 = arrayBufferToBase64(mp3);
-      sendResponse({
-        ok: true, mp3B64,
-        sourceSize: arrBuf.byteLength,
-        mp3Size: mp3.byteLength,
-        elapsedMs: Date.now() - t0,
-      });
+      // postMessage 는 disconnect 된 port 에 보내면 throw — settled 플래그 없이도 try
+      // 안에서 알아서 처리.
+      try {
+        port.postMessage({
+          ok: true, mp3B64,
+          sourceSize: arrBuf.byteLength,
+          mp3Size: mp3.byteLength,
+          elapsedMs: Date.now() - t0,
+        });
+      } catch {}
     } catch (e) {
-      sendResponse({ ok: false, error: e.message, elapsedMs: Date.now() - t0 });
+      try {
+        port.postMessage({ ok: false, error: e.message, elapsedMs: Date.now() - t0 });
+      } catch {}
     }
-  })();
-  return true; // async sendResponse
+  });
 });
 
 function arrayBufferToBase64(buf) {

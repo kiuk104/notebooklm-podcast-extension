@@ -784,19 +784,31 @@ async function closeOffscreenDocument() {
   } catch {}
 }
 
-// background → offscreen: URL 만 보내고 offscreen 이 직접 fetch + transcode.
-// 이전 시도 (SW 가 fetch 후 base64 string 으로 ArrayBuffer 전달) 는 큰 카드
-// (30MB+ raw → 40MB+ b64) 에서 chrome.runtime 메시지 채널이 끊어져 잦은
-// transcode 실패 + m4a 원본 fallback 으로 빠짐. 이 경로는 메시지 크기를 작게
-// (~200 byte URL + ~5MB mp3 b64 응답) 유지해서 채널 안정성 확보.
+// background → offscreen: chrome.runtime.connect (port) 로 long-lived 연결.
+// chrome.runtime.sendMessage 는 SW idle timer (30s) 와 race — 큰 카드 (40MB+)
+// transcode 가 30+초 걸리면 SW 가 await 중 죽고 "channel closed" 로 reject.
+// Port 는 *연결이 살아있는 동안 SW 도 살아있음* (Chrome 공식 보장) — 30+초
+// transcode 도 안전. 메시지는 URL 만 보내고 offscreen 이 fetch + transcode.
 async function transcodeViaOffscreen(audioUrl, bitrate = 64, mono = true) {
   await ensureOffscreenDocument();
-  const r = await chrome.runtime.sendMessage({
-    type: "offscreen:transcode-url",
-    audioUrl, bitrate, mono,
+  return new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect({ name: "transcode" });
+    let settled = false;
+    port.onMessage.addListener((msg) => {
+      if (settled) return;
+      settled = true;
+      try { port.disconnect(); } catch {}
+      if (msg?.ok) resolve(base64ToArrayBuffer(msg.mp3B64));
+      else reject(new Error(msg?.error || "transcode 실패"));
+    });
+    port.onDisconnect.addListener(() => {
+      if (settled) return;
+      settled = true;
+      const err = chrome.runtime.lastError?.message || "transcode 채널 비정상 종료";
+      reject(new Error(err));
+    });
+    port.postMessage({ type: "transcode", audioUrl, bitrate, mono });
   });
-  if (!r?.ok) throw new Error(r?.error || "transcode 실패");
-  return base64ToArrayBuffer(r.mp3B64);
 }
 
 function base64ToArrayBuffer(b64) {
