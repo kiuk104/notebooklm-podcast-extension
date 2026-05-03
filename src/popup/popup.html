@@ -48,22 +48,23 @@
 </head>
 <body>
 <h1>NotebookLM Podcast Sync</h1>
-<p class="sub" id="version-line">push + RSS + retention + transcode</p>
-<button id="scan" class="primary">현재 노트북 스캔</button>
-<button id="scan-all" class="secondary">모든 노트북 스캔</button>
+<p class="sub" id="version-line" data-i18n="popup.subtitle">push + RSS + retention + transcode</p>
+<button id="scan" class="primary" data-i18n="popup.scan">현재 노트북 스캔</button>
+<button id="scan-all" class="secondary" data-i18n="popup.scanAll">모든 노트북 스캔</button>
 <div class="status" id="status"></div>
 <div class="cover" id="cover" style="display:none">
   <div class="nb-title" id="nb-title"></div>
   <div class="nb-date" id="nb-date"></div>
 </div>
 <div class="bulk-bar" id="bulk-bar">
-  <label><input type="checkbox" id="select-all"> 전체 선택</label>
+  <label><input type="checkbox" id="select-all"> <span data-i18n="popup.bulkSelectAll">전체 선택</span></label>
   <span class="spacer"></span>
   <button id="bulk-dl" disabled>선택 받기 (0)</button>
 </div>
 <ul class="cards" id="cards"></ul>
-<a href="#" class="settings" id="open-options">⚙ 관리</a>
-<a href="#" class="settings" id="open-help">❓ 도움말</a>
+<a href="#" class="settings" id="open-options" data-i18n="popup.openOptions">⚙ 관리</a>
+<a href="#" class="settings" id="open-help" data-i18n="popup.openHelp">❓ 도움말</a>
+<script src="../i18n.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

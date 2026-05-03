@@ -8,13 +8,26 @@ const cardsEl = document.getElementById("cards");
 const bulkBarEl = document.getElementById("bulk-bar");
 const selectAllEl = document.getElementById("select-all");
 const bulkDlBtn = document.getElementById("bulk-dl");
-
-// 버전은 manifest 가 single source of truth. popup.html 에 하드코딩하면 매번
-// 동기 잊어버려서 사용자에게 stale 표시 — runtime 에 주입.
 const versionLineEl = document.getElementById("version-line");
-if (versionLineEl) {
-  const v = chrome.runtime.getManifest().version;
-  versionLineEl.textContent = `v${v} · ${versionLineEl.textContent}`;
+
+// i18n: 옵션 페이지에서 사용자가 선택한 uiLang (chrome.storage.local) 또는
+// chrome.i18n.getUILanguage() (Chrome 브라우저 UI 언어) 기준. popup 자체엔 셀렉터
+// 없음 — 옵션 페이지 셀렉터가 single source of truth. popup 매번 첫 오픈 시 초기화.
+async function initI18n() {
+  const r = await chrome.storage.local.get(["uiLang"]);
+  let lang = r.uiLang;
+  if (!lang) {
+    const chromeLang = (chrome.i18n?.getUILanguage?.() || navigator.language || "ko").toLowerCase().slice(0, 2);
+    lang = chromeLang;
+  }
+  i18nSetLang(["ko", "en", "de"].includes(lang) ? lang : "ko");
+  // bulk-dl 초기 텍스트 — data-i18n 으론 못 잡음 (선택 카운트가 동적).
+  bulkDlBtn.textContent = t("popup.bulkDl", { n: 0 });
+  // version line — data-i18n 이 textContent 를 이미 채웠으니 그 위에 prefix.
+  if (versionLineEl) {
+    const v = chrome.runtime.getManifest().version;
+    versionLineEl.textContent = `v${v} · ${versionLineEl.textContent}`;
+  }
 }
 
 // episodeTitle → state span. background 의 push:result 메시지를 받았을 때 매칭용.
@@ -71,16 +84,17 @@ function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId
   if (audio.isPlaceholder) {
     checkbox.disabled = true;
     checkbox.checked = false;
-    checkbox.title = "제목 확정 대기 중";
+    checkbox.title = t("popup.placeholder.cbTip");
   } else {
     checkbox.checked = !alreadyPushed;
   }
   checkbox.addEventListener("change", refreshBulkBar);
 
+  const titleStr = audio.title || t("popup.untitled");
   const title = document.createElement("span");
   title.className = "ep-title";
-  title.title = audio.title || "(제목 없음)";
-  title.textContent = `${idx + 1}. ${audio.title || "(제목 없음)"}`;
+  title.title = titleStr;
+  title.textContent = `${idx + 1}. ${titleStr}`;
 
   const state = document.createElement("span");
   state.className = "ep-state";
@@ -88,13 +102,13 @@ function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId
 
   const btn = document.createElement("button");
   btn.className = "dl";
-  btn.textContent = "받기";
+  btn.textContent = t("popup.cardDl");
   if (audio.isPlaceholder) {
     btn.disabled = true;
-    btn.title = "제목이 확정되면 활성화됩니다";
-    setRow(state, "muted", "제목 확정 대기 중", "다시 스캔하면 활성화됩니다");
+    btn.title = t("popup.placeholder.btnTip");
+    setRow(state, "muted", t("popup.placeholder.state"), t("popup.placeholder.stateTip"));
   } else if (alreadyPushed) {
-    setRow(state, "muted", "↻ 이미 받음", "repo 의 docs/episodes/ 에 같은 shortId 존재");
+    setRow(state, "muted", t("popup.alreadyPushed"), t("popup.alreadyPushed.tip"));
   }
   btn.addEventListener("click", () => {
     if (isRemote) {
@@ -127,17 +141,17 @@ function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId
 function appendNotebookHeader({ title, dateAttr, audios }) {
   const li = document.createElement("li");
   li.className = "nb-header";
-  const t = document.createElement("span");
-  t.className = "nb-h-title";
-  t.textContent = title || "(제목 없음)";
+  const tEl = document.createElement("span");
+  tEl.className = "nb-h-title";
+  tEl.textContent = title || t("popup.untitled");
   const d = document.createElement("span");
   d.className = "nb-h-date";
   d.textContent = dateAttr ? `· ${dateAttr.split(" ").slice(1, 4).join(" ")}` : "";
-  li.append(t, d);
+  li.append(tEl, d);
   if (!audios || audios.length === 0) {
     const empty = document.createElement("span");
     empty.className = "nb-h-empty";
-    empty.textContent = "(음성개요 없음)";
+    empty.textContent = t("popup.notebookEmpty");
     li.appendChild(empty);
   }
   cardsEl.appendChild(li);
@@ -151,7 +165,7 @@ function refreshBulkBar() {
   }
   bulkBarEl.style.display = "flex";
   const selected = cardsEl.querySelectorAll('input.sel:checked').length;
-  bulkDlBtn.textContent = `선택 받기 (${selected})`;
+  bulkDlBtn.textContent = t("popup.bulkDl", { n: selected });
   bulkDlBtn.disabled = selected === 0;
   if (selected === 0) {
     selectAllEl.checked = false;
@@ -185,7 +199,7 @@ async function downloadOneSingle(tabId, index, artifactId) {
   const state = li.querySelector(".ep-state");
   if (checkbox) checkbox.disabled = true;
   if (btn) btn.disabled = true;
-  setRow(state, "", "받는 중…");
+  setRow(state, "", t("popup.dl.fetching"));
   let resp;
   try {
     resp = await chrome.tabs.sendMessage(tabId, { type: "download", index, artifactId });
@@ -196,9 +210,9 @@ async function downloadOneSingle(tabId, index, artifactId) {
     return;
   }
   if (resp?.ok) {
-    setRow(state, "ok", "⬇ 받음, push 중…");
+    setRow(state, "ok", t("popup.dl.fetched"));
   } else {
-    setRow(state, "err", "✗", resp?.error || "실패");
+    setRow(state, "err", "✗", resp?.error || t("popup.dl.fail"));
     if (btn) btn.disabled = false;
     if (checkbox) checkbox.disabled = false;
     return;
@@ -234,7 +248,7 @@ bulkDlBtn.addEventListener("click", async () => {
   if (viewMode === "single") {
     const tab = await activeNotebookTab();
     if (!tab) {
-      setStatus("현재 탭이 NotebookLM 노트북 페이지가 아닙니다.", "error");
+      setStatus(t("popup.notNotebookPage"), "error");
       return;
     }
     await runBulkLocal(tab.id, items);
@@ -262,14 +276,14 @@ async function runBulkLocal(tabId, items) {
   scanAllBtn.disabled = true;
   bulkDlBtn.disabled = true;
   selectAllEl.disabled = true;
-  setStatus(`bulk: ${items.length}개 다운로드 중 (0/${items.length})`, "");
+  setStatus(t("popup.bulk.progress", { n: items.length, done: 0, total: items.length }), "");
   let done = 0;
   for (const item of items) {
     await downloadOneSingle(tabId, item.cardIndex, item.artifactId);
     done += 1;
-    setStatus(`bulk: ${items.length}개 다운로드 중 (${done}/${items.length})`, "");
+    setStatus(t("popup.bulk.progress", { n: items.length, done, total: items.length }), "");
   }
-  setStatus(`bulk: ${items.length}개 처리 완료.`, "success");
+  setStatus(t("popup.bulk.localDone", { n: items.length }), "success");
   scanBtn.disabled = false;
   scanAllBtn.disabled = false;
   selectAllEl.disabled = false;
@@ -281,15 +295,15 @@ async function runBulkRemote(selections) {
   scanAllBtn.disabled = true;
   bulkDlBtn.disabled = true;
   selectAllEl.disabled = true;
-  setStatus(`bulk(원격): ${selections.length}개 다운로드 시작…`, "");
+  setStatus(t("popup.bulk.remoteStart", { n: selections.length }), "");
   // 시작 카드 상태 모두 "대기"
   for (const s of selections) {
     const state = stateByTitle.get(s.episodeTitle);
-    if (state) setRow(state, "", "대기 중…");
+    if (state) setRow(state, "", t("popup.dl.waiting"));
   }
   const ack = await chrome.runtime.sendMessage({ type: "bulk:remote", selections });
   if (!ack?.ok) {
-    setStatus(`bulk: ${ack?.error || "시작 실패"}`, "error");
+    setStatus(t("popup.bulk.startFail", { error: ack?.error || "?" }), "error");
     scanBtn.disabled = false;
     scanAllBtn.disabled = false;
     selectAllEl.disabled = false;
@@ -308,11 +322,11 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (!state) return;
     const feedNote = feedSuffix(msg);
     if (msg.skipped) {
-      setRow(state, "ok", "↻ push 스킵" + feedNote, msg.reason || "");
+      setRow(state, "ok", t("popup.push.skipped") + feedNote, msg.reason || "");
     } else if (msg.ok) {
-      setRow(state, "ok", "✓ push 완료" + feedNote, msg.filename);
+      setRow(state, "ok", t("popup.push.ok") + feedNote, msg.filename);
     } else {
-      setRow(state, "err", "✗ push 실패", msg.error || "");
+      setRow(state, "err", t("popup.push.fail"), msg.error || "");
     }
     return;
   }
@@ -324,7 +338,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === "scan:all:done") {
     if (!msg.ok) {
-      setStatus(`스캔 실패: ${msg.error}`, "error");
+      setStatus(t("popup.scan.failPrefix", { error: msg.error }), "error");
       scanBtn.disabled = false;
       scanAllBtn.disabled = false;
       return;
@@ -336,7 +350,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "bulk:remote:progress") {
     if (msg.episodeTitle) {
       const state = stateByTitle.get(msg.episodeTitle);
-      if (state) setRow(state, "", "받는 중…");
+      if (state) setRow(state, "", t("popup.dl.fetching"));
     } else if (msg.message) {
       setStatus(msg.message, "");
     }
@@ -345,15 +359,15 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === "bulk:remote:result") {
     const state = stateByTitle.get(msg.episodeTitle);
-    if (state && !msg.ok) setRow(state, "err", "✗", msg.error || "실패");
+    if (state && !msg.ok) setRow(state, "err", "✗", msg.error || t("popup.dl.fail"));
     return;
   }
 
   if (msg.type === "bulk:remote:done") {
     if (msg.ok) {
-      setStatus(`bulk(원격): ${msg.done}개 처리 완료.`, "success");
+      setStatus(t("popup.bulk.remoteDone", { n: msg.done }), "success");
     } else {
-      setStatus(`bulk: ${msg.error}`, "error");
+      setStatus(t("popup.bulk.startFail", { error: msg.error }), "error");
     }
     scanBtn.disabled = false;
     scanAllBtn.disabled = false;
@@ -374,23 +388,23 @@ function feedSuffix(msg) {
 scanBtn.addEventListener("click", async () => {
   scanBtn.disabled = true;
   scanAllBtn.disabled = true;
-  setStatus("스캔 중…");
+  setStatus(t("popup.scanning"));
   clearList();
   coverEl.style.display = "none";
   viewMode = "single";
   try {
     const tab = await activeNotebookTab();
     if (!tab) {
-      setStatus("현재 탭이 NotebookLM 노트북 페이지가 아닙니다.", "error");
+      setStatus(t("popup.notNotebookPage"), "error");
       return;
     }
     const resp = await chrome.tabs.sendMessage(tab.id, { type: "scan" });
     if (!resp?.ok) {
-      setStatus("응답 없음 — 페이지를 새로고침하세요.", "error");
+      setStatus(t("popup.noResponse"), "error");
       return;
     }
-    nbTitleEl.textContent = resp.cover.title || "(제목 없음)";
-    nbDateEl.textContent = resp.cover.dateAttr || "생성일 정보 없음";
+    nbTitleEl.textContent = resp.cover.title || t("popup.untitled");
+    nbDateEl.textContent = resp.cover.dateAttr || t("popup.coverNoDate");
     coverEl.style.display = "block";
 
     const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" })
@@ -404,12 +418,12 @@ scanBtn.addEventListener("click", async () => {
       return sid && pushedShortIds.includes(sid);
     }).length;
 
-    if (!total) setStatus("음성개요 0개", "");
-    else if (pending === total) setStatus(`음성개요 ${total}개 — 모두 제목 확정 대기 중. 잠시 후 다시 스캔하세요.`, "");
+    if (!total) setStatus(t("popup.audioCount0"), "");
+    else if (pending === total) setStatus(t("popup.audioAllPlaceholder", { n: total }), "");
     else {
-      const parts = [`음성개요 ${total}개`];
-      if (pending > 0) parts.push(`${pending}개 제목 확정 대기 중`);
-      if (alreadyCount > 0) parts.push(`${alreadyCount}개 이미 받음`);
+      const parts = [t("popup.audioCount", { n: total })];
+      if (pending > 0) parts.push(t("popup.placeholderN", { n: pending }));
+      if (alreadyCount > 0) parts.push(t("popup.alreadyN", { n: alreadyCount }));
       setStatus(parts.join(" · "), "success");
     }
 
@@ -423,7 +437,7 @@ scanBtn.addEventListener("click", async () => {
     });
     refreshBulkBar();
   } catch (e) {
-    setStatus(`오류: ${e.message}`, "error");
+    setStatus(t("popup.error", { msg: e.message }), "error");
   } finally {
     scanBtn.disabled = false;
     scanAllBtn.disabled = false;
@@ -438,10 +452,10 @@ scanAllBtn.addEventListener("click", async () => {
   clearList();
   coverEl.style.display = "none";
   viewMode = "all";
-  setStatus("모든 노트북 스캔 시작 — 백그라운드 탭이 잠시 깜빡일 수 있습니다.", "");
+  setStatus(t("popup.scanAllStart"), "");
   const ack = await chrome.runtime.sendMessage({ type: "scan:all" });
   if (!ack?.ok) {
-    setStatus(`시작 실패: ${ack?.error || "알 수 없음"}`, "error");
+    setStatus(t("popup.startFail", { error: ack?.error || "?" }), "error");
     scanBtn.disabled = false;
     scanAllBtn.disabled = false;
   }
@@ -453,10 +467,7 @@ async function renderAggregate(notebooks) {
   viewMode = "all";
 
   if (!notebooks || notebooks.length === 0) {
-    setStatus(
-      "노트북을 찾지 못했습니다. NotebookLM 홈에 노트북이 있는지 + 로그인 상태인지 확인하세요.",
-      "error",
-    );
+    setStatus(t("popup.noNotebooks"), "error");
     scanBtn.disabled = false;
     scanAllBtn.disabled = false;
     return;
@@ -491,13 +502,14 @@ async function renderAggregate(notebooks) {
     });
   }
 
-  const parts = [`노트북 ${notebooks.length}개`, `카드 ${totalCards}개`];
-  if (totalPlaceholder > 0) parts.push(`${totalPlaceholder}개 제목 대기`);
-  if (totalAlready > 0) parts.push(`${totalAlready}개 이미 받음`);
-  if (totalEligible > 0) parts.push(`${totalEligible}개 신규`);
-  if (totalCards === 0) {
-    parts.push("(스캔된 노트북에 음성개요 없음 — 카드 로딩이 늦어 timeout 됐을 수도)");
-  }
+  const parts = [
+    t("popup.notebookN", { n: notebooks.length }),
+    t("popup.cardN", { n: totalCards }),
+  ];
+  if (totalPlaceholder > 0) parts.push(t("popup.placeholderShort", { n: totalPlaceholder }));
+  if (totalAlready > 0) parts.push(t("popup.alreadyN", { n: totalAlready }));
+  if (totalEligible > 0) parts.push(t("popup.newN", { n: totalEligible }));
+  if (totalCards === 0) parts.push(t("popup.noOverviews"));
   setStatus(parts.join(" · "), totalCards > 0 ? "success" : "");
 
   refreshBulkBar();
@@ -505,10 +517,12 @@ async function renderAggregate(notebooks) {
   scanAllBtn.disabled = false;
 }
 
-// popup 첫 오픈 시 직전 스캔 결과 자동 복원 — 11분짜리 sweep 이후 popup 이 닫혔다 다시
-// 열릴 때 [모든 노트북 스캔] 을 또 누르지 않아도 카드 list 가 그대로 보이도록.
-// 단 (a) 진행 중인 task 가 있으면 그 흐름에 양보 (b) 30분 이상 지난 결과는 무시.
+// popup 첫 오픈 시: i18n 초기화 후 직전 스캔 결과 자동 복원.
+// 11분짜리 sweep 이후 popup 이 닫혔다 다시 열릴 때 [모든 노트북 스캔] 을 또 누르지
+// 않아도 카드 list 가 그대로 보이도록. 단 (a) 진행 중인 task 가 있으면 그 흐름에
+// 양보 (b) 30분 이상 지난 결과는 무시.
 (async () => {
+  await initI18n();
   try {
     const taskR = await chrome.runtime.sendMessage({ type: "task:state:get" });
     if (taskR?.state?.status === "running") return; // 진행 중이면 안 건드림.
@@ -518,8 +532,13 @@ async function renderAggregate(notebooks) {
     if (ageMs > 30 * 60 * 1000) return; // 30분 넘으면 stale 로 보고 무시.
     await renderAggregate(r.result.notebooks);
     const ageMin = Math.round(ageMs / 60000);
-    const ageStr = ageMin < 1 ? `${Math.round(ageMs / 1000)}초 전` : `${ageMin}분 전`;
-    setStatus((statusEl.textContent || "").replace(/^\s*/, "") + ` (${ageStr} 스캔)`, "success");
+    const ageStr = ageMin < 1
+      ? t("popup.scanAgo.sec", { n: Math.round(ageMs / 1000) })
+      : t("popup.scanAgo.min", { n: ageMin });
+    setStatus(
+      (statusEl.textContent || "").replace(/^\s*/, "") + t("popup.scanAgo.suffix", { age: ageStr }),
+      "success",
+    );
   } catch {}
 })();
 
@@ -530,5 +549,8 @@ document.getElementById("open-options").addEventListener("click", (e) => {
 
 document.getElementById("open-help").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.tabs.create({ url: chrome.runtime.getURL("src/help/help.html") });
+  // 현재 언어에 맞는 help 파일로 — options 페이지의 도움말 링크 라우팅과 동일.
+  const lang = i18nGetLang();
+  const file = lang === "en" ? "help-en.html" : lang === "de" ? "help-de.html" : "help.html";
+  chrome.tabs.create({ url: chrome.runtime.getURL(`src/help/${file}`) });
 });
