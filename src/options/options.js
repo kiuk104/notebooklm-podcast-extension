@@ -18,8 +18,14 @@ const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 (async () => {
   // ui lang 먼저 — applyTranslations() 후에야 나머지 dynamic render 가 올바른 언어로.
+  // 우선순위: 사용자가 셀렉터로 명시 선택한 값 > Chrome 브라우저 UI 언어 > navigator.language > ko.
+  // chrome.i18n.getUILanguage() 가 "ko-KR"/"en-US"/"de-DE" 형태로 줌 — 앞 2자만 사용.
   const langStored = await chrome.storage.local.get(["uiLang"]);
-  const lang = langStored.uiLang || (navigator.language || "ko").slice(0, 2);
+  let lang = langStored.uiLang;
+  if (!lang) {
+    const chromeLang = (chrome.i18n?.getUILanguage?.() || navigator.language || "ko").toLowerCase().slice(0, 2);
+    lang = chromeLang;
+  }
   i18nSetLang(["ko", "en", "de"].includes(lang) ? lang : "ko");
   if (langSelectEl) langSelectEl.value = i18nGetLang();
 

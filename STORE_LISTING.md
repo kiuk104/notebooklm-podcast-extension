@@ -31,8 +31,8 @@ Push NotebookLM Audio Overviews to your own GitHub repo and turn them into a per
 - (서브 카테고리가 있으면) **Workflow & Planning Tools**.
 
 ### 1-4. 언어
-- 1차: **한국어 (ko)** — 익스텐션 UI 와 도움말이 한국어.
-- 추가: **영어 (en)** — 검색 도달용. 타이틀·요약은 위 영문, 상세 설명은 §1-5 의 영문 본문.
+- 1차: **한국어 (ko)** — 도움말 / popup 이 한국어.
+- 추가: **영어 (en)**, **독일어 (de)** — v0.4.20 부터 관리 페이지 사이드바 셀렉터로 즉시 전환 가능 (`src/options/i18n.js` 의 ~120 키 × 3개 언어 테이블, `chrome.i18n.getUILanguage()` 기준 자동 초기설정 + 사용자 선택은 `chrome.storage.local.uiLang` 에 영구 저장).
 
 ---
 
@@ -61,10 +61,14 @@ NotebookLM 의 음성개요(Audio Overview)는 NotebookLM 안에서만 들을 �
 • 진행 모니터 (관리 페이지): task 진행률 / 경과 시간 / GitHub push 활동 로그가 실시간 표시. popup 닫혀도 30분간 결과 보존.
 • 자동 다운로드 옵션: 스캔 직후 신규 카드를 그대로 이어서 받는 v1 cron 동등 모드. default OFF (안전).
 • 두 가지 RSS 모드: GitHub Actions 워크플로 위임 (권장) 또는 익스텐션 직접 생성. 옵션에서 전환.
-• 보관 정책: docs/podcast.json 의 retention 필드로 maxItems / maxAgeDays 자동 정리. 저장소 용량 통제.
-• Transcode (옵션): 워크플로 측 ffmpeg 로 m4a → mp3 자동 변환. 1시간 audio 가 5~10초.
+• 보관 정책: docs/podcast.json 의 retention 필드로 maxItems / maxAgeDays / maxTotalMB 자동 정리. 저장소 용량 통제.
+• Transcode: 익스텐션 내장 (offscreen + lamejs, mp3 64k mono) + 옵션으로 워크플로 측 ffmpeg 도 병행 가능. 큰 m4a (40 MB+) 가 GitHub Contents API 의 사각지대를 우회하도록 자동 변환.
 • 설정 검증 버튼: 토큰·저장소 권한이 실제로 통하는지 다운로드 흐름 전에 확인.
 • 한국어 음성개요 제목·노트북 제목을 슬러그 + UUID 형태로 안전하게 처리 (Windows MAX_PATH, GitHub path 255-byte 가드).
+• 사이드바 관리 페이지: 도구 / 설정 / 데이터 그룹 분리, hash 라우팅, 진행 중 작업 라이브 뱃지.
+• 한·영·독 3개 언어 (사이드바 셀렉터로 즉시 전환). Chrome 브라우저 언어 기준 자동 초기설정 + 사용자 선택은 영구 저장.
+• bulk 종료 OS 알림: 100+ 카드 처리 후 사용자가 다른 일을 보고 있어도 성공/실패 카운트가 즉시 안내됨.
+• 실패 카드 재시도: bulk 도중 실패한 카드들은 같은 selection 으로 [실패 N개 재시도] 한 번에 재실행.
 
 — 한 번만 셋업하면 끝 —
 
@@ -102,10 +106,14 @@ After setup, every new audio overview is just one click away. To catch up on mul
 • Live progress monitor (management page): task progress / elapsed time / per-card GitHub push activity log shown in real time. Scan results persist 30 min so you can act on them after closing the popup.
 • Optional auto-download: chain "scan + push new cards" into a single click — v1 cron-style behavior. Default OFF for safety.
 • Two RSS modes: delegate to a GitHub Actions workflow (recommended) or have the extension build feed.xml directly. Switchable from options.
-• Retention policy: the retention field in docs/podcast.json (maxItems / maxAgeDays) prunes old episodes automatically — keeps your repo small.
-• Optional transcode: m4a → mp3 via workflow-side ffmpeg. A one-hour audio takes 5–10 seconds.
+• Retention policy: the retention field in docs/podcast.json (maxItems / maxAgeDays / maxTotalMB) prunes old episodes automatically — keeps your repo small.
+• Built-in transcode: m4a/mp4 → mp3 64k mono inside the extension (offscreen + lamejs). Works around GitHub's ~40 MB Contents API blind spot. Workflow-side ffmpeg transcode is also supported.
 • "Verify settings" button checks that your token and repository actually work before any download flow.
 • Korean filename safety: notebook + audio titles are slugified and length-capped to stay within Windows MAX_PATH and GitHub's 255-byte path limit.
+• Sidebar admin page: tools / settings / data sections, hash routing, live task badge.
+• Korean / English / German UI (instant switch via sidebar selector). Initial language follows Chrome's browser language; user choice is saved.
+• Bulk completion OS notification: success/fail counts surface even when the admin tab is closed.
+• Failed-card retry: any cards that failed during bulk are persisted; one-click [Retry N failed] re-runs them with the same selection.
 
 — One-time setup —
 
@@ -159,9 +167,24 @@ Persists the user's GitHub Personal Access Token, target repository (owner/name)
 Listens to `chrome.downloads.onDeterminingFilename` to rename audio overview downloads to the canonical pattern `YYYYMMDD__notebook__shortId__title.{m4a|mp3}`. The shortId (8-character artifact UUID prefix) is the dedup key — without rename, downloads land with NotebookLM's opaque server-generated filename and cannot be deduplicated.
 ```
 
-### 3-4b. `alarms` justification
+### 3-4b. `notifications` justification
+```
+Used to surface bulk download completion via a single OS notification at the end of a long-running cross-notebook sweep / bulk download. After processing 100+ cards (which can take 30 min – 2 hours), the extension fires one chrome.notifications.create() call with the success/failure count so the user does not have to keep the admin page open. No periodic notifications, no analytics, no marketing — purely the end-of-task summary.
+```
+
+### 3-4c. `alarms` justification
 ```
 Used as a service-worker keepalive during long-running cross-notebook sweep and bulk download tasks (5 min to 2+ hours). MV3 service workers terminate after ~30 seconds of inactivity, which would interrupt these multi-step tasks during retry sleep windows or sendMessage timeouts. A single repeating alarm fired every 30 seconds via chrome.alarms keeps the worker alive for the duration of the task, and is automatically cleared on completion. No alarm-driven business logic — purely a wake mechanism.
+```
+
+### 3-4d. `debugger` justification
+```
+NotebookLM's audio download flow gates on isTrusted=true / userActivation, which programmatic element.click() cannot satisfy. For the bulk cross-notebook sweep, the extension uses chrome.debugger.attach + Input.dispatchMouseEvent to inject genuine mouse events on the audio card's "more" button and the "Download" menu item — the only API path that produces a trusted user gesture. Attached only to the dedicated bulk popup tab, detached automatically when the tab closes. No DOM/network inspection, no script evaluation — strictly Input.dispatchMouseEvent at known coordinates.
+```
+
+### 3-4e. `offscreen` justification
+```
+Used to host an offscreen document that runs the m4a/mp4 → mp3 64 kbps mono transcoder (lamejs + AudioContext.decodeAudioData). GitHub's Contents API has a ~37 MiB practical limit and the Git Data API a ~40 MiB blob limit; large NotebookLM audio overviews routinely exceed this. The offscreen document fetches the audio, decodes/encodes it, and returns a smaller mp3 blob to the service worker for upload. AUDIO_PLAYBACK is required as one of the reasons so the document survives past the 30-second brief-lifetime cutoff for large files.
 ```
 
 ### 3-5. Host permission: `https://notebooklm.google.com/*`

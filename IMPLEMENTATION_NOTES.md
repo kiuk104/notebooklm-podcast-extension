@@ -491,6 +491,189 @@ async function clickViaDebugger(tabId, x, y) {
 
 ---
 
+## 11. Offscreen transcode 의 30s lifetime 함정 (2026-05-02)
+
+### 증상
+
+20분+ 음성개요의 m4a → mp3 transcode 가 큰 파일에서 일관되게 실패. Offscreen 콘솔에 작업이 시작되지만 완료 직전에 document 가 사라지고, SW 측 `transcode:request` 의 `chrome.runtime.sendMessage` 가 `Could not establish connection. Receiving end does not exist.` 로 reject. 작은 m4a (수 MB) 는 정상.
+
+### 원인 — 세 가지 lifetime 문제 동시 발생
+
+(a) **`chrome.offscreen` document 의 reason 별 lifetime**: `reasons: ["WORKERS"]` 만 선언하면 brief lifetime 으로 처리되어 ~30 초 후 닫힘. `AUDIO_PLAYBACK` 만 다른 reason 들과 결합 가능한 long-lived 카테고리 (지속 oscillator/silent audio source 가 살아있어야 함).
+
+(b) **`chrome.runtime.sendMessage` 의 single-shot JSON 직렬화**: ArrayBuffer 가 sendMessage 통과 시 plain `{}` 로 마감되어 lamejs 가 길이 0 buffer 받음. 우회 시도였던 base64 encoding 도 50 MB raw → 67 MB string → message channel close 로 실패.
+
+(c) **Service worker idle 30s**: SW 가 sendMessage 의 await 중에 idle 로 죽으면 receiver (offscreen) 가 응답해도 reply 라우팅 끊김.
+
+### 대응 — 3 단 패치 (`v0.4.14` ~ `v0.4.18`)
+
+**1) Multi-reason offscreen + 무음 audio loop**:
+```js
+await chrome.offscreen.createDocument({
+  url: "src/offscreen/transcode.html",
+  reasons: ["AUDIO_PLAYBACK", "BLOBS", "WORKERS"],
+  justification: "Decode m4a/mp4 + encode mp3 (lamejs); persistent over 30s for large files.",
+});
+```
+offscreen.html 안에서 `new AudioContext()` + 무음 oscillator 가 계속 돌아 `AUDIO_PLAYBACK` reason 이 활성 상태로 유지됨. 큰 파일도 수 분 단위 변환 가능.
+
+**2) SW ↔ offscreen 을 `chrome.runtime.connect` port 로 전환** (`v0.4.17`):
+```js
+const port = chrome.runtime.connect({ name: "transcode" });
+port.postMessage({ type: "transcode", inputUrl, mime, ... });
+port.onMessage.addListener((msg) => { /* progress / done / error */ });
+```
+port-based 연결은 **양방향 + open 상태가 SW 의 active activity 로 등록** — port 가 살아있는 동안 SW idle timer 가 reset. sendMessage 의 단발성 30s 이슈 회피 + 무한 transcode 시간 안전.
+
+**3) Audio fetch 자체를 offscreen 에서 직접** (`v0.4.15`): SW 가 fetch → ArrayBuffer 를 sendMessage 로 넘기는 모델은 ArrayBuffer 직렬화 함정. offscreen 이 `inputUrl` 만 받아서 자기가 fetch (offscreen 도 host_permissions 같이 적용됨). buffer 가 message 경계를 안 넘어가니 30 MB+ 도 무손실.
+
+**4) 첫 메시지 전 ping** (`v0.4.16`): offscreen 이 막 created 됐을 때 lamejs 모듈 import 가 끝나기 전에 첫 transcode 가 들어오면 race. SW 가 offscreen 에 `ping` 메시지 보내고 ready 응답 기다린 뒤 본 message 발사.
+
+### 학습
+
+- **`reasons` 배열은 lifetime 카테고리** — `AUDIO_PLAYBACK` 또는 `IFRAME_SCRIPTING` 가 들어가야 long-lived. 단순 `WORKERS` / `BLOBS` 는 brief.
+- **대용량 binary 는 sendMessage 로 옮기지 말고 fetch 의 endpoint 자체를 옮긴다** — offscreen 이 fetch 하고 결과 blob 도 거기서 만들어 GitHub PUT body 까지 거기서. SW 는 control-plane 만.
+- **장시간 작업의 SW liveness 는 port 가 정공법** — `chrome.alarms` 도 keepalive 지만 port 가 더 직접적 (SW 가 message 처리 중인 한 활성).
+- **race condition 방어로 ping-pong handshake** — offscreen 이 idempotent 하게 ready 응답을 줄 수 있으면 안전.
+
+구현 위치: [src/background.js](src/background.js) (`ensureOffscreenDocument`, `transcodeViaOffscreen`), [src/offscreen/transcode.html](src/offscreen/transcode.html), [src/offscreen/transcode.js](src/offscreen/transcode.js).
+
+---
+
+## 12. 관리 페이지 사이드바 + 3개 언어 i18n (2026-05-03)
+
+### 배경
+
+관리 페이지 v0.4.0~0.4.11 은 단일 long scrolling 페이지에 모든 폼 (GitHub 설정 / 메타 / 진행 모니터 / 에피소드 목록) 이 세로로 나열돼 있었음. 사용자가 push 진행 상태를 확인하려면 한참 스크롤. NotebookLM Web Importer 의 사이드바 레이아웃을 참고해 도구 / 설정 / 데이터 3개 그룹으로 분리.
+
+추가 동기: 영어 / 독일어 사용자도 동일하게 쓸 수 있도록 i18n 인프라.
+
+### 사이드바 라우팅 (v0.4.12, [`2d77c8f`](../../commit/2d77c8f))
+
+- 4 개 page section (`#page-monitor` / `#page-github` / `#page-meta` / `#page-episodes`) + hash 기반 라우팅 (`location.hash` ↔ 활성 page).
+- `nav-item` 클릭 → 해당 page `.active`, 다른 page hide. `monitor` 가 default.
+- 진행 모니터 nav 항목에 빨간 dot 뱃지 — running task 시 자동 표시 (사용자가 다른 page 에 있어도 작업 진행 중 인지).
+- 사이드바 하단 footer 에 manifest version + 도움말 링크.
+
+### i18n 인프라 (v0.4.20, [`0affcb0`](../../commit/0affcb0))
+
+`src/options/i18n.js` 가 ko/en/de 3개 언어 × ~120 키 테이블 + 3개 helper:
+
+```js
+function t(key, params)               // 현재 언어로 번역 (params 는 {n}, {user} 같은 substitution)
+function i18nSetLang(lang)            // 언어 전환 + DOM 재적용
+function applyTranslations()          // data-i18n / data-i18n-html / data-i18n-attr 속성 walking
+```
+
+**DOM 마킹 패턴 3 가지**:
+- `<span data-i18n="github.token">…</span>` — `textContent` 교체 (HTML 태그 없는 평문)
+- `<div data-i18n-html="github.token.hint">…</div>` — `innerHTML` 교체 (`<a>`, `<code>` 등 inline 마크업 포함)
+- `<input data-i18n-attr="placeholder:github.feedUrl.placeholder">` — 임의 속성 (콤마 구분으로 여러 개)
+
+**언어 영구 저장 + 자동 초기화**: 사이드바 `<select>` `change` 이벤트 → `chrome.storage.local.set({ uiLang })` + `i18nSetLang()`. 페이지 재방문 시 첫 IIFE 의 우선순위 — (1) `chrome.storage.local.uiLang` (사용자가 셀렉터로 명시 선택한 값) → (2) `chrome.i18n.getUILanguage()` (Chrome 브라우저 UI 언어, "ko-KR"/"en-US"/"de-DE" → 앞 2자) → (3) `navigator.language` fallback → (4) `ko`. `chrome.i18n.getUILanguage()` 가 `navigator.language` 보다 정확 — 후자는 페이지 측 preference 이고 전자는 Chrome 자체의 UI 언어 설정.
+
+### Dynamic string — t() 와 함께 사용
+
+정적 DOM 은 `data-i18n` 으로 끝나지만 JS 측 dynamic string (`렌더링 N개 카드`, status messages, time ago label 등) 은 `t("monitor.summary.cards", { n: 12 })` 로 호출. 언어 전환 시 dynamic 영역도 재렌더 필요:
+
+```js
+langSelectEl.addEventListener("change", async () => {
+  await chrome.storage.local.set({ uiLang: v });
+  i18nSetLang(v);
+  if (lastRenderedState) renderTaskState(lastRenderedState);  // 진행 모니터 재렌더
+  renderLastScanPanel();                                      // 직전 스캔 패널
+  if (epItems.length > 0) renderEpisodeTable();               // 에피소드 테이블
+});
+```
+
+### 학습
+
+- **i18n 은 dynamic 과 static 양쪽** — DOM walker (`applyTranslations`) 만으론 `${var}개 선택됨` 같은 JS 측 string 미커버. `t(key, params)` 를 일관되게 통과시키는 게 핵심.
+- **언어 전환 시 dynamic 재렌더가 필수** — 정적 DOM 은 자동 반영이지만 `lastRenderedState` 같은 캐시된 값으로 그린 영역은 명시적 재호출 필요.
+- **사이드바 + hash 라우팅 → multi-page SPA** — section 의 `display: none` 토글 + hashchange listener 로 충분. 라이브러리 불필요.
+
+---
+
+## 13. bulk 종료 알림 + 실패 카드 재시도 (2026-05-03)
+
+### 배경
+
+bulk:remote 가 100+ 카드 처리 시 30분~2시간 소요. 사용자가 다른 일 보다가 끝났는지 모르고, 종료 후 관리 페이지 다시 열어 확인하는 패턴. 그 중 90%+ 성공이라도 실패 N개를 어떻게 다시 시도할지 분명치 않았음 (전체 sweep 다시 vs 옵션 페이지에서 카드 선택).
+
+### Chrome notifications — bulk 완료 OS 알림
+
+`chrome.notifications.create` 로 OS 네이티브 알림 발사. `manifest.permissions` 에 `"notifications"` 추가 필요. 메시지는 성공/실패 카운트 + retry 안내:
+
+```js
+function notifyBulkComplete(success, total) {
+  const fail = total - success;
+  const title = fail > 0
+    ? `Podcast Sync — ${success} ok, ${fail} failed`
+    : `Podcast Sync — ${success} pushed`;
+  chrome.notifications.create({
+    type: "basic", iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+    title, message: ..., priority: 1,
+  });
+}
+```
+
+`runBulkRemote` 의 성공/실패 종료 양쪽에서 호출. cancel 경로에서는 호출 안 함 (사용자 의도).
+
+### 실패 카드 persist + retry-failed 핸들러
+
+bulk 진행 중 push 응답 timeout / debugger click 실패 / 카드 prepare 실패 / 탭 열기 실패 — 4 가지 실패 경로마다 selection 객체를 `failedSelections` 배열에 push. 종료 시점에 `chrome.storage.session` (fallback `local`) 에 `bulkFailedSelections` 로 persist.
+
+```js
+async function persistFailedSelections(selections) {
+  await chrome.storage.session.set({ bulkFailedSelections: { selections, savedAt: Date.now() }});
+}
+```
+
+새 message handler 추가:
+- `bulk:failed:list` → `loadFailedSelections()` 의 selections 반환 (옵션 페이지가 [실패 N개 재시도] 버튼 노출 결정)
+- `bulk:remote:retry-failed` → 같은 selections 로 `runBulkRemote` 재실행. 새 bulk 시작 시 `clearFailedSelections()` 가 동작해 직전 리스트 비움.
+
+### 옵션 페이지 통합
+
+직전 스캔 패널에 [실패 N개 재시도] 버튼 (`#last-scan-retry-failed`). `renderLastScanPanel` 이 `bulk:failed:list` 응답으로 failedCount 받아 `display:none`/`inline-block` 토글. 클릭 시 `bulk:remote:retry-failed` 발사 → task:state broadcast → 패널 자동 재렌더.
+
+### 학습
+
+- **장시간 작업은 OS 알림이 큰 차이** — 사용자가 모니터링하지 않아도 되어 익스텐션 사용 패턴이 자유로워짐. permission cost 는 한 줄.
+- **실패 메타 데이터를 잃지 않기** — 종료 시점 storage 에 selection 자체를 저장. 알림 메시지에 적힌 "fail N" 만 사용자에게 노출되고 retry 는 클릭 한 번.
+- **3 store 분리 (lastScanResult / bulkFailedSelections / currentTaskState)** — 각자 lifecycle 다름. lastScanResult 는 30분 freshness, failedSelections 는 다음 bulk 시작 시 invalidate, currentTaskState 는 SW 재시작 시 zombie 검지.
+
+구현 위치: [src/background.js](src/background.js) (`persistFailedSelections`, `notifyBulkComplete`, `bulk:failed:list`/`bulk:remote:retry-failed` handler), [src/options/options.js](src/options/options.js) (`#last-scan-retry-failed` button wiring), [manifest.json](manifest.json) (`"notifications"` permission).
+
+---
+
+## 14. ubuntu-latest 24.04 마이그레이션 — ffmpeg 빠짐 (2026-05-03)
+
+### 증상
+
+기존 워크플로 [examples/feed-builder/.github/workflows/build-feed.yml](examples/feed-builder/.github/workflows/build-feed.yml) 의 `transcode.py` step 이 `FileNotFoundError: 'ffmpeg'` 로 실패. 이전엔 정상 작동.
+
+### 원인
+
+GitHub Actions `ubuntu-latest` 가 2025년 4월부터 22.04 → 24.04 로 업그레이드. 24.04 image 의 default 패키지에서 ffmpeg 가 빠짐 ([공식 issue](https://github.com/actions/runner-images/issues)). 22.04 시절에 작성한 워크플로 가정이 깨짐.
+
+### 대응
+
+워크플로 step 에 명시적 `apt-get install`:
+```yaml
+- name: Install ffmpeg (for transcode)
+  run: sudo apt-get install -y --no-install-recommends ffmpeg
+```
+
+`apt-get update` 는 생략 — runner image 의 apt 캐시가 이미 최신이라 update 없이도 install 통과 (빌드 시간 절약). 버전 핀도 안 함 — apt 가 알아서 최신 ffmpeg + libmp3lame 가져옴.
+
+### 학습
+
+- **runner OS 마이그레이션은 호환성 깨질 수 있음** — `ubuntu-latest` 는 가장 빠르게 변하는 라벨. 안정성이 중요한 워크플로는 `ubuntu-22.04` 로 핀하거나 모든 시스템 의존성을 명시 install.
+- **워크플로 템플릿은 examples/feed-builder/ 가 source-of-truth** — 사용자 repo 에 복사돼 있는 워크플로도 같이 업데이트 권유 (사용자 측 작업).
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```

@@ -6,7 +6,7 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 
 ## 상태
 
-🚧 **개발 중 — v0.4.12**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__shortId__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다 (`shortId` 는 카드의 NotebookLM artifact UUID 첫 8자 — 노트북 이름이나 카드 제목이 바뀌어도 같은 audio 로 인식되어 중복 push 가 방지됨). 단일 카드 / 현재 노트북 일괄 / 모든 노트북 sweep 세 가지 모드. **bulk sweep 은 별도 popup window + `chrome.debugger` 의 trusted input** 으로 NotebookLM 의 visibility / userActivation 게이트를 우회 (자세한 매커니즘은 [IMPLEMENTATION_NOTES §9, §10](IMPLEMENTATION_NOTES.md)). m4a/mp4 는 익스텐션 측에서 **자동으로 mp3 64k mono 로 transcode** (offscreen document + lamejs) — GitHub Contents/Git Data API 의 ~40 MB 사각지대 회피. 옛 m4a 가 repo 에 남아있다면 워크플로 측 ffmpeg transcode 도 함께 켤 수 있음. RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` (`maxItems` / `maxAgeDays` / `maxTotalMB`) 으로 보관 정책. 관리 페이지에 **푸시된 에피소드 목록** (정렬 / 그룹 / 다중 삭제 / [편집 ↗] 원본 노트북으로 이동) 도 추가. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
+🚧 **개발 중 — v0.4.20**. NotebookLM 노트북 페이지에서 음성개요 목록을 스캔하고, 각 카드를 `YYYYMMDD__노트북__shortId__제목.{ext}` 파일명으로 다운로드 + 등록된 GitHub repo 의 `docs/episodes/` 로 자동 push 합니다 (`shortId` 는 카드의 NotebookLM artifact UUID 첫 8자 — 노트북 이름이나 카드 제목이 바뀌어도 같은 audio 로 인식되어 중복 push 가 방지됨). 단일 카드 / 현재 노트북 일괄 / 모든 노트북 sweep 세 가지 모드. **bulk sweep 은 별도 popup window + `chrome.debugger` 의 trusted input** 으로 NotebookLM 의 visibility / userActivation 게이트를 우회 (자세한 매커니즘은 [IMPLEMENTATION_NOTES §9, §10](IMPLEMENTATION_NOTES.md)). m4a/mp4 는 익스텐션 측에서 **자동으로 mp3 64k mono 로 transcode** (offscreen document + lamejs, port 기반 keepalive) — GitHub Contents/Git Data API 의 ~40 MB 사각지대 회피. 옛 m4a 가 repo 에 남아있다면 워크플로 측 ffmpeg transcode 도 함께 켤 수 있음. RSS feed (`docs/feed.xml`) 는 두 모드 — 사용자 repo 의 GitHub Actions 워크플로가 audio push 마다 자동 빌드 (default) / 익스텐션이 매 push 시마다 직접 생성. `docs/podcast.json` 의 `retention` (`maxItems` / `maxAgeDays` / `maxTotalMB`) 으로 보관 정책. 관리 페이지는 **사이드바 네비게이션** (진행 모니터 / GitHub / 메타 / 에피소드) + **한·영·독 3개 언어 i18n** (사이드바 셀렉터로 즉시 전환). bulk 종료 시 **OS 알림** (성공/실패 카운트), 실패 카드들은 [실패 N개 재시도] 버튼으로 같은 selection 재실행. 푸시된 에피소드 목록 (정렬 / 그룹 / 다중 삭제 / [편집 ↗] 원본 노트북으로 이동) 도 함께. 표준 워크플로 한 벌은 [examples/feed-builder/](examples/feed-builder/), 사용법은 익스텐션 popup 의 [❓ 도움말].
 
 ## 로드맵
 
@@ -29,6 +29,11 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 - [x] m4a → mp3 transcode — 워크플로 측 native ffmpeg (`docs/podcast.json` 의 `transcode` 필드)
 - [x] m4a → mp3 transcode — **익스텐션 내장** (offscreen document + lamejs, v0.4.11). m4a/mp4 자동 mp3 64k mono 변환 후 push.
 - [x] 푸시된 에피소드 목록 관리 (관리 페이지) — 정렬 / 노트북별 그룹 / 다중 선택 삭제 / [편집 ↗] 원본 노트북 새 탭으로 열기
+- [x] 관리 페이지 사이드바 네비게이션 — 도구 / 설정 / 데이터 그룹화, hash 라우팅, 진행 모니터 라이브 뱃지
+- [x] 한·영·독 i18n — `data-i18n` 속성 + `t()` 헬퍼, 사이드바 언어 셀렉터로 즉시 전환 + storage 영구 저장 (v0.4.20)
+- [x] bulk 완료 OS 알림 — `chrome.notifications` 로 성공/실패 카운트 즉시 안내 (관리 페이지 닫혀 있어도)
+- [x] 실패 카드 재시도 — bulk 종료 후 실패 selection persist → 직전 스캔 패널의 [실패 N개 재시도] 버튼으로 같은 selection 재실행
+- [x] offscreen transcode keepalive — multi-reason `["AUDIO_PLAYBACK","BLOBS","WORKERS"]` + 무음 audio loop + port 기반 SW 연결로 30s+ 지속 변환 안정화
 - [ ] Chrome Web Store 등록 — 자료 준비 완료 ([RELEASING.md](RELEASING.md), [STORE_LISTING.md](STORE_LISTING.md), [docs/privacy.html](docs/privacy.html)). 남은 사용자 측 작업: Pages 활성화 + 스크린샷 + Developer 계정 + zip 업로드.
 
 ## 설치 (개발 모드)
@@ -79,6 +84,7 @@ NotebookLM UI 가 바뀌어 동작이 깨지면 [src/content.js](src/content.js)
 | `alarms` | 장시간 bulk 작업 중 SW idle 종료 방지 (30초 주기 keepalive) |
 | `debugger` | bulk sweep 의 download 메뉴 클릭에 trusted input 주입 (NotebookLM 의 isTrusted/userActivation 게이트 우회) |
 | `offscreen` | m4a/mp4 → mp3 transcode 를 위한 offscreen document (AudioContext + lamejs) |
+| `notifications` | bulk 종료 시 OS 알림으로 성공/실패 카운트 안내 (관리 페이지 닫혀 있어도) |
 | `host_permissions: notebooklm.google.com` | 페이지 DOM 스캔 |
 | `host_permissions: *.googleusercontent.com, *.usercontent.google.com, accounts.google.com, lh3.google.com` | audio CDN + 인증 redirect 체인 통과 ([IMPLEMENTATION_NOTES §2](IMPLEMENTATION_NOTES.md)) |
 | `host_permissions: api.github.com` | 본인 repo 에 audio / RSS push |
