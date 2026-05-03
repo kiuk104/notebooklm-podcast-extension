@@ -28,6 +28,7 @@ const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   }
   i18nSetLang(["ko", "en", "de"].includes(lang) ? lang : "ko");
   if (langSelectEl) langSelectEl.value = i18nGetLang();
+  refreshHelpLink();
 
   const stored = await chrome.storage.local.get(KEYS);
   for (const k of KEYS) {
@@ -41,6 +42,17 @@ const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   refreshFeedUrl();
 })();
 
+// 사이드바 도움말 링크가 현재 언어 매칭 help 파일로 라우팅되도록.
+// help.html (ko, default) / help-en.html / help-de.html — 사용자가 언어를 바꾸면
+// 바로 갱신되어, 다음 [도움말] 클릭이 그 언어 페이지로 새 탭 열림.
+function refreshHelpLink() {
+  const a = document.getElementById("help-link");
+  if (!a) return;
+  const lang = i18nGetLang();
+  const file = lang === "en" ? "help-en.html" : lang === "de" ? "help-de.html" : "help.html";
+  a.href = `../help/${file}`;
+}
+
 if (langSelectEl) {
   langSelectEl.addEventListener("change", async () => {
     const v = langSelectEl.value;
@@ -50,6 +62,7 @@ if (langSelectEl) {
     if (lastRenderedState) renderTaskState(lastRenderedState);
     renderLastScanPanel();
     if (epItems.length > 0) renderEpisodeTable();
+    refreshHelpLink();
     // sidebar version label.
     try {
       const v2 = chrome.runtime.getManifest().version;

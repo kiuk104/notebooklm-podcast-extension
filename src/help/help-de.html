@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>NotebookLM Podcast Sync — Hilfe</title>
+<style>
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 24px 80px; color: #222; line-height: 1.6; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  p, li { font-size: 13px; }
+  p.sub { color: #666; margin-top: 0; font-size: 13px; }
+  code { background: #f4f4f5; padding: 1px 6px; border-radius: 3px; font-size: 12px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  pre { background: #f8f9fb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; font-size: 12px; line-height: 1.5; overflow-x: auto; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  ol li, ul li { margin: 4px 0; }
+  a { color: #2563eb; }
+  .tip { background: #eff6ff; border-left: 3px solid #2563eb; padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; font-size: 12.5px; }
+  .warn { background: #fef3c7; border-left: 3px solid #d97706; padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; font-size: 12.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  th { background: #f9fafb; font-weight: 600; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+  nav.toc { background: #f9fafb; border: 1px solid #e5e7eb; padding: 10px 16px; border-radius: 6px; margin: 20px 0 28px; font-size: 12.5px; }
+  nav.toc ol { margin: 4px 0; padding-left: 20px; }
+  .lang-switch { font-size: 12px; color: #6b7280; margin: 0 0 8px; }
+  .lang-switch a { color: #2563eb; text-decoration: none; margin-right: 10px; }
+  .lang-switch a.current { color: #111; font-weight: 600; text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<p class="lang-switch">
+  <a href="help.html">한국어</a>
+  <a href="help-en.html">English</a>
+  <a href="help-de.html" class="current">Deutsch</a>
+</p>
+
+<h1>NotebookLM Podcast Sync — Hilfe</h1>
+<p class="sub">Eine Chrome-Erweiterung, die NotebookLMs Audio-Übersichten in dein eigenes GitHub-Repo pusht und daraus einen persönlichen Podcast-RSS-Feed macht.</p>
+
+<nav class="toc">
+  <strong>Inhalt</strong>
+  <ol>
+    <li><a href="#how-it-works">Funktionsweise</a></li>
+    <li><a href="#setup">Erstmaliges Setup (GitHub-Repo + PAT)</a></li>
+    <li><a href="#usage">Benutzung (einzeln / aktuelles Notebook / alle Notebooks)</a></li>
+    <li><a href="#rss">RSS-Feed-Generierung</a></li>
+    <li><a href="#meta">Podcast-Metadaten (Titel / Autor / Cover)</a></li>
+    <li><a href="#episodes">Verwaltung gepushter Episoden (bearbeiten / löschen)</a></li>
+    <li><a href="#retention">Aufbewahrungsrichtlinie (Rolling Window)</a></li>
+    <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
+    <li><a href="#filename">Dateinamenskonvention</a></li>
+    <li><a href="#troubleshoot">Fehlerbehebung</a></li>
+    <li><a href="#privacy">Berechtigungen &amp; Datenschutz</a></li>
+  </ol>
+</nav>
+
+<h2 id="how-it-works">1. Funktionsweise</h2>
+<pre>NotebookLM-Notebook-Seite (Audio-Übersichts-Karten)
+  → Erweiterung [Herunterladen]
+    → Chrome lädt die Audio-Datei (auch in den lokalen Ordner)
+    → Parallel holt der Service Worker dieselbe Audio-Datei nochmals
+      → PUT in docs/episodes/ via GitHub Contents API
+        → (GitHub-Actions-Workflow im Repo) baut feed.xml neu
+          → Podcast-App → neue Episode</pre>
+
+<p>Nach dem einmaligen Setup reicht für jede neue Audio-Übersicht ein Klick auf [Herunterladen] in der Erweiterung.</p>
+
+<h2 id="setup">2. Erstmaliges Setup</h2>
+
+<h3>2-1. Leeres öffentliches GitHub-Repo erstellen</h3>
+<ol>
+  <li>Erstelle ein neues Repo auf GitHub. <strong>Public</strong> (der RSS-Feed muss von Podcast-Apps erreichbar sein).</li>
+  <li>Öffne <strong>Settings → Pages</strong> und setze Source auf den <code>main</code>-Branch / Ordner <code>/docs</code>.</li>
+  <li>Notiere die Pages-URL: <code>https://&lt;benutzer&gt;.github.io/&lt;repo&gt;/</code></li>
+  <li>Die endgültige RSS-URL lautet: <code>https://&lt;benutzer&gt;.github.io/&lt;repo&gt;/feed.xml</code> — abonniere diese in deiner Podcast-App.</li>
+</ol>
+
+<h3>2-2. Personal Access Token (PAT) erzeugen</h3>
+<ol>
+  <li>Öffne die <a href="https://github.com/settings/tokens/new?scopes=repo&description=notebooklm-podcast-extension" target="_blank">Seite für neue PAT</a> (der nötige Scope ist vorausgewählt).</li>
+  <li>Vergib einen aussagekräftigen Note (z. B. <code>notebooklm-podcast-extension</code>) und wähle ein Ablaufdatum.</li>
+  <li>Es genügt der Scope <code>repo</code>.</li>
+  <li>Klicke [Generate token] → kopiere den angezeigten <code>ghp_...</code>-Token (er wird nicht erneut angezeigt).</li>
+</ol>
+
+<div class="warn">
+  Der Token wird <strong>nur einmal</strong> angezeigt. Füge ihn in die Erweiterungseinstellungen ein, bevor du die Seite schließt. Verloren? Dann muss ein neuer erzeugt werden.
+</div>
+
+<h3>2-3. Eingaben auf der Verwaltungsseite</h3>
+<ol>
+  <li>Erweiterungssymbol klicken → unten im Popup <code>⚙ Verwaltung</code>.</li>
+  <li>PAT in das Feld <strong>Token</strong> einfügen.</li>
+  <li><strong>Repo</strong> im Format <code>owner/name</code> eingeben (z. B. <code>kiuk104/my-notebooklm-podcast</code>).</li>
+  <li><strong>RSS-Feed-Modus</strong>: belasse den Standardwert <em>An GitHub Actions delegieren</em> (siehe <a href="#rss">§4</a>).</li>
+  <li>Commit-Name/E-Mail darfst du leer lassen (GitHub-Standardwerte werden verwendet).</li>
+  <li>[Speichern] klicken, dann <strong>[Prüfen]</strong>, um Token + Repo zu verifizieren. <code>✓ &lt;benutzer&gt; → &lt;repo&gt; Push möglich. Alles korrekt.</code> bedeutet OK.</li>
+</ol>
+
+<div class="tip">
+  [Prüfen] ruft <code>GET /user</code> + <code>GET /repos/&lt;owner&gt;/&lt;name&gt;</code> auf, um den Token sowie Repo-Zugriff/Push-Berechtigung in einem Schritt zu validieren. Fängt 401 / 404 / fehlende Push-Rechte ab, bevor irgendein Download läuft.
+</div>
+
+<h2 id="usage">3. Benutzung</h2>
+
+<p>Drei Modi — von einer einzelnen Karte bis zum kompletten Sweep über alle Notebooks.</p>
+
+<h3>3-1. Einzelne Karte herunterladen</h3>
+<ol>
+  <li>Öffne in NotebookLM eine Notebook-Seite mit Audio-Übersicht (<code>https://notebooklm.google.com/notebook/&lt;id&gt;</code>).</li>
+  <li><strong>Drücke einmal F5</strong> auf dieser Seite, damit das Content-Script injiziert wird (nötig nach Erweiterungs-Installation/Neuladen).</li>
+  <li>Erweiterungssymbol in der Symbolleiste klicken → <strong>[Aktuelles Notebook scannen]</strong>.</li>
+  <li>Notebook-Titel / Erstellungsdatum + Liste der Audio-Übersichten erscheint.</li>
+  <li>Neben der gewünschten Karte auf <strong>[Herunterladen]</strong> klicken.</li>
+  <li>Status: <em>wird heruntergeladen → ⬇ heruntergeladen, wird gepusht → ✓ Push erfolgreich</em>.</li>
+</ol>
+
+<h3>3-2. Aktuelles Notebook im Bündel (Checkboxen)</h3>
+<p>Im selben [Aktuelles Notebook scannen]-Ergebnis steht neben jeder Karte eine Checkbox.</p>
+<ul>
+  <li>Bereits ins Repo gepushte Karten (per Artifact-UUID erkannt) sind standardmäßig nicht ausgewählt und tragen das Label <em>↻ bereits gepusht</em>.</li>
+  <li>Karten mit Platzhalter-Titel haben deaktivierte Checkboxen (werden bei einem späteren Scan, sobald der Titel feststeht, wieder aktiv).</li>
+  <li>Der Rest ist standardmäßig ausgewählt — so werden nur neue Karten geholt.</li>
+  <li>Oben <strong>[Alle auswählen]</strong> + <strong>[Auswahl herunterladen (N)]</strong> für Bündel-Download.</li>
+  <li>Die N Karten werden sequenziell verarbeitet — nach erfolgreichem Push der einen startet die nächste (NotebookLMs ⋮ → Download-Menü erlaubt nur eines gleichzeitig, das verhindert Race Conditions).</li>
+</ul>
+
+<h3>3-3. Sweep über alle Notebooks (entspricht v1-Cron)</h3>
+<p>Auf einer beliebigen NotebookLM-Seite im Popup auf <strong>[Alle Notebooks scannen]</strong> klicken. Die Erweiterung läuft in zwei Phasen:</p>
+
+<p><strong>Scan-Phase</strong> (Hintergrund-Tabs im Hauptfenster):</p>
+<ol>
+  <li>Öffnet die NotebookLM-Startseite (<code>/</code>) und sammelt alle Notebook-URLs.</li>
+  <li>Öffnet jedes Notebook nacheinander und sammelt die Audio-Karten (5–10 s pro Notebook).</li>
+  <li>Schließt den Tab und macht weiter. 200 Notebooks ≈ 10–15 Minuten.</li>
+  <li>Die nach Notebook gruppierte Kartenliste erscheint im Popup. Das Ergebnis wird 30 Minuten lang zwischengespeichert — Popup schließen und wieder öffnen erfordert keinen erneuten Scan.</li>
+  <li>Wähle per Checkbox aus, was geladen werden soll (bereits gepushte Karten sind abgewählt) → <strong>[Auswahl herunterladen]</strong>.</li>
+</ol>
+
+<p><strong>Download-Phase</strong> (eigenes Popup-Fenster):</p>
+<ol>
+  <li>Die Erweiterung öffnet ein kleines Popup-Fenster über <code>chrome.windows.create({type:"popup", focused:false})</code> (Hauptfenster behält den Fokus). NotebookLMs Download-Trigger verlangt sowohl <code>visibilityState='visible'</code> als auch eine echte User-Geste — ein Background-Tab im <code>active:false</code>-Zustand löst keinen Download aus.</li>
+  <li>Innerhalb dieses Popups öffnet die Erweiterung jedes Notebook nacheinander und klickt das ⋮ → "Herunterladen"-Menü mittels <code>chrome.debugger</code> + <code>Input.dispatchMouseEvent</code> — auf C++-Browserebene wird ein <em>echter Nutzer-Klick</em> synthetisiert, sodass NotebookLM <code>isTrusted=true</code> sieht.</li>
+  <li>Pro Karte: NotebookLM startet das Audio-Streaming → der SW holt dieselbe URL erneut → ist es <code>m4a/mp4</code>, transcodiert das Offscreen-Dokument zu mp3 (64k Mono) → Push zu GitHub.</li>
+  <li>Das Popup-Fenster schließt sich automatisch, sobald alle Karten fertig sind.</li>
+</ol>
+
+<div class="tip">
+  <strong>Für automatischen Download neuer Karten nach dem Scan</strong> aktiviere auf der Verwaltungsseite (⚙ Verwaltung) die Option <code>Neue Karten nach dem Scan automatisch herunterladen</code>. Direkt nach [Alle Notebooks scannen] werden Karten, die noch nicht im Repo sind, geladen — entspricht dem v1-Cron. Beim ersten Mal können Dutzende bis Hunderte zugleich kommen, deshalb Standard AUS — sicherer ist es, das Ergebnis erst zu sichten und dann <strong>[Letzter Scan → Neue laden]</strong> manuell auszulösen.
+</div>
+
+<div class="warn">
+  Im NotebookLM-Tab des Popup-Fensters erscheint oben ein <strong>gelber „Debugging"-Hinweis</strong> — Chromes Standardanzeige für Erweiterungen, die <code>chrome.debugger</code> verwenden. Normales Verhalten; verschwindet, sobald das Popup schließt. Hauptfenster ist nicht betroffen.
+</div>
+
+<div class="tip">
+  Dieselbe Audio-Datei wird auch in Chromes Standard-Download-Ordner gespeichert (Offline-Backup). Im Repo landet sie unter <code>docs/episodes/</code>.
+</div>
+
+<h3>3-4. Popup während eines Vorgangs schließen?</h3>
+<p>3-2 (Bündel im aktuellen Notebook): Das Popup-JS treibt die Schleife an — Schließen stoppt neue Downloads. Bereits gestartete Downloads werden im Hintergrund-SW abgeschlossen.</p>
+<p>3-3 (Sweep über alle Notebooks): wird komplett im Hintergrund-SW orchestriert — Schließen unterbricht nichts. Beim erneuten Öffnen des Popups wird die Kartenliste nicht wiederhergestellt — stattdessen zeigt der <strong>Fortschrittsmonitor auf der Verwaltungsseite (⚙ Verwaltung)</strong> den Live-Stand (Scan-/Download-Phase, Fortschritt, verstrichene Zeit, Fehler). Da der Hintergrund den Status in <code>chrome.storage.session</code> speichert, bleibt die laufende Aufgabe sichtbar, selbst wenn die Verwaltungsseite geschlossen und wieder geöffnet wird.</p>
+
+<h3>3-5. Fortschrittsmonitor (Verwaltungsseite)</h3>
+<p>Ein Sweep oder Bündel-Download kann 5–10 Minuten (oder länger) dauern, und das Popup allein ist dafür unhandlich. Das <strong>Fortschritts-Panel</strong> oben auf der Verwaltungsseite zeigt:</p>
+<ul>
+  <li>Aktueller Aufgaben-Typ (Alle Notebooks scannen / Massendownload) + Status-Badge (Läuft / Fertig / Fehler)</li>
+  <li>Verstrichene Zeit (automatisch Sekunden → Minuten → Stunden)</li>
+  <li>Phasen-Meldung (z. B. „Notebook 12/30 wird gescannt…")</li>
+  <li>Fortschrittsbalken (done/total)</li>
+  <li>Statistik-Zusammenfassung (N Notebooks · N Karten · N OK · N fehlgeschlagen)</li>
+  <li>Fehlerliste — welches Notebook/Karte aus welchem Grund fehlschlug (max. 20, älteste oben)</li>
+  <li><strong>Letzte GitHub-Push-Aktivität</strong> — die letzten 30 Push-Resultate live (✓ ok / ↻ skip / ✗ fail), Karten-Titel + Dateigröße + Feed-Update + „vor X Sekunden". Header zeigt Summen und insgesamt gepushte Bytes (z. B. ✓ 12 · ↻ 3 · ✗ 1 · 142,7 MB).</li>
+</ul>
+<p>[Zurücksetzen] erscheint nur bei idle / fertig / fehlgeschlagen — Klick blendet das Panel aus (nächste Aufgabe zeigt es automatisch wieder).</p>
+<p>Ohne laufende Aufgabe ist das Panel ausgeblendet, sodass das Formular die volle Fläche bekommt.</p>
+
+<h3>3-6. Letztes Scan-Ergebnis + [Neue laden]</h3>
+<p>Ein abgeschlossener Sweep wird 30 Minuten in <code>chrome.storage.session</code> behalten. Unterhalb des Formulars erscheint das <strong>„Letztes Scan-Ergebnis"</strong>-Panel:</p>
+<ul>
+  <li>Zusammenfassung: <code>N Notebooks · N Karten · N neu</code> + wie lange der Scan zurückliegt.</li>
+  <li><strong>[N neue laden]</strong> — Bündel-Download direkt auf der Verwaltungsseite starten (kein Popup nötig). Fortschritt erscheint im Monitor oben.</li>
+  <li><strong>[Löschen]</strong> — gespeichertes Ergebnis verwerfen (nächster Sweep ersetzt es ohnehin).</li>
+</ul>
+<p>Das gleiche Ergebnis <strong>wird auch im Popup automatisch wiederhergestellt</strong> — Popup schließen und wieder öffnen zeigt die Kartenliste innerhalb des 30-Minuten-Frischefensters ohne erneuten Scan.</p>
+
+<h2 id="rss">4. RSS-Feed-Generierung</h2>
+
+<p>Audio-m4a/mp3-Dateien im Repo allein reichen Podcast-Apps nicht. Du brauchst auch <strong><code>docs/feed.xml</code></strong> (RSS). Wähle einen der zwei Modi via <strong>RSS-Feed-Modus</strong> in den Erweiterungs-Optionen.</p>
+
+<h3>4-1. An GitHub Actions delegieren (Standard, empfohlen)</h3>
+<p>Liegt im Repo eine Workflow-Datei (<code>.github/workflows/build-feed.yml</code>), baut GitHub <code>feed.xml</code> bei jedem Audio-Push neu und committet sie. Die Erweiterung pusht nur das Audio (leichtgewichtig), und die Workflow-Logik kannst du frei anpassen.</p>
+
+<p><strong>Standard-Vorlage</strong>: im Erweiterungs-Repo unter <a href="https://github.com/kiuk104/notebooklm-podcast-extension/tree/main/examples/feed-builder" target="_blank">examples/feed-builder/</a> liegen vier Dateien (Workflow, Build-Skript, <code>podcast.json</code>, README) zum direkten Übernehmen. In dasselbe Pfadlayout im RSS-Repo kopieren (<code>.github/workflows/</code>, <code>scripts/</code>, <code>docs/podcast.json</code>) → Titel/Owner in <code>docs/podcast.json</code> anpassen → pushen. <code>feed.xml</code> entsteht automatisch beim ersten Audio (oder manuell via Actions-Tab → [Run workflow]).</p>
+
+<p>Es werden nur Python-Standard-Library-Module genutzt, also genügt ein einziger setup-python-Step in Actions. Detail-Setup / Troubleshooting steht in der README des Beispielordners.</p>
+
+<h3>4-2. Erweiterung baut feed.xml bei jedem Push</h3>
+<p>Direkt nach jedem Audio-Push listet die Erweiterung das Episodes-Verzeichnis und PUTet die <code>feed.xml</code>. Kein Workflow-Setup, dafür zwei GitHub-PUTs (Audio + Feed) pro Karte.</p>
+
+<p>Auch dieser Modus liest dieselben Metadaten wie 4-1 — wenn <code>docs/podcast.json</code> existiert, werden Titel/Owner/Image-Felder übernommen. Fehlt sie, wird mit Defaults (Titel = „NotebookLM Podcast", Sprache = „ko", Owner leer) gearbeitet und in der SW-Console eine Warnung ausgegeben. <strong>Für eine richtige Podcast-App-Registrierung empfiehlt sich <code>docs/podcast.json</code></strong> (Format wie im <a href="https://github.com/kiuk104/notebooklm-podcast-extension/blob/main/examples/feed-builder/docs/podcast.json" target="_blank">Beispiel</a>).</p>
+
+<p>BASE_URL wird aus <code>owner/name</code> in den Erweiterungs-Optionen automatisch zu <code>https://&lt;owner&gt;.github.io/&lt;name&gt;/</code> zusammengesetzt. Bei eigener Domain ist Modus 4-1 (Workflow) besser geeignet.</p>
+
+<h2 id="meta">5. Podcast-Metadaten (Titel / Autor / Cover)</h2>
+
+<p>Die in Podcast-Apps angezeigten Kanal-Informationen (Titel, Beschreibung, Autor, Cover, Kategorie) liegen in <code>docs/podcast.json</code> in deinem Repo. Im Abschnitt <strong>„Podcast-Metadaten"</strong> der Verwaltungsseite kannst du sie per Formular bearbeiten — kein direkter JSON-Edit nötig.</p>
+
+<h3>5-1. Metadaten bearbeiten</h3>
+<ol>
+  <li>Beim Öffnen der Verwaltungsseite (<code>⚙ Verwaltung</code>) mit gespeichertem Token + Repo wird das aktuelle <code>podcast.json</code> automatisch geladen und ins Formular geschrieben.</li>
+  <li>Titel / Beschreibung / Autor-Name · E-Mail / Sprache / Kategorie / Explizit / Cover-URL anpassen.</li>
+  <li>[Metadaten speichern] klicken → <code>docs/podcast.json</code> im Repo wird aktualisiert → der Workflow startet und baut <code>feed.xml</code> mit den neuen Metadaten neu.</li>
+  <li>Podcast-Apps übernehmen die neuen Daten beim nächsten Refresh (üblicherweise Minuten bis wenige Stunden).</li>
+</ol>
+
+<h3>5-2. Cover hochladen</h3>
+<p>iTunes/Apple-Podcasts-Standard — JPG/PNG mindestens 1400×1400. Manche Apps lehnen kleinere Bilder ab (das pinke „P"-Placeholder ist genau dieser Fall).</p>
+<ol>
+  <li>In der Cover-Zeile auf <strong>Datei auswählen</strong> klicken → lokale JPG/PNG (max. 5 MB) wählen.</li>
+  <li>Die Erweiterung pusht sie nach <code>docs/cover.{jpg|png}</code> in deinem Repo (Pages serviert sie automatisch).</li>
+  <li>Das URL-Feld wird auf <code>https://&lt;owner&gt;.github.io/&lt;repo&gt;/cover.{jpg|png}</code> gesetzt.</li>
+  <li>Erst [Metadaten speichern] sorgt dafür, dass das Feld <code>image</code> in podcast.json auf diese URL zeigt und der Feed sie übernimmt.</li>
+</ol>
+
+<div class="tip">
+  Externe Image-Hoster (z. B. Imgur, Cloudinary) funktionieren ebenfalls — sofern dauerhaft. GitHub-Pages-Hosting (Upload oben) ist am stabilsten.
+</div>
+
+<h3>5-3. Felder, die nicht im Formular liegen</h3>
+<p><code>retention</code> (§7) und <code>transcode</code> (§8) sind nicht im Formular — selten geänderte technische Optionen, daher direkter podcast.json-Edit empfohlen. Beim [Speichern] werden diese Felder unverändert beibehalten.</p>
+
+<h2 id="episodes">6. Verwaltung gepushter Episoden</h2>
+
+<p>Der Abschnitt <strong>„Gepushte Episoden"</strong> der Verwaltungsseite zeigt alle Audio-Übersichten in <code>docs/episodes/</code> deines Repos als Tabelle — gleiche Struktur wie die v1-Admin-Seite. Bei gespeichertem Token + Repo wird die Liste beim Öffnen automatisch geholt.</p>
+
+<h3>6-1. Spalten</h3>
+<ul>
+  <li><strong>Datum</strong>: <code>YYYYMMDD</code>-Präfix aus dem Dateinamen, im ISO-Format.</li>
+  <li><strong>Notebook</strong>: Notebook-Slug aus dem Dateinamen (Bindestrich → Leerzeichen).</li>
+  <li><strong>Titel</strong>: Audio-Übersichts-Titel-Slug (Hover zeigt den vollen Dateinamen).</li>
+  <li><strong>Format</strong>: farbiges <code>m4a</code> / <code>mp3</code> / <code>mp4</code>-Tag — große m4a sind gelb, transcodierte mp3 grün, gut auf einen Blick zu unterscheiden.</li>
+  <li><strong>Größe</strong>: Bytes als MB ausgegeben.</li>
+</ul>
+
+<h3>6-2. Sortieren / Gruppieren</h3>
+<ul>
+  <li>Spaltenüberschrift klicken → asc/desc umschalten. Pfeil wechselt von ▲▼ zu ▲ / ▼.</li>
+  <li>[Sortierung zurücksetzen (Datum ↓)] — zurück zum Default (neueste zuerst).</li>
+  <li>[Nach Notebook gruppieren] → Karten desselben Notebooks bündeln, Header-Zeile zeigt <code>📓 Notebook (N)</code>.</li>
+</ul>
+
+<h3>6-3. Bearbeiten (springt zum NotebookLM-Original)</h3>
+<p>Der <strong>[Bearbeiten ↗]</strong>-Button jeder Zeile öffnet das zugehörige NotebookLM-Notebook in einem <em>neuen Tab</em>. Audio-Übersichten-Titel und -Inhalt werden bei NotebookLM bearbeitet (Source of Truth) — dort korrigieren, dann hier die alte Karte [Löschen], und der nächste Sweep zieht sie mit dem neuen Titel neu.</p>
+
+<div class="warn">
+  <strong>Ist [Bearbeiten ↗] deaktiviert (grau)</strong>, fehlt ein aktuelles Scan-Ergebnis zur URL-Zuordnung. Einmal [Alle Notebooks scannen] aus dem Popup heraus aktualisiert das Mapping (30 Min. gültig).
+</div>
+
+<h3>6-4. Löschen (einzeln / im Bündel)</h3>
+<ul>
+  <li>[Löschen] in der Zeile — einzelner ghDelete (Bestätigungs-Dialog → 1 Aufruf → ✓).</li>
+  <li>Linke Checkboxen + oben <strong>[Auswahl löschen]</strong> — Mehrfachauswahl. Status-Updates während der Verarbeitung (1/N → 2/N…). Bei Teil-Fehlern OK/Fehler-Zähler.</li>
+  <li>Die <strong>Alle auswählen</strong>-Checkbox ganz oben togglet alle Zeilen.</li>
+  <li>Nach dem Löschen wird die Liste automatisch neu geladen.</li>
+</ul>
+
+<div class="tip">
+  Löschen entfernt nur die Datei aus dem Repo — die NotebookLM-Karte selbst bleibt. Beim nächsten Sweep zieht [Herunterladen] sie erneut (shortId-Dedup verhindert Doppel-Push). Praktisch, um falsch geholte Karten oder Karten mit Platzhalter-Titel zu bereinigen.
+</div>
+
+<h2 id="retention">7. Aufbewahrungsrichtlinie (Rolling Window)</h2>
+
+<p>Um das Repo klein zu halten, ergänze ein <code>retention</code>-Feld in <code>docs/podcast.json</code>. Beide RSS-Modi (4-1 und 4-2) befolgen dieselbe Richtlinie, der Cleanup bleibt also bei einem Modus-Wechsel gleich.</p>
+
+<pre>{
+  "title": "...",
+  ...
+  "retention": {
+    "maxItems": 50,
+    "maxAgeDays": 365
+  }
+}</pre>
+
+<table>
+  <tr><th>Feld</th><th>Bedeutung</th></tr>
+  <tr><td><code>maxItems</code></td><td>Nur die N neuesten Episoden behalten. Ältere Dateien werden beim Build gelöscht.</td></tr>
+  <tr><td><code>maxAgeDays</code></td><td>Nur Episoden aus den letzten N Tagen behalten.</td></tr>
+  <tr><td><code>maxTotalMB</code></td><td>Größenobergrenze des Verzeichnisses <code>docs/episodes/</code> (MB). Wird neueste-zuerst akkumuliert; sobald das Cap erreicht ist, wird der Rest entfernt. Soll <strong>GitHub Pages' 1-GB-Artifact-Limit umgehen</strong>. Bei ~5-MB-pro-Episode 64k-Mono-mp3 entspricht 900 MB ≈ 180 Episoden. Die neueste Episode wird immer behalten, selbst wenn sie alleine das Cap überschreitet.</td></tr>
+</table>
+
+<p>Sind alle drei gesetzt, gilt <strong>UND</strong> (eine Episode muss alle Bedingungen erfüllen) — die strengste gewinnt. Wenn nur eine Bedingung gewünscht ist, andere weglassen oder auf <code>0</code> setzen. Wird das ganze <code>retention</code>-Feld entfernt, ist Cleanup deaktiviert (alles bleibt für immer).</p>
+
+<div class="tip">
+  Hat keinen Einfluss auf NotebookLM-Karten — nur Repo-Dateien werden bereinigt. Per Retention entfernte Episoden verschwinden aus dem RSS, aber wenn die NotebookLM-Karte noch lebt, pusht der nächste [Herunterladen] sie erneut.
+</div>
+
+<h2 id="transcode">8. Transcode (m4a → mp3)</h2>
+
+<p>NotebookLMs m4a ist 256k Stereo, ~22 MB pro Stunde. Sprachlastige Audio-Übersichten klingen auch mit 64k Mono mp3 (~5 MB) sehr gut — etwa 4× mehr Kapazität bei demselben 1-GB-Pages-Limit. Außerdem liegt die GitHub Contents API bei ~37 MiB und der Git-Data-API-Blob bei ~40 MiB — NotebookLMs 1,5–2,5 h Übersichten (40–50 MB) fallen in die Lücke, in der <em>beide</em> ablehnen. Transcode umgeht diese Lücke.</p>
+
+<p>Zwei Modi, die parallel laufen können (was zuerst läuft, hinterlässt eine mp3, der zweite Schritt wird zum No-op).</p>
+
+<h3>8-1. Erweiterungsseitig (Offscreen + lamejs, automatisch)</h3>
+<p>Seit v0.4.11 transcodiert die Erweiterung m4a/mp4 selbst zu mp3, bevor sie gepusht werden. Keine Konfiguration nötig — m4a/mp4-Eingaben lösen das automatisch aus.</p>
+
+<ul>
+  <li><strong>Wo</strong>: Der SW lädt das Audio und reicht den ArrayBuffer ans Offscreen-Dokument → <code>AudioContext.decodeAudioData</code> für PCM → <code>lamejs</code>-Mp3Encoder für 64k-Mono-mp3 → zurück zum SW → ghPut.</li>
+  <li><strong>Geschwindigkeit</strong>: ~10 s für 30 min, ~20 s für 60 min. SW-Speicherspitze: 50 MB Eingabe + 5 MB Ausgabe.</li>
+  <li><strong>Dateiname</strong>: <code>.m4a</code> / <code>.mp4</code> wird beim Push automatisch zu <code>.mp3</code>.</li>
+  <li><strong>Fallback bei Transcode-Fehler</strong>: Original-m4a wird unverändert gepusht — schlägt nur (selten) fehl, wenn dann das Git-Data-API-Blob-Limit greift.</li>
+</ul>
+
+<div class="tip">
+  <strong>Bereits im Repo liegende m4a/mp4-Dateien werden vom erweiterungsseitigen Transcode nicht erneut umgewandelt</strong> (er läuft nur im Push-Pfad). Um alte m4a/mp4 nach mp3 zu konsolidieren, aktiviere den workflow-seitigen Transcode in §8-2 — der nächste Workflow-Lauf wandelt alle m4a/mp4 in <code>docs/episodes/</code> um.
+</div>
+
+<h3>8-3. Workflow-seitiges natives ffmpeg (Rückwärtskompatibilität)</h3>
+<p>Setzt das Feld <code>transcode</code> in <code>docs/podcast.json</code>, aktiviert sich der Transcode-Step des Workflows — m4a/mp4 in <code>docs/episodes/</code> werden in gleichnamige mp3 umgewandelt (Original gelöscht). Native ffmpeg auf <code>ubuntu-latest</code> (mit libmp3lame) braucht für 1 h Audio 5–10 s. Setzt RSS-Modus <a href="#rss">4-1 (Delegation an Actions)</a> voraus. Praktisch, um m4a aufzuräumen, die von Builds vor v0.4.11 kommen — einmal aktivieren, der nächste Push konvertiert alles.</p>
+
+<pre>{
+  ...
+  "transcode": {
+    "enabled": true,
+    "bitrate": "64k",
+    "mono": true
+  }
+}</pre>
+
+<table>
+  <tr><th>Feld</th><th>Bedeutung</th></tr>
+  <tr><td><code>enabled</code></td><td>Konvertiert nur bei <code>true</code>. Standard <code>false</code>.</td></tr>
+  <tr><td><code>bitrate</code></td><td>"64k" / "96k" / "128k" usw. „64k" für Sprache; „96k+" wenn Musik/Sounddesign mitläuft.</td></tr>
+  <tr><td><code>mono</code></td><td><code>true</code> mischt via <code>-ac 1</code> herunter. NotebookLM-Audio-Übersichten sind ohnehin Mono, Stereo verschwendet Platz.</td></tr>
+</table>
+
+<div class="warn">
+  <strong>Workflow-Transcode + Erweiterungs-direkter RSS-Modus (4-2) gleichzeitig</strong>: Kurzzeitig erscheint ein m4a-Feed: Erweiterung pusht m4a + RSS dazu, dann läuft der Workflow (~30 s–1 min), transkodiert nach mp3 und baut RSS neu. Podcast-Apps, die in diesem Fenster aktualisieren, holen die m4a-URL. Wenn Transcode genutzt wird, RSS-Modus 4-1 (Delegation an Actions) bevorzugen, damit alles konsistent bleibt.
+</div>
+
+<p><strong>Erweiterungs-internes ffmpeg.wasm</strong>: nicht implementiert. Trade-offs (+25 MB Paket / 100–200 MB SW-Memory / 30 s bis Minuten Initial-Antwort) überwiegen, da der lamejs-Pfad seit v0.4.11 die meisten Fälle abdeckt. Nur relevant, falls Workflow-Setup für manche Nutzer wirklich unmöglich ist.</p>
+
+<h2 id="filename">9. Dateinamenskonvention</h2>
+<pre>YYYYMMDD__notebook-slug__shortId__title-slug.{m4a|mp3}</pre>
+
+<table>
+  <tr><th>Segment</th><th>Bedeutung</th></tr>
+  <tr><td><code>YYYYMMDD</code></td><td>Cover-Erstellungsdatum des NotebookLM-Notebooks (Datum im Cover-Bereich).</td></tr>
+  <tr><td><code>notebook-slug</code></td><td>Notebook-Titel auf Alphanumerisch + Koreanisch reduziert und auf 40 Zeichen gekürzt.</td></tr>
+  <tr><td><code>shortId</code></td><td>Erste 8 Hex-Zeichen der Artifact-UUID der NotebookLM-Karte. Pro Karte stabil unabhängig vom Titel, dient als Dedup-Schlüssel — erneutes Laden derselben Karte oder <strong>nachträgliches Umbenennen von Notebook / Karte in NotebookLM</strong> verursacht keinen Doppel-Push (funktioniert sogar direkt nach einem PUT, weil GET-Antworten nicht gecacht werden, also stets frisch sind).</td></tr>
+  <tr><td><code>title-slug</code></td><td>Audio-Übersichts-Titel, identisch slugifiziert und auf 40 Zeichen gekürzt.</td></tr>
+</table>
+
+<p>Das 40-Zeichen-Cap schützt Windows MAX_PATH (260) + GitHubs 255-Byte-Pfadlimit. Ein koreanisches Zeichen sind 3 UTF-8-Bytes, lange Titel können GitHubs Limit reißen; das Cap verhindert das.</p>
+
+<div class="tip">
+  <strong>Rückwärtskompatibilität:</strong> Vor v0.4.0 erstellte Dateien können im 3-Segment-Format (<code>YYYYMMDD__notebook__title.{ext}</code>) ohne shortId vorliegen. Beide RSS-Builder (Erweiterung + GitHub-Actions-Workflow) erkennen beide Formate, du kannst sie also lassen. Neue Pushes nutzen das 4-Segment-Format.
+</div>
+
+<h2 id="troubleshoot">10. Fehlerbehebung</h2>
+
+<h3>„Aktueller Tab ist keine NotebookLM-Notebook-Seite"</h3>
+<p>Die Erweiterung läuft nur auf NotebookLM-Notebook-Detailseiten (<code>/notebook/&lt;id&gt;</code>). Auf der Start- oder Suchseite scannt sie nicht.</p>
+
+<h3>„Keine Antwort — bitte Seite neu laden"</h3>
+<p>Die NotebookLM-Seite war geöffnet, bevor die Erweiterung installiert/neu geladen wurde, also ist das Content-Script nicht injiziert. Auf der Seite <strong>F5</strong> drücken.</p>
+
+<h3>Push schlägt mit <code>401 Bad credentials</code> oder Berechtigungsfehler fehl</h3>
+<ol>
+  <li>Auf der Verwaltungsseite [Prüfen] klicken, um die genaue Fehlerursache zu identifizieren — Token 401 / Repo 404 / fehlende Push-Berechtigung.</li>
+  <li>Token 401: Token-Feld leeren und neu einfügen (auf unsichtbare trailing whitespaces achten). Hilft das nicht, ist die PAT abgelaufen — neu erzeugen (§2-2).</li>
+  <li>Repo 404: Tippfehler in owner/name oder ein privates Repo, das der Token nicht sehen kann. Repository-Access-Einstellung der fine-grained PAT prüfen.</li>
+  <li>Keine Push-Berechtigung: Classic-PAT braucht Scope <code>repo</code>; fine-grained-PAT benötigt <code>Contents: Read and write</code> für dieses Repo.</li>
+</ol>
+
+<h3>Dieselbe Audio-Übersicht zweimal gepusht (z. B. <code>__audio-0.mp3</code>, <code>__echter-titel.mp3</code>)</h3>
+<p>NotebookLM zeigt direkt nach Erstellung kurz Platzhalter-Titel wie <code>audio 0</code>, bevor sie asynchron auf den richtigen Titel umgesetzt werden. Wer im Platzhalter-Fenster lädt, landet evtl. zweimal denselben Audio. Vor dem Laden warten, bis der Titel fixiert ist. Siehe <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §1</a>.</p>
+
+<h3>„Chrome-Tabs-API gesperrt" oder „Tabs cannot be edited right now"</h3>
+<p>Während eines Sweeps fallen mehrere Notebooks in Folge mit derselben Meldung aus. Ursachen: tatsächlicher User-Drag, schnelle create/close-Folge, Konflikte mit Tab-Manager-Erweiterungen, Chrome-internes Rate-Limit.</p>
+<p>Die Erweiterung wiederholt automatisch bis zu 5×, mit Backoff (500 ms → 8 s). Nach 5 Fehlern in Folge bricht der Sweep ab — die Teilergebnisse bleiben erhalten und sind via [Neue laden] nutzbar. Siehe <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §5</a>.</p>
+<p>Workarounds: (a) erneut versuchen, ohne den Tab-Strip zu berühren, (b) andere Tab-Manager-Erweiterungen (OneTab, Tab-Grouping etc.) kurz deaktivieren, (c) etwas warten und neu starten.</p>
+
+<h3>Download lief, aber im GitHub ist nichts</h3>
+<p>SW-DevTools-Console prüfen:</p>
+<ol>
+  <li>Auf <code>chrome://extensions/</code> auf der Karte der Erweiterung den Link <strong>service worker</strong> klicken.</li>
+  <li>In der Konsole erscheinen <code>[push] ...</code>-Logzeilen, die fetch / push schrittweise zeigen.</li>
+  <li>Fehlermeldungen (Host, Status) zeigen, welcher Downstream-Host oder welche Berechtigung das Problem ist.</li>
+</ol>
+
+<h3>Bündel-Download erzeugt bei jeder Karte „Push-Antwort-Timeout"</h3>
+<p>Bündel-Download startet direkt nach dem Sweep, jede Karte timeoutet — die SW-Console zeigt <em>keine</em> <code>[push] SW fetch host=...</code>-Zeile. Signal: NotebookLM hat den Download-Trigger aus dem Hintergrund-Tab abgelehnt — entweder ist das Popup-Fenster nicht aufgegangen, oder das <code>chrome.debugger</code>-Attach ist gescheitert. Auf <code>chrome://extensions/</code> die Berechtigungen (debugger / offscreen) der Erweiterung kontrollieren und die Erweiterung neu laden. Mechanik: <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md §9, §10</a>.</p>
+
+<h3>Eine Karte schlägt mit „Datei XX MB übersteigt das GitHub-Blob-API-Limit (~40 MB)" fehl</h3>
+<p>NotebookLMs 1,5–2,5-Stunden-Übersichten erzeugen m4a-Dateien in der Lücke zwischen Contents API (~37 MiB) und Git-Data-API-Blob (~40 MiB). Der Client-Side-Transcode ab v0.4.11 umgeht das normalerweise via 64k-Mono-mp3, aber wenn dieser Transcode selbst scheitert, erscheint diese Meldung. Selten, aber wenn:</p>
+<ol>
+  <li>Prüfen, ob der Transcode selbst defekt ist — <code>[transcode]</code>-Logs in SW-Console oder im Offscreen-Dokument-Console (Offscreen hat ein eigenes DevTools-Fenster).</li>
+  <li>Workflow-seitigen Transcode (§8-2) als Backstop aktivieren — selbst wenn eine m4a durchrutscht, wandelt sie der nächste Workflow-Lauf um.</li>
+  <li>In NotebookLM eine kürzere Audio-Übersicht erzeugen, oder Audio-Hosting umziehen (z. B. R2).</li>
+</ol>
+
+<h3>„is at X but expected Y" (HTTP 409) oder „Rule was unable to be completed" (HTTP 403)</h3>
+<p>Während ein Bündel alle 20–30 s eine Karte pusht, kann der GitHub-Actions-Workflow <code>auto: rebuild feed</code> parallel committen und in eine Race laufen; oder eine GitHub-Repo-Ruleset-Validierung verfehlt das 10-Sekunden-Timeout. Seit v0.4.10 wiederholt ghPut automatisch mit 1 s/2 s/4 s Backoff, daher meist unsichtbar. Erscheint <code>409 conflict (attempt 1/4), refreshing sha + retry</code> im Aktivitätslog, läuft der Retry — meist nach 1–2 Versuchen erfolgreich. Schlagen alle 4 fehl, wird nur diese Karte als fehlgeschlagen markiert.</p>
+
+<h2 id="privacy">11. Berechtigungen &amp; Datenschutz</h2>
+
+<table>
+  <tr><th>Berechtigung</th><th>Zweck</th></tr>
+  <tr><td><code>activeTab</code>, <code>scripting</code></td><td>Content-Script-Injektion in den aktuellen NotebookLM-Tab + Besuch jedes Notebooks via Hintergrund-Tabs / Popup-Fenster während des Sweeps.</td></tr>
+  <tr><td><code>storage</code></td><td>GitHub-Token / Repo-Einstellungen lokal im Browser speichern.</td></tr>
+  <tr><td><code>downloads</code></td><td>NotebookLM-Audio empfangen + Datei umbenennen.</td></tr>
+  <tr><td><code>notifications</code></td><td>Eine OS-Benachrichtigung am Ende eines langen Bündel-Downloads / Sweeps mit Erfolgs-/Fehler-Zähler, damit die Verwaltungsseite nicht offen bleiben muss.</td></tr>
+  <tr><td><code>alarms</code></td><td>Service Worker während langer Bündel-Aufgaben (5 min – 2 h+) alle 30 s aufwecken, damit er nicht im Idle terminiert. Alarm wird beim Aufgaben-Ende automatisch gelöscht.</td></tr>
+  <tr><td><code>debugger</code></td><td>Klick auf NotebookLMs ⋮ → „Herunterladen" via <code>Input.dispatchMouseEvent</code> beim Bündel-Download synthetisieren. NotebookLMs isTrusted=true / User-Activation-Gate weist programmatisches .click() ab, deshalb erforderlich. Während des Attaches erscheint im Notebook-Tab des Popup-Fensters ein gelbes „Debugging"-Banner (Chrome-Standard); detaches automatisch beim Aufgaben-Ende. Einzelne Popup-Downloads tragen User-Activation durch die Aufruf-Kette und brauchen keinen debugger.</td></tr>
+  <tr><td><code>offscreen</code></td><td>Client-side m4a/mp4 → mp3 Transcode. Im SW-Umfeld fehlt <code>AudioContext</code>, daher übernimmt das Offscreen-Dokument Decode + lamejs-Encode. Aktiv nur während eines Pushs, danach geschlossen.</td></tr>
+  <tr><td><code>host_permissions: notebooklm.google.com</code></td><td>Karten-Metadaten aus dem NotebookLM-Page-DOM lesen.</td></tr>
+  <tr><td><code>host_permissions: *.googleusercontent.com, *.usercontent.google.com, accounts.google.com, lh3.google.com</code></td><td>Audio-CDN- / Auth-Redirect-Kette passieren (Details: IMPLEMENTATION_NOTES §2).</td></tr>
+  <tr><td><code>host_permissions: api.github.com</code></td><td>Audio / RSS in dein Repo pushen.</td></tr>
+</table>
+
+<p><strong>Token-Speicherort</strong>: <code>chrome.storage.local</code>. Wird nie an externe Server gesendet, nur als Authorization-Header bei GitHub-API-Calls. Beim Deinstallieren der Erweiterung wird er ebenfalls entfernt.</p>
+
+<p><strong>NotebookLM-Session-Cookies</strong>: Beim Re-Fetch der Audio-Datei nutzt die Erweiterung <code>credentials:"include"</code>, damit Cookies die Redirect-Kette (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>) durchlaufen. Die Erweiterung speichert diese Cookies nicht separat.</p>
+
+<hr>
+
+<p style="font-size: 12px; color: #666;">
+Tiefere Implementierungs- / Debug-Notizen:
+<a href="../../README.md" target="_blank">README.md</a> ·
+<a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a>
+</p>
+
+</body>
+</html>
