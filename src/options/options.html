@@ -21,7 +21,10 @@
   .nav-badge { margin-left: auto; font-size: 10px; padding: 1px 5px; border-radius: 8px; background: #dc2626; color: #fff; font-weight: 600; display: none; }
   .nav-badge.show { display: inline-block; }
   .nav-footer { margin-top: 32px; padding: 12px 10px 0; border-top: 1px solid #e5e7eb; font-size: 11px; }
-  .nav-footer a { color: #2563eb; text-decoration: none; }
+  .nav-footer a { color: #2563eb; text-decoration: none; display: inline-block; margin-top: 10px; }
+  .lang-row { display: flex; align-items: center; gap: 6px; }
+  .lang-label { color: #6b7280; font-size: 11px; flex-shrink: 0; }
+  .lang-select { flex: 1; padding: 4px 6px; font-size: 11px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; margin-top: 0; }
   .content { flex: 1; padding: 24px 32px 80px; max-width: 740px; min-width: 0; }
   .page { display: none; }
   .page.active { display: block; }
@@ -132,37 +135,49 @@
 
   <aside class="sidebar">
     <div class="sidebar-header">
-      <h1>NotebookLM<br>Podcast Sync</h1>
+      <h1 data-i18n-html="sidebar.brand">NotebookLM<br>Podcast Sync</h1>
       <p class="version" id="sidebar-version">관리</p>
     </div>
 
     <div class="nav-group">
-      <div class="nav-group-title">도구</div>
+      <div class="nav-group-title" data-i18n="sidebar.group.tools">도구</div>
       <a href="#monitor" class="nav-item" data-page="monitor">
-        <span class="nav-icon">📊</span> 진행 모니터
+        <span class="nav-icon">📊</span>
+        <span class="nav-label" data-i18n="sidebar.nav.monitor">진행 모니터</span>
         <span class="nav-badge" id="nav-badge-monitor">!</span>
       </a>
     </div>
 
     <div class="nav-group">
-      <div class="nav-group-title">설정</div>
+      <div class="nav-group-title" data-i18n="sidebar.group.settings">설정</div>
       <a href="#github" class="nav-item" data-page="github">
-        <span class="nav-icon">🔗</span> GitHub 연결
+        <span class="nav-icon">🔗</span>
+        <span class="nav-label" data-i18n="sidebar.nav.github">GitHub 연결</span>
       </a>
       <a href="#meta" class="nav-item" data-page="meta">
-        <span class="nav-icon">🎙</span> 팟캐스트 메타
+        <span class="nav-icon">🎙</span>
+        <span class="nav-label" data-i18n="sidebar.nav.meta">팟캐스트 메타</span>
       </a>
     </div>
 
     <div class="nav-group">
-      <div class="nav-group-title">데이터</div>
+      <div class="nav-group-title" data-i18n="sidebar.group.data">데이터</div>
       <a href="#episodes" class="nav-item" data-page="episodes">
-        <span class="nav-icon">📁</span> 에피소드 목록
+        <span class="nav-icon">📁</span>
+        <span class="nav-label" data-i18n="sidebar.nav.episodes">에피소드 목록</span>
       </a>
     </div>
 
     <div class="nav-footer">
-      <a href="../help/help.html" target="_blank">❓ 도움말</a>
+      <div class="lang-row">
+        <span class="lang-label" data-i18n="sidebar.lang.label">언어</span>
+        <select id="lang-select" class="lang-select">
+          <option value="ko">한국어</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+        </select>
+      </div>
+      <a href="../help/help.html" target="_blank" data-i18n="sidebar.help">❓ 도움말</a>
     </div>
   </aside>
 
@@ -171,14 +186,14 @@
     <!-- ===== 도구: 진행 모니터 + 직전 스캔 결과 ===== -->
     <section class="page" id="page-monitor">
       <div class="page-header">
-        <h2>진행 모니터</h2>
-        <p class="sub">모든 노트북 스캔 / 일괄 다운로드의 라이브 진행 상태와 직전 스캔 결과.</p>
+        <h2 data-i18n="page.monitor.title">진행 모니터</h2>
+        <p class="sub" data-i18n="page.monitor.sub">모든 노트북 스캔 / 일괄 다운로드의 라이브 진행 상태와 직전 스캔 결과.</p>
       </div>
 
       <div class="task-panel" id="task-panel" style="display:none">
         <div class="task-head">
-          <span class="task-title" id="task-title">진행 중인 작업</span>
-          <span class="task-status" id="task-status">대기</span>
+          <span class="task-title" id="task-title" data-i18n="monitor.task.title">진행 중인 작업</span>
+          <span class="task-status" id="task-status" data-i18n="task.status.idle">대기</span>
           <span class="task-elapsed" id="task-elapsed"></span>
         </div>
         <div class="task-message" id="task-message"></div>
@@ -186,29 +201,30 @@
         <div class="task-stats" id="task-stats"></div>
         <div class="task-errors" id="task-errors" style="display:none"></div>
         <div class="task-recent-head" id="task-recent-head" style="display:none">
-          <span>최근 GitHub push 활동</span>
+          <span data-i18n="monitor.recent.head">최근 GitHub push 활동</span>
           <span id="task-recent-summary" style="font-weight:normal; color:#888;"></span>
         </div>
         <div class="task-recent" id="task-recent" style="display:none"></div>
         <div class="task-actions" id="task-actions" style="display:none">
-          <button type="button" id="task-cancel" style="background:#fee2e2; border-color:#fecaca; color:#991b1b;">강제 중단</button>
-          <button type="button" id="task-clear">초기화</button>
+          <button type="button" id="task-cancel" data-i18n="monitor.cancel" style="background:#fee2e2; border-color:#fecaca; color:#991b1b;">강제 중단</button>
+          <button type="button" id="task-clear" data-i18n="monitor.clear">초기화</button>
         </div>
       </div>
 
       <div class="task-panel" id="last-scan-panel" style="display:none; margin-top:12px;">
         <div class="task-head">
-          <span class="task-title">직전 스캔 결과</span>
+          <span class="task-title" data-i18n="monitor.lastScan.title">직전 스캔 결과</span>
           <span class="task-elapsed" id="last-scan-when"></span>
         </div>
         <div class="task-message" id="last-scan-summary"></div>
         <div class="task-actions">
-          <button type="button" id="last-scan-download" class="primary-action" style="background:#2563eb; color:#fff; border:0;">신규 받기</button>
-          <button type="button" id="last-scan-clear">지우기</button>
+          <button type="button" id="last-scan-download" class="primary-action" data-i18n="monitor.lastScan.download" style="background:#2563eb; color:#fff; border:0;">신규 받기</button>
+          <button type="button" id="last-scan-retry-failed" style="background:#fff7ed; border:1px solid #fdba74; color:#9a3412; display:none;"></button>
+          <button type="button" id="last-scan-clear" data-i18n="monitor.lastScan.clear">지우기</button>
         </div>
       </div>
 
-      <div class="task-empty" id="monitor-empty">
+      <div class="task-empty" id="monitor-empty" data-i18n-html="monitor.empty">
         진행 중인 작업도, 저장된 스캔 결과도 없습니다.<br>
         익스텐션 popup → <strong>[모든 노트북 스캔]</strong> 으로 시작하세요.
       </div>
@@ -217,71 +233,70 @@
     <!-- ===== 설정: GitHub 연결 ===== -->
     <section class="page" id="page-github">
       <div class="page-header">
-        <h2>GitHub 연결</h2>
-        <p class="sub">PAT + repo 입력 → [저장] → [설정 검증] 으로 push 권한 확인. RSS feed URL 도 여기서 확인/복사.</p>
+        <h2 data-i18n="page.github.title">GitHub 연결</h2>
+        <p class="sub" data-i18n="page.github.sub">PAT + repo 입력 → [저장] → [설정 검증] 으로 push 권한 확인. RSS feed URL 도 여기서 확인/복사.</p>
       </div>
 
       <form id="form">
-        <label>GitHub Personal Access Token
+        <label><span data-i18n="github.token">GitHub Personal Access Token</span>
           <div style="display: flex; gap: 6px; margin-top: 4px;">
             <input type="password" id="token" placeholder="ghp_…" required autocomplete="off" style="margin-top: 0; flex: 1;">
             <button type="button" id="toggle-token" title="토큰 보이기/숨기기" aria-label="토큰 보이기/숨기기"
                     style="margin-top: 0; padding: 0 12px; font-size: 14px; background: #fff; color: #2563eb; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">👁</button>
           </div>
-          <div class="hint">
+          <div class="hint" data-i18n-html="github.token.hint">
             <a href="https://github.com/settings/tokens/new?scopes=repo&description=notebooklm-podcast-extension" target="_blank">새 token 발급</a>
             — `repo` scope 필요. 토큰은 이 브라우저에만 저장되고 외부로 나가지 않습니다.
           </div>
         </label>
 
-        <label>Repo (owner/name)
+        <label><span data-i18n="github.repo">Repo (owner/name)</span>
           <input type="text" id="repo" placeholder="kiuk104/my-notebooklm-podcast" required autocomplete="off">
-          <div class="hint">아직 없으면 GitHub 에서 빈 public repo 를 먼저 만들고 입력하세요. Pages 활성화는 README 참고.</div>
+          <div class="hint" data-i18n="github.repo.hint">아직 없으면 GitHub 에서 빈 public repo 를 먼저 만들고 입력하세요. Pages 활성화는 README 참고.</div>
         </label>
 
-        <label>내 RSS feed URL
+        <label><span data-i18n="github.feedUrl">내 RSS feed URL</span>
           <div style="display:flex; gap:6px; margin-top:4px; align-items:stretch;">
-            <input type="text" id="feed-url" readonly placeholder="repo 를 먼저 입력하세요"
+            <input type="text" id="feed-url" readonly data-i18n-attr="placeholder:github.feedUrl.placeholder" placeholder="repo 를 먼저 입력하세요"
                    style="margin-top:0; flex:1; background:#f9fafb; color:#111; cursor:text;">
-            <button type="button" id="copy-feed" title="클립보드에 복사"
+            <button type="button" id="copy-feed" title="클립보드에 복사" data-i18n="github.feedUrl.copy"
                     style="margin-top:0; padding:0 14px; background:#fff; color:#2563eb; border:1px solid #ccc; border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;">복사</button>
-            <a id="open-feed" href="#" target="_blank" rel="noopener" title="새 탭에서 열기"
+            <a id="open-feed" href="#" target="_blank" rel="noopener" title="새 탭에서 열기" data-i18n="github.feedUrl.open"
                style="display:flex; align-items:center; padding:0 14px; background:#fff; color:#2563eb; border:1px solid #ccc; border-radius:4px; text-decoration:none; font-size:12px; pointer-events:none; opacity:0.4;">열기 ↗</a>
           </div>
-          <div class="hint">
+          <div class="hint" data-i18n-html="github.feedUrl.hint">
             팟캐스트 앱에 등록할 주소. <strong>repo 의 GitHub Pages 활성화 + 첫 빌드</strong> 후 200 응답합니다.
             custom domain 사용 시 <code>docs/podcast.json</code> 의 <code>baseUrl</code> 이 실제 주소 — 그땐 직접 확인.
           </div>
         </label>
 
-        <label>RSS feed 생성 방식
+        <label><span data-i18n="github.rssMode">RSS feed 생성 방식</span>
           <select id="rss-mode">
-            <option value="actions">GitHub Actions 에 위임 (권장)</option>
-            <option value="extension">익스텐션이 매 push 시마다 직접 생성</option>
+            <option value="actions" data-i18n="github.rssMode.actions">GitHub Actions 에 위임 (권장)</option>
+            <option value="extension" data-i18n="github.rssMode.extension">익스텐션이 매 push 시마다 직접 생성</option>
           </select>
-          <div class="hint">
+          <div class="hint" data-i18n="github.rssMode.hint">
             기본값은 위임. repo 에 워크플로 (`.github/workflows/build-feed.yml`) 를 두면 audio 가 push 될 때마다 GitHub 가 `feed.xml` 을 자동 생성합니다.
-            익스텐션 직접 생성 모드는 매 push 마다 episodes 디렉터리를 list + feed.xml PUT 까지 한 번에 처리 — 워크플로 셋업이 부담스러울 때 선택.
           </div>
         </label>
 
         <label style="display:flex; align-items:center; gap:8px; font-weight:500; margin-top:18px;">
           <input type="checkbox" id="auto-download-new" style="width:auto; margin:0; padding:0;">
-          <span>스캔 후 신규 카드 자동 다운로드</span>
+          <span data-i18n="github.autoDownload">스캔 후 신규 카드 자동 다운로드</span>
         </label>
-        <div class="hint" style="margin-left:24px;">
+        <div class="hint" style="margin-left:24px;" data-i18n="github.autoDownload.hint">
           [모든 노트북 스캔] 직후 repo 에 없는 카드들을 그대로 이어서 다운로드 + push 합니다 (v1 cron 동등). 첫 사용 시 수십~수백 개가 한꺼번에 들어올 수 있어 default 는 OFF — 수동 검수 후 [신규 받기] 클릭이 안전.
         </div>
 
-        <label>커밋 시 사용할 이름 / 이메일 (선택)
+        <label><span data-i18n="github.committer">커밋 시 사용할 이름 / 이메일 (선택)</span>
           <input type="text" id="committer-name" placeholder="kiuk104">
           <input type="email" id="committer-email" placeholder="kiuk104@gmail.com" style="margin-top:6px">
-          <div class="hint">비워 두면 GitHub 기본값을 사용합니다.</div>
+          <div class="hint" data-i18n="github.committer.hint">비워 두면 GitHub 기본값을 사용합니다.</div>
         </label>
 
         <div style="display: flex; gap: 10px; align-items: center;">
-          <button type="submit">저장</button>
-          <button type="button" id="verify" style="background: #fff; color: #2563eb; border: 1px solid #2563eb;">설정 검증</button>
+          <button type="submit" data-i18n="github.save">저장</button>
+          <button type="button" id="verify" data-i18n="github.verify" style="background: #fff; color: #2563eb; border: 1px solid #2563eb;">설정 검증</button>
         </div>
         <div id="status" class="status" style="display:none"></div>
       </form>
@@ -290,30 +305,30 @@
     <!-- ===== 설정: 팟캐스트 메타 ===== -->
     <section class="page" id="page-meta">
       <div class="page-header">
-        <h2>팟캐스트 메타</h2>
-        <p class="sub">repo 의 <code>docs/podcast.json</code> 에 저장되어 RSS feed.xml 의 채널 메타 (제목 / 작성자 / 커버 이미지 등) 가 됩니다. 저장 시 워크플로가 자동 트리거되어 feed 가 재빌드됩니다.</p>
+        <h2 data-i18n="page.meta.title">팟캐스트 메타</h2>
+        <p class="sub" data-i18n-html="page.meta.sub">repo 의 <code>docs/podcast.json</code> 에 저장되어 RSS feed.xml 의 채널 메타 (제목 / 작성자 / 커버 이미지 등) 가 됩니다. 저장 시 워크플로가 자동 트리거되어 feed 가 재빌드됩니다.</p>
       </div>
 
       <form id="meta-form" style="margin-top:8px;">
-        <label>제목
+        <label><span data-i18n="meta.title">제목</span>
           <input type="text" id="meta-title" placeholder="내 NotebookLM 팟캐스트" autocomplete="off">
-          <div class="hint">팟캐스트 앱에 노출되는 채널 이름.</div>
+          <div class="hint" data-i18n="meta.title.hint">팟캐스트 앱에 노출되는 채널 이름.</div>
         </label>
 
-        <label>설명
+        <label><span data-i18n="meta.description">설명</span>
           <textarea id="meta-description" rows="2" placeholder="NotebookLM 음성개요 자동 수집 피드."></textarea>
         </label>
 
-        <label>작성자 이름
+        <label><span data-i18n="meta.ownerName">작성자 이름</span>
           <input type="text" id="meta-owner-name" autocomplete="off">
         </label>
 
-        <label>작성자 이메일
+        <label><span data-i18n="meta.ownerEmail">작성자 이메일</span>
           <input type="email" id="meta-owner-email" autocomplete="off">
-          <div class="hint">iTunes/Apple Podcasts 의 채널 owner 표시. 일부 팟캐스트 앱에서 등록 시 필수.</div>
+          <div class="hint" data-i18n="meta.ownerEmail.hint">iTunes/Apple Podcasts 의 채널 owner 표시. 일부 팟캐스트 앱에서 등록 시 필수.</div>
         </label>
 
-        <label>언어
+        <label><span data-i18n="meta.language">언어</span>
           <select id="meta-language">
             <option value="ko">한국어 (ko)</option>
             <option value="en">English (en)</option>
@@ -325,7 +340,7 @@
           </select>
         </label>
 
-        <label>카테고리
+        <label><span data-i18n="meta.category">카테고리</span>
           <select id="meta-category">
             <option>Education</option>
             <option>Arts</option>
@@ -345,24 +360,24 @@
 
         <label class="meta-checkbox">
           <input type="checkbox" id="meta-explicit">
-          <span>명시적 콘텐츠 (성인)</span>
+          <span data-i18n="meta.explicit">명시적 콘텐츠 (성인)</span>
         </label>
 
-        <label>커버 이미지 URL
+        <label><span data-i18n="meta.image">커버 이미지 URL</span>
           <div class="meta-image-row">
             <input type="text" id="meta-image" class="meta-image-input" placeholder="https://kiuk104.github.io/notebooklm-podcast-feed/cover.jpg" autocomplete="off">
             <img id="meta-image-preview" class="meta-image-preview" alt="cover preview">
           </div>
-          <div class="hint">1400×1400 이상 JPG/PNG (iTunes 표준). 일부 앱은 작은 이미지 거절.</div>
+          <div class="hint" data-i18n="meta.image.hint">1400×1400 이상 JPG/PNG (iTunes 표준). 일부 앱은 작은 이미지 거절.</div>
           <div class="file-upload-row">
             <input type="file" id="meta-image-upload" accept="image/jpeg,image/png">
-            <span class="hint" style="margin-top:0;">파일 선택 시 본인 repo 의 <code>docs/cover.{jpg|png}</code> 로 업로드됩니다 (max 5MB).</span>
+            <span class="hint" style="margin-top:0;" data-i18n-html="meta.imageUpload.hint">파일 선택 시 본인 repo 의 <code>docs/cover.{jpg|png}</code> 로 업로드됩니다 (max 5MB).</span>
           </div>
         </label>
 
         <div class="meta-actions">
-          <button type="submit">메타 저장</button>
-          <button type="button" id="meta-reload" class="secondary">원격에서 다시 가져오기</button>
+          <button type="submit" data-i18n="meta.save">메타 저장</button>
+          <button type="button" id="meta-reload" class="secondary" data-i18n="meta.reload">원격에서 다시 가져오기</button>
         </div>
         <div id="meta-status" class="status" style="display:none"></div>
       </form>
@@ -371,39 +386,40 @@
     <!-- ===== 데이터: 에피소드 목록 ===== -->
     <section class="page" id="page-episodes">
       <div class="page-header">
-        <h2>에피소드 목록</h2>
-        <p class="sub">repo 의 <code>docs/episodes/</code> 에 저장된 음성개요 목록. 클릭으로 정렬, 노트북별 그룹, 다중 선택 삭제 가능. <strong>[편집]</strong> 은 해당 NotebookLM 노트북을 새 탭으로 열어 — 제목/내용은 거기서 직접 수정하시고, 잘못 받은 카드는 여기서 삭제 후 다음 sweep 에서 새로 받습니다.</p>
+        <h2 data-i18n="page.episodes.title">에피소드 목록</h2>
+        <p class="sub" data-i18n-html="page.episodes.sub">repo 의 <code>docs/episodes/</code> 에 저장된 음성개요 목록. 클릭으로 정렬, 노트북별 그룹, 다중 선택 삭제 가능. <strong>[편집]</strong> 은 해당 NotebookLM 노트북을 새 탭으로 열어 — 제목/내용은 거기서 직접 수정하시고, 잘못 받은 카드는 여기서 삭제 후 다음 sweep 에서 새로 받습니다.</p>
       </div>
 
       <div class="ep-toolbar">
-        <button type="button" id="ep-reload">↻ 새로고침</button>
-        <button type="button" class="toggle" id="ep-group-toggle">노트북별 그룹화</button>
-        <button type="button" id="ep-reset-sort">정렬 초기화 (날짜 ↓)</button>
+        <button type="button" id="ep-reload" data-i18n="episodes.reload">↻ 새로고침</button>
+        <button type="button" class="toggle" id="ep-group-toggle" data-i18n="episodes.groupToggle">노트북별 그룹화</button>
+        <button type="button" id="ep-reset-sort" data-i18n="episodes.resetSort">정렬 초기화 (날짜 ↓)</button>
         <span class="ep-summary" id="ep-summary"></span>
         <span class="selected-count" id="ep-selected-count"></span>
-        <button type="button" class="batch-delete" id="ep-batch-delete" disabled>선택 삭제</button>
+        <button type="button" class="batch-delete" id="ep-batch-delete" data-i18n="episodes.batchDelete" disabled>선택 삭제</button>
       </div>
       <div id="ep-status" class="status" style="display:none"></div>
       <table class="episodes" id="ep-table" style="display:none">
         <thead>
           <tr>
             <th class="col-check"><input type="checkbox" id="ep-check-all"></th>
-            <th class="sortable" data-key="date">날짜<span class="arrow">▲▼</span></th>
-            <th class="sortable" data-key="notebook">노트북<span class="arrow">▲▼</span></th>
-            <th class="sortable" data-key="title">제목<span class="arrow">▲▼</span></th>
-            <th class="sortable" data-key="format">형식<span class="arrow">▲▼</span></th>
-            <th class="sortable num" data-key="size">크기<span class="arrow">▲▼</span></th>
+            <th class="sortable" data-key="date"><span data-i18n="episodes.col.date">날짜</span><span class="arrow">▲▼</span></th>
+            <th class="sortable" data-key="notebook"><span data-i18n="episodes.col.notebook">노트북</span><span class="arrow">▲▼</span></th>
+            <th class="sortable" data-key="title"><span data-i18n="episodes.col.title">제목</span><span class="arrow">▲▼</span></th>
+            <th class="sortable" data-key="format"><span data-i18n="episodes.col.format">형식</span><span class="arrow">▲▼</span></th>
+            <th class="sortable num" data-key="size"><span data-i18n="episodes.col.size">크기</span><span class="arrow">▲▼</span></th>
             <th class="col-actions"></th>
           </tr>
         </thead>
         <tbody id="ep-tbody"></tbody>
       </table>
-      <p class="ep-empty" id="ep-empty" style="display:none">아직 푸시된 에피소드가 없거나 token/repo 설정 후 [↻ 새로고침] 클릭하세요.</p>
+      <p class="ep-empty" id="ep-empty" data-i18n="episodes.empty" style="display:none">아직 푸시된 에피소드가 없거나 token/repo 설정 후 [↻ 새로고침] 클릭하세요.</p>
     </section>
 
   </main>
 </div>
 
+<script src="i18n.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

@@ -10,12 +10,19 @@ const statusEl = document.getElementById("status");
 const feedUrlEl = document.getElementById("feed-url");
 const openFeedEl = document.getElementById("open-feed");
 const copyFeedBtn = document.getElementById("copy-feed");
+const langSelectEl = document.getElementById("lang-select");
 
 const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "autoDownloadNew"];
 const RSS_MODE_DEFAULT = "actions";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
 (async () => {
+  // ui lang 먼저 — applyTranslations() 후에야 나머지 dynamic render 가 올바른 언어로.
+  const langStored = await chrome.storage.local.get(["uiLang"]);
+  const lang = langStored.uiLang || (navigator.language || "ko").slice(0, 2);
+  i18nSetLang(["ko", "en", "de"].includes(lang) ? lang : "ko");
+  if (langSelectEl) langSelectEl.value = i18nGetLang();
+
   const stored = await chrome.storage.local.get(KEYS);
   for (const k of KEYS) {
     if (k === "autoDownloadNew") {
@@ -27,6 +34,24 @@ const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   if (!stored.rssMode) fields.rssMode.value = RSS_MODE_DEFAULT;
   refreshFeedUrl();
 })();
+
+if (langSelectEl) {
+  langSelectEl.addEventListener("change", async () => {
+    const v = langSelectEl.value;
+    await chrome.storage.local.set({ uiLang: v });
+    i18nSetLang(v);
+    // dynamic render 를 다시 — 진행 모니터 / 직전 스캔 / 에피소드 목록 의 동적 텍스트.
+    if (lastRenderedState) renderTaskState(lastRenderedState);
+    renderLastScanPanel();
+    if (epItems.length > 0) renderEpisodeTable();
+    // sidebar version label.
+    try {
+      const v2 = chrome.runtime.getManifest().version;
+      const el = document.getElementById("sidebar-version");
+      if (el) el.textContent = `v${v2} · ${t("sidebar.subtitle")}`;
+    } catch {}
+  });
+}
 
 function refreshFeedUrl() {
   const repo = fields.repo.value.trim();
@@ -63,7 +88,7 @@ copyFeedBtn.addEventListener("click", async () => {
     document.execCommand("copy");
   }
   const original = copyFeedBtn.textContent;
-  copyFeedBtn.textContent = "✓ 복사됨";
+  copyFeedBtn.textContent = t("github.feedUrl.copied");
   setTimeout(() => { copyFeedBtn.textContent = original; }, 1400);
 });
 
@@ -71,7 +96,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const repo = fields.repo.value.trim();
   if (!REPO_RE.test(repo)) {
-    show("repo 형식이 잘못됐습니다 (owner/name)", "error");
+    show(t("github.status.repoFormat"), "error");
     return;
   }
   await chrome.storage.local.set({
@@ -82,7 +107,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     committerEmail: fields.committerEmail.value.trim(),
     autoDownloadNew: fields.autoDownloadNew.checked,
   });
-  show("저장됨.", "success");
+  show(t("github.status.saved"), "success");
 });
 
 function show(text, kind) {
@@ -106,24 +131,24 @@ document.getElementById("toggle-token").addEventListener("click", () => {
 document.getElementById("verify").addEventListener("click", async () => {
   const token = fields.token.value.trim();
   const repo = fields.repo.value.trim();
-  if (!token) return show("token 이 비어 있습니다.", "error");
-  if (!REPO_RE.test(repo)) return show("repo 형식이 잘못됐습니다 (owner/name).", "error");
-  show("검증 중…", "");
+  if (!token) return show(t("github.status.tokenEmpty"), "error");
+  if (!REPO_RE.test(repo)) return show(t("github.status.repoFormat"), "error");
+  show(t("github.status.verifying"), "");
   try {
     const userR = await fetch("https://api.github.com/user", { headers: ghHeaders(token) });
-    if (userR.status === 401) return show("✗ 토큰이 무효합니다 (401). 새로 발급해서 다시 입력하세요.", "error");
+    if (userR.status === 401) return show(t("github.status.tokenInvalid"), "error");
     if (!userR.ok) return show(`✗ /user ${userR.status}: ${(await userR.text()).slice(0, 120)}`, "error");
     const user = await userR.json();
 
     const repoR = await fetch(`https://api.github.com/repos/${repo}`, { headers: ghHeaders(token) });
-    if (repoR.status === 404) return show(`✓ 토큰 OK (${user.login}) / ✗ repo "${repo}" 안 보임 — private 권한 누락 또는 오타.`, "error");
+    if (repoR.status === 404) return show(t("github.status.repoNotFound", { user: user.login, repo }), "error");
     if (!repoR.ok) return show(`✗ /repos/${repo} ${repoR.status}: ${(await repoR.text()).slice(0, 120)}`, "error");
     const repoData = await repoR.json();
     const canPush = repoData.permissions?.push;
-    if (canPush === false) return show(`✓ 토큰 OK (${user.login}) / ✗ repo 읽기만 가능, push 권한 없음. fine-grained 토큰의 Contents 권한 확인.`, "error");
-    show(`✓ ${user.login} → ${repo} push 가능. 설정 정상.`, "success");
+    if (canPush === false) return show(t("github.status.noPush", { user: user.login }), "error");
+    show(t("github.status.ok", { user: user.login, repo }), "success");
   } catch (e) {
-    show(`✗ 네트워크 오류: ${e.message}`, "error");
+    show(t("github.status.network", { msg: e.message }), "error");
   }
 });
 
@@ -152,16 +177,15 @@ const taskActionsEl = document.getElementById("task-actions");
 const taskClearBtn = document.getElementById("task-clear");
 const taskCancelBtn = document.getElementById("task-cancel");
 
-const TASK_LABELS = {
-  "scan:all": "모든 노트북 스캔",
-  "bulk:remote": "일괄 다운로드 (cross-notebook)",
-};
-const STATUS_LABELS = {
-  idle: "대기",
-  running: "진행 중",
-  completed: "완료",
-  failed: "실패",
-};
+function taskLabel(task) {
+  if (task === "scan:all") return t("task.label.scan");
+  if (task === "bulk:remote") return t("task.label.bulk");
+  return task;
+}
+function statusLabel(status) {
+  const map = { idle: "task.status.idle", running: "task.status.running", completed: "task.status.completed", failed: "task.status.failed" };
+  return map[status] ? t(map[status]) : status;
+}
 
 let lastRenderedState = null;
 let elapsedTimer = null;
@@ -169,13 +193,13 @@ let elapsedTimer = null;
 function formatElapsed(ms) {
   if (!ms || ms < 0) return "";
   const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}초`;
+  if (sec < 60) return t("time.sec", { n: sec });
   const min = Math.floor(sec / 60);
   const remSec = sec % 60;
-  if (min < 60) return `${min}분 ${remSec}초`;
+  if (min < 60) return t("time.min", { m: min, s: remSec });
   const hr = Math.floor(min / 60);
   const remMin = min % 60;
-  return `${hr}시간 ${remMin}분`;
+  return t("time.hour", { h: hr, m: remMin });
 }
 
 function formatBytes(bytes) {
@@ -191,11 +215,11 @@ function escapeHtml(s) {
 
 function formatTimeAgo(ms) {
   const sec = Math.max(0, Math.floor(ms / 1000));
-  if (sec < 60) return `${sec}초전`;
+  if (sec < 60) return t("time.ago.sec", { n: sec });
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}분전`;
+  if (min < 60) return t("time.ago.min", { n: min });
   const hr = Math.floor(min / 60);
-  return `${hr}시간전`;
+  return t("time.ago.hour", { n: hr });
 }
 
 function renderRecentPushes(recent) {
@@ -229,10 +253,10 @@ function renderRecentPushes(recent) {
   taskRecentEl.innerHTML = reversed.map((p) => {
     const cls = p.ok ? "ok" : p.skipped ? "skip" : "err";
     const icon = p.ok ? "✓" : p.skipped ? "↻" : "✗";
-    const title = escapeHtml(p.episodeTitle || p.filename || "(제목 없음)");
+    const title = escapeHtml(p.episodeTitle || p.filename || "—");
     let detail = "";
     if (p.skipped) {
-      detail = `<span class="size">${escapeHtml(p.reason || "이미 있음")}</span>`;
+      detail = `<span class="size">${escapeHtml(p.reason || "")}</span>`;
     } else if (!p.ok) {
       detail = `<span class="size">${escapeHtml((p.error || "").slice(0, 80))}</span>`;
     } else if (p.size != null) {
@@ -256,8 +280,8 @@ function renderTaskState(state) {
   taskPanel.style.display = "block";
   taskPanel.className = "task-panel " + state.status;
 
-  taskTitleEl.textContent = TASK_LABELS[state.task] || state.task;
-  taskStatusEl.textContent = STATUS_LABELS[state.status] || state.status;
+  taskTitleEl.textContent = taskLabel(state.task);
+  taskStatusEl.textContent = statusLabel(state.status);
 
   if (state.startedAt) {
     const ms = (state.endedAt || Date.now()) - state.startedAt;
@@ -273,10 +297,10 @@ function renderTaskState(state) {
 
   const stats = [];
   if (state.total > 0) stats.push(`${state.done}/${state.total}`);
-  if (state.notebookCount > 0) stats.push(`노트북 ${state.notebookCount}개`);
-  if (state.cardCount > 0) stats.push(`카드 ${state.cardCount}개`);
-  if (state.successCount > 0) stats.push(`성공 ${state.successCount}`);
-  if (state.errorCount > 0) stats.push(`실패 ${state.errorCount}`);
+  if (state.notebookCount > 0) stats.push(t("monitor.summary.notebooks", { n: state.notebookCount }));
+  if (state.cardCount > 0) stats.push(t("monitor.summary.cards", { n: state.cardCount }));
+  if (state.successCount > 0) stats.push(`✓ ${state.successCount}`);
+  if (state.errorCount > 0) stats.push(`✗ ${state.errorCount}`);
   taskStatsEl.textContent = stats.join(" · ");
 
   if (state.errors && state.errors.length > 0) {
@@ -337,16 +361,16 @@ taskClearBtn.addEventListener("click", async () => {
 });
 
 taskCancelBtn.addEventListener("click", async () => {
-  if (!confirm("현재 작업을 중단하시겠습니까? 다음 노트북/카드 처리 시작 전 빠져나갑니다.")) return;
+  if (!confirm(t("monitor.cancel.confirm"))) return;
   taskCancelBtn.disabled = true;
-  taskCancelBtn.textContent = "중단 요청 중…";
+  taskCancelBtn.textContent = t("monitor.cancel.requesting");
   try {
     await chrome.runtime.sendMessage({ type: "task:cancel" });
   } catch {}
   // 실제 상태 전환은 task:state 메시지로 도착 — UI 재렌더에서 처리.
   setTimeout(() => {
     taskCancelBtn.disabled = false;
-    taskCancelBtn.textContent = "강제 중단";
+    taskCancelBtn.textContent = t("monitor.cancel");
   }, 3000);
 });
 
@@ -376,6 +400,7 @@ const lastScanPanel = document.getElementById("last-scan-panel");
 const lastScanWhenEl = document.getElementById("last-scan-when");
 const lastScanSummaryEl = document.getElementById("last-scan-summary");
 const lastScanDownloadBtn = document.getElementById("last-scan-download");
+const lastScanRetryFailedBtn = document.getElementById("last-scan-retry-failed");
 const lastScanClearBtn = document.getElementById("last-scan-clear");
 
 async function renderLastScanPanel() {
@@ -405,17 +430,38 @@ async function renderLastScanPanel() {
     }
   } catch {}
 
-  const ageMs = Date.now() - (result.scannedAt || Date.now());
-  lastScanWhenEl.textContent = formatElapsed(ageMs) + " 전";
+  // 직전 bulk 의 실패 카드 수 — retry 버튼 노출 결정.
+  let failedCount = 0;
+  try {
+    const fr = await chrome.runtime.sendMessage({ type: "bulk:failed:list" });
+    failedCount = fr?.cards?.length || 0;
+  } catch {}
 
-  const parts = [`노트북 ${result.notebooks.length}개`, `카드 ${cardCount}개`];
-  if (placeholderCount > 0) parts.push(`${placeholderCount}개 제목 대기`);
-  parts.push(`신규 ${newCount}개`);
+  const ageMs = Date.now() - (result.scannedAt || Date.now());
+  lastScanWhenEl.textContent = formatElapsed(ageMs) + " " + t("time.ago.suffix");
+
+  const parts = [
+    t("monitor.summary.notebooks", { n: result.notebooks.length }),
+    t("monitor.summary.cards", { n: cardCount }),
+  ];
+  if (placeholderCount > 0) parts.push(t("monitor.summary.placeholder", { n: placeholderCount }));
+  parts.push(t("monitor.summary.new", { n: newCount }));
+  if (failedCount > 0) parts.push(t("monitor.summary.failed", { n: failedCount }));
   lastScanSummaryEl.textContent = parts.join(" · ");
 
   lastScanPanel.style.display = "block";
   lastScanDownloadBtn.disabled = newCount === 0;
-  lastScanDownloadBtn.textContent = newCount === 0 ? "신규 없음" : `신규 ${newCount}개 받기`;
+  lastScanDownloadBtn.textContent = newCount === 0
+    ? t("monitor.lastScan.noNew")
+    : t("monitor.lastScan.newN", { n: newCount });
+
+  if (failedCount > 0) {
+    lastScanRetryFailedBtn.style.display = "inline-block";
+    lastScanRetryFailedBtn.textContent = t("monitor.lastScan.retryFailed", { n: failedCount });
+    lastScanRetryFailedBtn.disabled = false;
+  } else {
+    lastScanRetryFailedBtn.style.display = "none";
+  }
   refreshMonitorChrome();
 }
 
@@ -423,12 +469,25 @@ lastScanDownloadBtn.addEventListener("click", async () => {
   lastScanDownloadBtn.disabled = true;
   const r = await chrome.runtime.sendMessage({ type: "bulk:remote:from-last-scan" });
   if (!r?.ok) {
-    show(`Bulk 시작 실패: ${r?.error || "알 수 없음"}`, "error");
+    show(`Bulk start failed: ${r?.error || "?"}`, "error");
     lastScanDownloadBtn.disabled = false;
     return;
   }
   // task:state 가 갱신되면서 진행 모니터에 자동으로 노출됨.
 });
+
+if (lastScanRetryFailedBtn) {
+  lastScanRetryFailedBtn.addEventListener("click", async () => {
+    lastScanRetryFailedBtn.disabled = true;
+    const r = await chrome.runtime.sendMessage({ type: "bulk:remote:retry-failed" });
+    if (!r?.ok) {
+      show(`Retry failed: ${r?.error || "?"}`, "error");
+      lastScanRetryFailedBtn.disabled = false;
+      return;
+    }
+    // bulk start → task:state broadcast → renderLastScanPanel rerender.
+  });
+}
 
 lastScanClearBtn.addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "scan:result:clear" });
@@ -510,7 +569,7 @@ async function loadPodcastMeta() {
     showMetaStatus("Repo 형식이 잘못됐습니다 (owner/name).", "error");
     return;
   }
-  showMetaStatus("로드 중…", "");
+  showMetaStatus(t("meta.status.loading"), "");
   try {
     const r = await fetch(
       `https://api.github.com/repos/${stored.repo}/contents/docs/podcast.json`,
@@ -519,11 +578,11 @@ async function loadPodcastMeta() {
     if (r.status === 404) {
       podcastJsonSha = null;
       podcastJsonOriginal = {};
-      showMetaStatus("repo 에 docs/podcast.json 이 없습니다. 폼을 채우고 [메타 저장] 하면 새로 생성됩니다.", "");
+      showMetaStatus(t("meta.status.notFound"), "");
       return;
     }
     if (r.status === 401) {
-      showMetaStatus("토큰 무효 (401). [GitHub 설정] 의 [설정 검증] 으로 확인하세요.", "error");
+      showMetaStatus(t("github.status.tokenInvalid"), "error");
       return;
     }
     if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 120)}`);
@@ -532,9 +591,9 @@ async function loadPodcastMeta() {
     const json = JSON.parse(text);
     podcastJsonSha = data.sha;
     populateMetaForm(json);
-    showMetaStatus("✓ 로드됨.", "success");
+    showMetaStatus(t("meta.status.loaded"), "success");
   } catch (e) {
-    showMetaStatus(`로드 실패: ${e.message}`, "error");
+    showMetaStatus(`Load failed: ${e.message}`, "error");
   }
 }
 
@@ -593,9 +652,9 @@ metaForm.addEventListener("submit", async (e) => {
     const data = await r.json();
     podcastJsonSha = data.content?.sha || null;
     podcastJsonOriginal = updated;
-    showMetaStatus("✓ 메타 저장됨. 워크플로가 트리거되어 feed.xml 이 재빌드됩니다.", "success");
+    showMetaStatus(t("meta.status.saved"), "success");
   } catch (e) {
-    showMetaStatus(`저장 실패: ${e.message}`, "error");
+    showMetaStatus(`Save failed: ${e.message}`, "error");
   }
 });
 
@@ -743,21 +802,21 @@ function epShowStatus(text, kind) {
 }
 
 async function loadEpisodeList() {
-  epShowStatus("목록 로드 중…", "");
+  epShowStatus(t("meta.status.loading"), "");
   epReloadBtn.disabled = true;
   try {
     // 직전 스캔 결과 매핑을 동시에 새로고침 — [편집] 버튼이 노트북 URL 을 알 수 있게.
     await refreshNotebookUrlMap();
     const r = await chrome.runtime.sendMessage({ type: "episodes:list:full" });
     if (!r?.ok) {
-      epShowStatus(`로드 실패: ${r?.error || "알 수 없음"}`, "error");
+      epShowStatus(t("episodes.loadFail", { msg: r?.error || "?" }), "error");
       epTableEl.style.display = "none";
       epEmptyEl.style.display = "none";
       return;
     }
     epItems = r.items || [];
     const totalMB = (r.totalSize || 0) / 1024 / 1024;
-    epSummaryEl.textContent = `${epItems.length}개 · ${totalMB.toFixed(1)} MB`;
+    epSummaryEl.textContent = t("episodes.summary", { n: epItems.length, sizeMB: totalMB.toFixed(1) });
     if (epItems.length === 0) {
       epTableEl.style.display = "none";
       epEmptyEl.style.display = "block";
@@ -769,7 +828,7 @@ async function loadEpisodeList() {
     renderEpisodeTable();
     epShowStatus("");
   } catch (e) {
-    epShowStatus(`로드 실패: ${e.message}`, "error");
+    epShowStatus(t("episodes.loadFail", { msg: e.message }), "error");
   } finally {
     epReloadBtn.disabled = false;
   }
@@ -805,17 +864,21 @@ function renderEpisodeTable() {
   });
 
   const items = epSortedItems();
+  const editLabel = t("episodes.action.edit");
+  const deleteLabel = t("episodes.action.delete");
+  const tooltipReady = t("episodes.editTooltipReady");
+  const tooltipNoUrl = t("episodes.editTooltipNoUrl");
   const html = items.map((it) => {
     if (it.__groupHeader) {
-      return `<tr class="group-header"><td colspan="7">📓 ${escapeHtml(it.notebook)}  (${it.count}개)</td></tr>`;
+      return `<tr class="group-header"><td colspan="7">📓 ${escapeHtml(it.notebook)}  (${it.count})</td></tr>`;
     }
     const ymd = it.date;
     const fmtClass = `format-tag ${escapeHtml(it.format)}`;
     const notebookSlug = epSlugify(it.notebook);
     const nbUrl = epNotebookUrlMap.get(notebookSlug);
     const editAttrs = nbUrl
-      ? `data-nb-url="${escapeHtml(nbUrl)}" title="NotebookLM 에서 이 노트북 열기"`
-      : `disabled title="노트북 URL 미상 — [모든 노트북 스캔] 후 다시 시도"`;
+      ? `data-nb-url="${escapeHtml(nbUrl)}" title="${escapeHtml(tooltipReady)}"`
+      : `disabled title="${escapeHtml(tooltipNoUrl)}"`;
     return `
       <tr class="ep-row" data-filename="${escapeHtml(it.filename)}" data-sha="${escapeHtml(it.sha)}">
         <td class="col-check"><input type="checkbox" class="ep-check"></td>
@@ -825,8 +888,8 @@ function renderEpisodeTable() {
         <td><span class="${fmtClass}">${escapeHtml(it.format)}</span></td>
         <td class="num">${escapeHtml(epFmtSize(it.size))}</td>
         <td class="col-actions">
-          <button type="button" class="ep-action edit" ${editAttrs}>편집 ↗</button>
-          <button type="button" class="ep-action danger">삭제</button>
+          <button type="button" class="ep-action edit" ${editAttrs}>${escapeHtml(editLabel)}</button>
+          <button type="button" class="ep-action danger">${escapeHtml(deleteLabel)}</button>
         </td>
       </tr>`;
   }).join("");
@@ -837,7 +900,7 @@ function renderEpisodeTable() {
 function refreshBatchUI() {
   const checked = epTbody.querySelectorAll(".ep-check:checked").length;
   const total = epTbody.querySelectorAll(".ep-check").length;
-  epSelectedCountEl.textContent = checked ? `${checked}개 선택됨` : "";
+  epSelectedCountEl.textContent = checked ? t("episodes.selected", { n: checked }) : "";
   epBatchDeleteBtn.disabled = checked === 0;
   epCheckAll.indeterminate = checked > 0 && checked < total;
   epCheckAll.checked = checked > 0 && checked === total;
@@ -889,18 +952,18 @@ epTbody.addEventListener("click", async (e) => {
     if (!row) return;
     const fn = row.dataset.filename;
     const sha = row.dataset.sha;
-    if (!confirm(`정말 삭제할까요?\n${fn}`)) return;
+    if (!confirm(t("episodes.confirmDelete", { filename: fn }))) return;
     e.target.disabled = true;
-    epShowStatus(`삭제 중: ${fn}…`, "");
+    epShowStatus(t("episodes.deleting", { filename: fn }), "");
     try {
       const r = await chrome.runtime.sendMessage({
         type: "episodes:delete", filename: fn, sha,
       });
-      if (!r?.ok) throw new Error(r?.error || "삭제 실패");
-      epShowStatus(`✓ 삭제됨: ${fn}`, "success");
+      if (!r?.ok) throw new Error(r?.error || "delete failed");
+      epShowStatus(t("episodes.deleted", { filename: fn }), "success");
       await loadEpisodeList();
     } catch (err) {
-      epShowStatus(`삭제 실패: ${err.message}`, "error");
+      epShowStatus(t("episodes.deleteFail", { msg: err.message }), "error");
       e.target.disabled = false;
     }
     return;
@@ -913,11 +976,11 @@ epBatchDeleteBtn.addEventListener("click", async () => {
     return { filename: row.dataset.filename, sha: row.dataset.sha };
   });
   if (targets.length === 0) return;
-  if (!confirm(`${targets.length}개 에피소드를 삭제할까요?`)) return;
+  if (!confirm(t("episodes.confirmBulkDelete", { n: targets.length }))) return;
   epBatchDeleteBtn.disabled = true;
   let ok = 0, fail = 0;
   for (let i = 0; i < targets.length; i++) {
-    epShowStatus(`삭제 중 (${i + 1}/${targets.length}): ${targets[i].filename.slice(0, 50)}…`, "");
+    epShowStatus(t("episodes.bulkDoing", { i: i + 1, total: targets.length, filename: targets[i].filename.slice(0, 50) }), "");
     try {
       const r = await chrome.runtime.sendMessage({
         type: "episodes:delete",
@@ -926,7 +989,7 @@ epBatchDeleteBtn.addEventListener("click", async () => {
       if (r?.ok) ok++; else fail++;
     } catch { fail++; }
   }
-  epShowStatus(`✓ 삭제 완료 — 성공 ${ok} / 실패 ${fail}`, fail > 0 ? "error" : "success");
+  epShowStatus(t("episodes.bulkDone", { ok, fail }), fail > 0 ? "error" : "success");
   await loadEpisodeList();
 });
 
@@ -973,7 +1036,7 @@ window.addEventListener("hashchange", () => {
 try {
   const v = chrome.runtime.getManifest().version;
   const el = document.getElementById("sidebar-version");
-  if (el) el.textContent = `v${v} · 관리`;
+  if (el) el.textContent = `v${v} · ${t("sidebar.subtitle")}`;
 } catch {}
 
 // 첫 로드: URL 의 hash 또는 default 로 페이지 표시.

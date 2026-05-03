@@ -140,6 +140,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     clearLastScanResult().then(() => sendResponse({ ok: true }));
     return true; // async
   }
+  if (msg?.type === "bulk:failed:list") {
+    loadFailedSelections().then((data) => {
+      sendResponse({ ok: true, cards: data?.selections || [], savedAt: data?.savedAt || null });
+    });
+    return true; // async
+  }
+  if (msg?.type === "bulk:remote:retry-failed") {
+    if (inProgressTask) {
+      sendResponse({ ok: false, error: "이미 진행 중인 작업이 있습니다" });
+      return false;
+    }
+    sendResponse({ ok: true, started: true });
+    inProgressTask = "bulk:remote";
+    cancelRequested = false;
+    (async () => {
+      try {
+        const data = await loadFailedSelections();
+        const sel = data?.selections || [];
+        if (sel.length === 0) throw new Error("재시도할 실패 카드가 없습니다");
+        await runBulkRemote(sel);
+      } catch (e) {
+        console.error("[bulk:remote:retry-failed]", e);
+        await setTaskState({
+          status: "failed",
+          message: `Retry 실패: ${e.message}`,
+          endedAt: Date.now(),
+        });
+      } finally {
+        await cleanupOwnedTabs();
+        await stopKeepalive();
+        inProgressTask = null;
+      }
+    })();
+    return false;
+  }
   if (msg?.type === "bulk:remote:from-last-scan") {
     // 직전 스캔 결과 + 현재 repo 상태 기준으로 신규 selections 만들어 바로 bulk:remote.
     if (inProgressTask) {
@@ -550,6 +585,52 @@ async function loadLastScanResult() {
 async function clearLastScanResult() {
   try { await chrome.storage.session.remove(["lastScanResult"]); } catch {}
   try { await chrome.storage.local.remove(["lastScanResult"]); } catch {}
+}
+
+// 직전 bulk:remote 의 실패 카드들 (selection 객체) — 옵션 페이지의 [실패 N개 재시도]
+// 가 같은 selections 로 다시 runBulkRemote 호출. SW 가 죽었다 살아나도 살아남도록
+// session 우선, fallback 으로 local. 새 bulk 가 시작되면 비워진다.
+async function persistFailedSelections(selections) {
+  const data = { selections, savedAt: Date.now() };
+  try { await chrome.storage.session.set({ bulkFailedSelections: data }); }
+  catch {
+    try { await chrome.storage.local.set({ bulkFailedSelections: data }); } catch {}
+  }
+}
+async function loadFailedSelections() {
+  try {
+    const r = await chrome.storage.session.get(["bulkFailedSelections"]);
+    if (r.bulkFailedSelections) return r.bulkFailedSelections;
+  } catch {}
+  try {
+    const r = await chrome.storage.local.get(["bulkFailedSelections"]);
+    return r.bulkFailedSelections || null;
+  } catch { return null; }
+}
+async function clearFailedSelections() {
+  try { await chrome.storage.session.remove(["bulkFailedSelections"]); } catch {}
+  try { await chrome.storage.local.remove(["bulkFailedSelections"]); } catch {}
+}
+
+function notifyBulkComplete(success, total) {
+  // chrome.notifications 는 옵션 페이지가 닫혀 있어도 OS 알림으로 사용자에게 알림.
+  // bulk 가 수십 분 돌 때 사용자가 다른 일 보다 끝났는지 알 수 있게.
+  try {
+    const fail = total - success;
+    const title = fail > 0
+      ? `Podcast Sync — ${success} ok, ${fail} failed`
+      : `Podcast Sync — ${success} pushed`;
+    const msg = fail > 0
+      ? `Open the admin page to retry the ${fail} failed cards.`
+      : `All ${total} cards pushed to your repo.`;
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title,
+      message: msg,
+      priority: 1,
+    }, () => { void chrome.runtime.lastError; });
+  } catch {}
 }
 
 // 노트북 array 와 ghList 결과로부터 "아직 repo 에 없는" 카드들의 selections 를 만든다.
@@ -1001,9 +1082,14 @@ async function runBulkRemote(selections) {
     message: `${total}개 카드 다운로드 시작 — 노트북 ${grouped.size}개 순차 처리`,
     startedAt: Date.now(), endedAt: null,
   });
+  // 새 bulk 시작 — 직전의 failed 리스트는 더 이상 의미 없음.
+  await clearFailedSelections();
 
   let done = 0;
   let success = 0;
+  // 실패한 selection 을 [실패 N개 재시도] 용으로 모은다. push 응답 timeout / debugger
+  // click 실패 / 카드 prepare 실패 / 탭 열기 실패 모두 retry 후보.
+  const failedSelections = [];
   const MAX_CONSEC_TAB_ERRORS = 5;
   let consecTabErrors = 0;
   for (const [url, items] of grouped) {
@@ -1025,6 +1111,7 @@ async function runBulkRemote(selections) {
             episodeTitle: item.episodeTitle, ok: false, error: "카드 로딩 타임아웃",
           });
           await pushTaskError({ episodeTitle: item.episodeTitle, message: "카드 로딩 타임아웃" });
+          failedSelections.push(item);
           done++;
         }
         await setTaskState({ done });
@@ -1036,6 +1123,7 @@ async function runBulkRemote(selections) {
           episodeTitle: item.episodeTitle, ok: false, error: `탭 열기 실패: ${e.message}`,
         });
         await pushTaskError({ episodeTitle: item.episodeTitle, message: `탭 열기 실패: ${e.message}` });
+        failedSelections.push(item);
         done++;
       }
       await setTaskState({ done });
@@ -1080,6 +1168,7 @@ async function runBulkRemote(selections) {
               episodeTitle: item.episodeTitle, ok: false, error: r?.error || "카드 prepare 실패",
             });
             await pushTaskError({ episodeTitle: item.episodeTitle, message: r?.error || "카드 prepare 실패" });
+            failedSelections.push(item);
             done++;
             continue;
           }
@@ -1096,6 +1185,7 @@ async function runBulkRemote(selections) {
               episodeTitle: item.episodeTitle, ok: false, error: `debugger click 실패: ${clickErr.message}`,
             });
             await pushTaskError({ episodeTitle: item.episodeTitle, message: `debugger click 실패: ${clickErr.message}` });
+            failedSelections.push(item);
             done++;
             continue;
           }
@@ -1105,10 +1195,12 @@ async function runBulkRemote(selections) {
               episodeTitle: item.episodeTitle, ok: false, error: "push 응답 타임아웃",
             });
             await pushTaskError({ episodeTitle: item.episodeTitle, message: "push 응답 타임아웃" });
+            failedSelections.push(item);
           } else if (result.ok || result.skipped) {
             success++;
           } else if (result.error) {
             await pushTaskError({ episodeTitle: item.episodeTitle, message: result.error });
+            failedSelections.push(item);
           }
           done++;
         } catch (e) {
@@ -1116,6 +1208,7 @@ async function runBulkRemote(selections) {
             episodeTitle: item.episodeTitle, ok: false, error: e.message,
           });
           await pushTaskError({ episodeTitle: item.episodeTitle, message: e.message });
+          failedSelections.push(item);
           done++;
         }
         await setTaskState({ done, successCount: success });
@@ -1130,6 +1223,12 @@ async function runBulkRemote(selections) {
     message: `bulk 완료 — 성공 ${success} / 실패 ${done - success} / 총 ${done}`,
     endedAt: Date.now(),
   });
+  if (failedSelections.length > 0) {
+    await persistFailedSelections(failedSelections);
+  } else {
+    await clearFailedSelections();
+  }
+  notifyBulkComplete(success, done);
   emitEvent("bulk:remote:done", { ok: true, done });
   return { ok: true, done };
 }
