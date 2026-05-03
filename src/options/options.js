@@ -306,6 +306,7 @@ function renderTaskState(state) {
     taskActionsEl.style.display = "none";
     stopElapsedTimer();
   }
+  refreshMonitorChrome();
 }
 
 function startElapsedTimer() {
@@ -382,6 +383,7 @@ async function renderLastScanPanel() {
   const result = r?.result;
   if (!result || !result.notebooks || result.notebooks.length === 0) {
     lastScanPanel.style.display = "none";
+    refreshMonitorChrome();
     return;
   }
   const cardCount = result.notebooks.reduce((s, n) => s + (n.audios?.length || 0), 0);
@@ -414,6 +416,7 @@ async function renderLastScanPanel() {
   lastScanPanel.style.display = "block";
   lastScanDownloadBtn.disabled = newCount === 0;
   lastScanDownloadBtn.textContent = newCount === 0 ? "신규 없음" : `신규 ${newCount}개 받기`;
+  refreshMonitorChrome();
 }
 
 lastScanDownloadBtn.addEventListener("click", async () => {
@@ -926,3 +929,52 @@ epBatchDeleteBtn.addEventListener("click", async () => {
   epShowStatus(`✓ 삭제 완료 — 성공 ${ok} / 실패 ${fail}`, fail > 0 ? "error" : "success");
   await loadEpisodeList();
 });
+
+// ---------- 사이드바 라우팅 (hash 기반) ----------
+
+const PAGES = ["monitor", "github", "meta", "episodes"];
+const DEFAULT_PAGE = "monitor";
+
+function showPage(name) {
+  if (!PAGES.includes(name)) name = DEFAULT_PAGE;
+  document.querySelectorAll(".page").forEach((p) => {
+    p.classList.toggle("active", p.id === `page-${name}`);
+  });
+  document.querySelectorAll(".nav-item").forEach((a) => {
+    a.classList.toggle("active", a.dataset.page === name);
+  });
+  refreshMonitorChrome();
+}
+
+// 진행 모니터 페이지의 "비어있음" 메시지 + 사이드바 [진행 모니터] 의 빨간 뱃지.
+// task-panel 또는 last-scan-panel 이 visible 이면 empty 메시지 숨김. running task 면 뱃지.
+function refreshMonitorChrome() {
+  const taskPanel = document.getElementById("task-panel");
+  const lastScanPanel = document.getElementById("last-scan-panel");
+  const empty = document.getElementById("monitor-empty");
+  if (empty && taskPanel && lastScanPanel) {
+    const taskHidden = taskPanel.style.display === "none";
+    const scanHidden = lastScanPanel.style.display === "none";
+    empty.style.display = (taskHidden && scanHidden) ? "" : "none";
+  }
+  const badge = document.getElementById("nav-badge-monitor");
+  if (badge) {
+    const running = lastRenderedState && lastRenderedState.status === "running";
+    badge.classList.toggle("show", !!running);
+  }
+}
+
+// hash 변경 시 페이지 전환. 수동 location.hash = "..." 도 지원.
+window.addEventListener("hashchange", () => {
+  showPage(location.hash.replace("#", ""));
+});
+
+// 사이드바 버전 표시 — manifest 가 single source of truth.
+try {
+  const v = chrome.runtime.getManifest().version;
+  const el = document.getElementById("sidebar-version");
+  if (el) el.textContent = `v${v} · 관리`;
+} catch {}
+
+// 첫 로드: URL 의 hash 또는 default 로 페이지 표시.
+showPage(location.hash.replace("#", ""));
