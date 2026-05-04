@@ -774,7 +774,7 @@ const epSummaryEl = document.getElementById("ep-summary");
 const epSelectedCountEl = document.getElementById("ep-selected-count");
 const epBatchDeleteBtn = document.getElementById("ep-batch-delete");
 const epStatusEl = document.getElementById("ep-status");
-const epTableEl = document.getElementById("ep-table");
+const epTableWrapEl = document.getElementById("ep-table-wrap");
 const epTbody = document.getElementById("ep-tbody");
 const epEmptyEl = document.getElementById("ep-empty");
 const epCheckAll = document.getElementById("ep-check-all");
@@ -795,9 +795,17 @@ function epSlugify(text) {
 }
 
 async function refreshNotebookUrlMap() {
-  // 직전 스캔 결과 (background.js 의 lastScanResult) 에서 notebookSlug → URL.
-  // 30분 freshness 안의 결과만 — stale 이면 빈 맵, [편집] 클릭 시 fallback (홈 열기).
+  // 두 소스 병합 — 영구 맵 (chrome.storage.local 의 notebookUrlMap, 모든 과거 스캔 누적)
+  // 을 base 로 깔고, 직전 스캔 결과 (session 기반, 30분 freshness) 를 위에 layer.
+  // 최근에 본 URL 이 우선이라 노트북 이름이 바뀌었거나 옮겨졌을 때 자동 갱신.
   epNotebookUrlMap.clear();
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "notebook:url:map:get" });
+    const map = r?.map || {};
+    for (const [slug, url] of Object.entries(map)) {
+      if (slug && url) epNotebookUrlMap.set(slug, url);
+    }
+  } catch {}
   try {
     const r = await chrome.runtime.sendMessage({ type: "scan:result:get" });
     const result = r?.result;
@@ -813,6 +821,45 @@ function epFmtSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+// 공개 음성 URL — RSS feed enclosure 와 같은 base 를 사용. podcast.json 의 baseUrl
+// (custom domain 등) 이 있으면 그걸 우선, 없으면 owner.github.io/repo 로 fallback.
+function epShareUrl(filename) {
+  const base = String(podcastJsonOriginal?.baseUrl || "").replace(/\/+$/, "");
+  if (base) return `${base}/episodes/${filename}`;
+  const repo = fields.repo.value.trim();
+  if (!REPO_RE.test(repo)) return null;
+  const [owner, name] = repo.split("/");
+  return `https://${owner}.github.io/${name}/episodes/${filename}`;
+}
+
+async function epShare(item) {
+  const url = epShareUrl(item.filename);
+  if (!url) {
+    epShowStatus(t("episodes.shareNoRepo"), "error");
+    return;
+  }
+  const title = item.title || item.filename;
+  // Web Share API — 데스크톱 Chrome on Windows 는 OS 공유 시트, 모바일은 네이티브 시트.
+  // 미지원 또는 사용자가 시트를 닫지 않고 다른 실패가 나면 클립보드 복사로 fallback.
+  if (typeof navigator.share === "function" &&
+      (typeof navigator.canShare !== "function" || navigator.canShare({ url }))) {
+    try {
+      await navigator.share({ title, url });
+      return;
+    } catch (e) {
+      if (e?.name === "AbortError") return; // 사용자가 시트를 닫음 — 조용히 무시.
+      // 그 외 (NotAllowedError 등) 는 fallback 으로 진행.
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    epShowStatus(t("episodes.shareCopied", { url }), "success");
+  } catch (e) {
+    epShowStatus(t("episodes.shareFail", { msg: e.message }), "error");
+  }
+}
+
 function epShowStatus(text, kind) {
   if (!text) { epStatusEl.style.display = "none"; return; }
   epStatusEl.textContent = text;
@@ -829,7 +876,7 @@ async function loadEpisodeList() {
     const r = await chrome.runtime.sendMessage({ type: "episodes:list:full" });
     if (!r?.ok) {
       epShowStatus(t("episodes.loadFail", { msg: r?.error || "?" }), "error");
-      epTableEl.style.display = "none";
+      epTableWrapEl.style.display = "none";
       epEmptyEl.style.display = "none";
       return;
     }
@@ -837,12 +884,12 @@ async function loadEpisodeList() {
     const totalMB = (r.totalSize || 0) / 1024 / 1024;
     epSummaryEl.textContent = t("episodes.summary", { n: epItems.length, sizeMB: totalMB.toFixed(1) });
     if (epItems.length === 0) {
-      epTableEl.style.display = "none";
+      epTableWrapEl.style.display = "none";
       epEmptyEl.style.display = "block";
       epShowStatus("");
       return;
     }
-    epTableEl.style.display = "";
+    epTableWrapEl.style.display = "";
     epEmptyEl.style.display = "none";
     renderEpisodeTable();
     epShowStatus("");
@@ -884,6 +931,8 @@ function renderEpisodeTable() {
 
   const items = epSortedItems();
   const editLabel = t("episodes.action.edit");
+  const shareLabel = t("episodes.action.share");
+  const shareTooltip = t("episodes.shareTooltip");
   const deleteLabel = t("episodes.action.delete");
   const tooltipReady = t("episodes.editTooltipReady");
   const tooltipNoUrl = t("episodes.editTooltipNoUrl");
@@ -901,13 +950,14 @@ function renderEpisodeTable() {
     return `
       <tr class="ep-row" data-filename="${escapeHtml(it.filename)}" data-sha="${escapeHtml(it.sha)}">
         <td class="col-check"><input type="checkbox" class="ep-check"></td>
-        <td>${escapeHtml(ymd)}</td>
-        <td class="notebook">${escapeHtml(it.notebook)}</td>
+        <td title="${escapeHtml(ymd)}">${escapeHtml(ymd)}</td>
+        <td class="notebook" title="${escapeHtml(it.notebook)}">${escapeHtml(it.notebook)}</td>
         <td class="title" title="${escapeHtml(it.filename)}">${escapeHtml(it.title)}</td>
         <td><span class="${fmtClass}">${escapeHtml(it.format)}</span></td>
         <td class="num">${escapeHtml(epFmtSize(it.size))}</td>
         <td class="col-actions">
           <button type="button" class="ep-action edit" ${editAttrs}>${escapeHtml(editLabel)}</button>
+          <button type="button" class="ep-action share" title="${escapeHtml(shareTooltip)}">${escapeHtml(shareLabel)}</button>
           <button type="button" class="ep-action danger">${escapeHtml(deleteLabel)}</button>
         </td>
       </tr>`;
@@ -928,13 +978,105 @@ function refreshBatchUI() {
 epReloadBtn.addEventListener("click", () => loadEpisodeList());
 
 document.querySelectorAll("#ep-table th.sortable").forEach((th) => {
-  th.addEventListener("click", () => {
+  th.addEventListener("click", (e) => {
+    // 헤더 우측 가장자리의 너비 조절 핸들 클릭은 정렬로 이어지지 않게.
+    if (e.target.classList.contains("col-resizer")) return;
     const key = th.dataset.key;
     if (epSortKey === key) epSortDir = epSortDir === "asc" ? "desc" : "asc";
     else { epSortKey = key; epSortDir = "asc"; }
     renderEpisodeTable();
   });
 });
+
+// ---------- 컬럼 너비 조절 (epColWidths 로 영구 저장) ----------
+// 개별 컬럼 모델 — 잡은 컬럼 한 개만 폭이 변하고, 그 오른쪽 컬럼들은 폭은 그대로
+// 유지한 채 옆으로 밀려남. 테이블 총폭 = sum(cols) 이므로 wrapper 가 가로 스크롤로
+// 흡수. 마지막 컬럼도 핸들 단다 (오른쪽으로 밀려날 컬럼이 없을 뿐 폭 변경은 정상).
+// MIN 폭 제한 없음 — 커서가 가는 곳까지 폭이 따라간다 (0 미만은 0 으로만 클램프).
+
+function epColByKey(key) {
+  return document.querySelector(`#ep-colgroup col[data-col="${key}"]`);
+}
+
+async function loadEpColumnWidths() {
+  try {
+    const r = await chrome.storage.local.get(["epColWidths"]);
+    const widths = r.epColWidths || {};
+    for (const [key, w] of Object.entries(widths)) {
+      const col = epColByKey(key);
+      if (col && w) col.style.width = w;
+    }
+  } catch {}
+  syncEpTableWidth();
+}
+
+async function saveAllEpColumnWidths() {
+  try {
+    const widths = {};
+    document.querySelectorAll("#ep-colgroup col[data-col]").forEach((col) => {
+      if (col.style.width) widths[col.dataset.col] = col.style.width;
+    });
+    await chrome.storage.local.set({ epColWidths: widths });
+  } catch {}
+}
+
+// 테이블 width 를 col 폭의 정확한 합으로 고정. width:auto + table-layout:fixed 만으론
+// 브라우저가 콘텐츠 기반 auto 알고리즘으로 fallback 해 col.style.width 가 무시되는
+// 케이스가 있음 (특히 col 폭이 콘텐츠보다 작을 때). 명시 px width 를 주면 fixed
+// 레이아웃이 엄격히 적용되어 col 폭이 그대로 렌더링됨.
+function syncEpTableWidth() {
+  let sum = 0;
+  document.querySelectorAll("#ep-colgroup col[data-col]").forEach((col) => {
+    const w = parseInt(col.style.width, 10);
+    if (!Number.isNaN(w)) sum += w;
+  });
+  if (sum > 0) {
+    const table = document.getElementById("ep-table");
+    if (table) table.style.width = `${sum}px`;
+  }
+}
+
+function setupEpColumnResizers() {
+  const ths = document.querySelectorAll("#ep-table thead th[data-col]");
+  ths.forEach((th) => {
+    if (th.querySelector(".col-resizer")) return;
+    const handle = document.createElement("div");
+    handle.className = "col-resizer";
+    handle.addEventListener("mousedown", (e) => startEpColumnResize(e, th));
+    th.appendChild(handle);
+  });
+}
+
+function startEpColumnResize(e, th) {
+  e.preventDefault();
+  e.stopPropagation();
+  const col = epColByKey(th.dataset.col);
+  if (!col) return;
+
+  const startWidth = th.offsetWidth;
+  const startX = e.clientX;
+  const handle = e.currentTarget;
+  handle.classList.add("resizing");
+  document.body.classList.add("col-resizing");
+
+  const onMove = (ev) => {
+    const w = Math.max(0, startWidth + (ev.clientX - startX));
+    col.style.width = `${w}px`;
+    syncEpTableWidth();
+  };
+  const onUp = () => {
+    handle.classList.remove("resizing");
+    document.body.classList.remove("col-resizing");
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    saveAllEpColumnWidths();
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+setupEpColumnResizers();
+loadEpColumnWidths();
 
 epResetSortBtn.addEventListener("click", () => {
   epSortKey = "date"; epSortDir = "desc"; renderEpisodeTable();
@@ -962,6 +1104,15 @@ epTbody.addEventListener("click", async (e) => {
   if (e.target.classList.contains("edit")) {
     const nbUrl = e.target.dataset.nbUrl;
     if (nbUrl) chrome.tabs.create({ url: nbUrl });
+    return;
+  }
+  // [공유 ↗] — Web Share API (지원 OS 면 네이티브 공유 시트) → 안 되면 클립보드 복사.
+  if (e.target.classList.contains("share")) {
+    const row = e.target.closest("tr.ep-row");
+    if (!row) return;
+    const fn = row.dataset.filename;
+    const item = epItems.find((i) => i.filename === fn);
+    if (item) await epShare(item);
     return;
   }
   // 단일 삭제 — 편집 (제목 변경) 은 NotebookLM 원본에서. 잘못 받은 카드만

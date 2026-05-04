@@ -140,6 +140,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     clearLastScanResult().then(() => sendResponse({ ok: true }));
     return true; // async
   }
+  if (msg?.type === "notebook:url:map:get") {
+    loadNotebookUrlMap().then((map) => sendResponse({ ok: true, map }));
+    return true; // async
+  }
+  if (msg?.type === "notebook:url:remember") {
+    // popup [현재 노트북 스캔] 직후 호출 — 그 한 노트북만 영구 맵에 추가.
+    // title 이 없으면 slugify 가 "episode" 로 fallback 하므로 명시 가드.
+    if (!msg.title || !msg.url) {
+      sendResponse({ ok: false, error: "title/url 누락" });
+      return false;
+    }
+    const slug = slugify(msg.title);
+    mergeNotebookUrlMap([{ slug, url: msg.url }]).then(() => sendResponse({ ok: true }));
+    return true; // async
+  }
   if (msg?.type === "bulk:failed:list") {
     loadFailedSelections().then((data) => {
       sendResponse({ ok: true, cards: data?.selections || [], savedAt: data?.savedAt || null });
@@ -585,6 +600,36 @@ async function loadLastScanResult() {
 async function clearLastScanResult() {
   try { await chrome.storage.session.remove(["lastScanResult"]); } catch {}
   try { await chrome.storage.local.remove(["lastScanResult"]); } catch {}
+}
+
+// 노트북 슬러그 → URL 영구 맵 (chrome.storage.local). 옵션 페이지의 에피소드 목록에서
+// [편집 ↗] 버튼이 매번 스캔 없이도 활성화되도록 — lastScanResult 가 session 기반
+// (브라우저 재시작 시 증발) 인 것과 별개로 살아남는다. runScanAll / 단일 노트북 스캔
+// 양쪽에서 누적 merge.
+async function loadNotebookUrlMap() {
+  try {
+    const r = await chrome.storage.local.get(["notebookUrlMap"]);
+    return r.notebookUrlMap || {};
+  } catch { return {}; }
+}
+
+async function mergeNotebookUrlMap(entries) {
+  // entries: [{ slug, url }, ...] — slug 빈 값은 무시. 같은 slug 가 다른 URL 로 오면
+  // 새 값으로 overwrite (노트북 제목이 동일해 슬러그가 충돌하는 매우 드문 경우 — 마지막
+  // 본 URL 이 가장 최신/유효한 가능성).
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  try {
+    const existing = await loadNotebookUrlMap();
+    let changed = false;
+    for (const e of entries) {
+      if (!e?.slug || !e?.url) continue;
+      if (existing[e.slug] !== e.url) {
+        existing[e.slug] = e.url;
+        changed = true;
+      }
+    }
+    if (changed) await chrome.storage.local.set({ notebookUrlMap: existing });
+  } catch {}
 }
 
 // 직전 bulk:remote 의 실패 카드들 (selection 객체) — 옵션 페이지의 [실패 N개 재시도]
@@ -1035,6 +1080,14 @@ async function runScanAll() {
   }
 
   await persistLastScanResult(notebooks);
+  // 영구 슬러그→URL 맵에 누적 — lastScanResult 가 session storage 라 브라우저 재시작
+  // 시 사라져도 [편집 ↗] 바로가기는 살아남도록. cover.title 이 비어 있으면 slugify 가
+  // "episode" 로 fallback 하므로 그 항목은 제외.
+  await mergeNotebookUrlMap(
+    notebooks
+      .filter((nb) => nb.cover?.title && nb.url)
+      .map((nb) => ({ slug: slugify(nb.cover.title), url: nb.url })),
+  );
   await setTaskState({
     status: "completed", phase: "done",
     done: urls.length,

@@ -407,6 +407,16 @@ scanBtn.addEventListener("click", async () => {
     nbDateEl.textContent = resp.cover.dateAttr || t("popup.coverNoDate");
     coverEl.style.display = "block";
 
+    // 옵션 페이지의 에피소드 목록 [편집 ↗] 바로가기가 다음에도 활성화되도록 — 이
+    // 한 노트북 (slug → URL) 을 영구 맵에 넣어 두기. 매 스캔마다 호출, await 안 함.
+    if (resp.cover.title) {
+      chrome.runtime.sendMessage({
+        type: "notebook:url:remember",
+        title: resp.cover.title,
+        url: tab.url,
+      }).catch(() => {});
+    }
+
     const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" })
       .catch(() => ({ ok: false, shortIds: [] }));
     const pushedShortIds = pushed?.shortIds || [];

@@ -25,7 +25,7 @@
   .lang-row { display: flex; align-items: center; gap: 6px; }
   .lang-label { color: #6b7280; font-size: 11px; flex-shrink: 0; }
   .lang-select { flex: 1; padding: 4px 6px; font-size: 11px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; margin-top: 0; }
-  .content { flex: 1; padding: 24px 32px 80px; max-width: 740px; min-width: 0; }
+  .content { flex: 1; padding: 24px 32px 80px; min-width: 0; }
   .page { display: none; }
   .page.active { display: block; }
   .page-header { margin-bottom: 8px; }
@@ -33,6 +33,8 @@
   .page-header p.sub { color: #666; margin: 0; font-size: 12px; }
 
   /* ----------- 공통 폼 ----------- */
+  /* 폼 영역만 가독성 한계로 캡 — 테이블/패널/모니터는 컨테이너 풀폭 그대로. */
+  form { max-width: 720px; }
   label { display: block; margin-top: 18px; font-size: 13px; font-weight: 600; }
   input, select { width: 100%; padding: 8px 10px; margin-top: 4px; box-sizing: border-box; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; background: #fff; }
   textarea { width: 100%; padding: 8px 10px; margin-top: 4px; box-sizing: border-box; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; resize: vertical; }
@@ -95,20 +97,41 @@
   .file-upload-row input[type="file"] { flex: 1; padding: 4px; }
 
   /* ----------- 에피소드 목록 ----------- */
-  table.episodes { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-  table.episodes th, table.episodes td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
-  table.episodes th { background: #fafafa; font-weight: 600; font-size: 11px; color: #555; }
+  /* table-layout: fixed — colgroup 의 col 너비를 그대로 적용. cell 컨텐츠는 ellipsis.
+     width: auto — 테이블 폭 = 모든 col 폭의 정확한 합. 한 컬럼을 늘리면 그 오른쪽
+     컬럼들은 폭은 그대로 유지한 채 오른쪽으로 밀려남. wrapper 가 가로 스크롤로 흡수. */
+  .ep-table-wrap { overflow-x: auto; margin-top: 10px; }
+  table.episodes { width: auto; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  /* box-sizing: border-box — col 폭에 padding 도 포함시켜 컬럼이 텍스트/패딩보다 작게도 줄어들게.
+     min-width: 0 — 콘텐츠 intrinsic min 이 cell 을 확장하지 않도록.
+     th 자체엔 overflow:hidden 안 걸음 — 안 그러면 padding-box 밖으로 살짝 튀어나온
+     절대 위치 핸들 (.col-resizer) 도 클리핑되어 좁은 폭에선 핸들이 사라짐. 헤더의
+     ellipsis 는 안쪽 .th-inner wrapper 에만 적용 → 핸들은 th 직속이라 항상 보임. */
+  table.episodes th, table.episodes td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; box-sizing: border-box; min-width: 0; }
+  table.episodes td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.episodes th .th-inner { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 컬럼 경계선 — 마지막 컬럼은 제외. 어디를 드래그할지 시각적으로 명확. */
+  table.episodes th { background: #fafafa; font-weight: 600; font-size: 11px; color: #555; position: relative; border-right: 1px solid #e5e7eb; overflow: visible; }
+  table.episodes th:last-child, table.episodes td:last-child { border-right: 0; }
+  table.episodes td { border-right: 1px solid #f3f4f6; }
   table.episodes th.sortable { cursor: pointer; user-select: none; }
   table.episodes th.sortable:hover { background: #f0f0f0; }
   table.episodes th.sortable .arrow { color: #ccc; margin-left: 4px; font-size: 10px; }
   table.episodes th.sortable.sort-asc .arrow,
   table.episodes th.sortable.sort-desc .arrow { color: #2563eb; }
   table.episodes td.num { text-align: right; color: #666; font-variant-numeric: tabular-nums; }
-  table.episodes .title { color: #111; font-weight: 500; word-break: break-word; }
-  table.episodes .notebook { color: #666; font-size: 11px; word-break: break-word; }
-  table.episodes .col-check { width: 24px; text-align: center; padding-right: 0; }
-  table.episodes .col-actions { width: 100px; text-align: right; white-space: nowrap; }
-  table.episodes tr.group-header td { background: #f4f7fb; font-size: 11px; font-weight: 600; color: #1e3a8a; padding: 5px 8px; border-top: 1px solid #d8e4f4; }
+  table.episodes .title { color: #111; font-weight: 500; }
+  table.episodes .notebook { color: #666; font-size: 11px; }
+  table.episodes .col-check { text-align: center; padding-right: 0; }
+  table.episodes .col-actions { text-align: right; }
+  /* 헤더 우측 가장자리 드래그 핸들 — 너비 조절. 마지막 컬럼은 핸들 없음. 살짝 음수
+     right 로 경계선 위에 정확히 얹혀 클릭 타겟이 양쪽으로 4px 씩 (총 9px). */
+  .col-resizer { position: absolute; right: -4px; top: 0; width: 9px; height: 100%; cursor: col-resize; user-select: none; z-index: 2; }
+  .col-resizer::after { content: ""; position: absolute; left: 4px; top: 0; width: 1px; height: 100%; background: transparent; transition: background 0.1s; }
+  .col-resizer:hover::after, .col-resizer.resizing::after { background: #2563eb; width: 2px; left: 3.5px; }
+  body.col-resizing { cursor: col-resize !important; user-select: none !important; }
+  body.col-resizing * { cursor: col-resize !important; }
+  table.episodes tr.group-header td { background: #f4f7fb; font-size: 11px; font-weight: 600; color: #1e3a8a; padding: 5px 8px; border-top: 1px solid #d8e4f4; white-space: normal; overflow: visible; text-overflow: clip; }
   .ep-toolbar { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
   .ep-toolbar button { margin-top: 0; padding: 5px 10px; font-size: 11px; background: #fff; color: #444; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; }
   .ep-toolbar button:hover:not(:disabled) { background: #f9fafb; }
@@ -121,6 +144,9 @@
   button.ep-action.edit { background: #0ea5e9; color: #fff; margin-right: 4px; text-decoration: none; display: inline-block; }
   button.ep-action.edit:hover:not(:disabled) { background: #0284c7; }
   button.ep-action.edit:disabled { background: #cbd5e1; cursor: not-allowed; }
+  button.ep-action.share { background: #fff; color: #2563eb; border: 1px solid #2563eb; margin-right: 4px; }
+  button.ep-action.share:hover:not(:disabled) { background: #eff6ff; }
+  button.ep-action.share:disabled { color: #9ca3af; border-color: #d1d5db; cursor: not-allowed; }
   button.ep-action.danger { background: #dc2626; color: #fff; }
   button.ep-action.danger:hover:not(:disabled) { background: #b91c1c; }
   .ep-summary { font-size: 11px; color: #666; }
@@ -399,20 +425,31 @@
         <button type="button" class="batch-delete" id="ep-batch-delete" data-i18n="episodes.batchDelete" disabled>선택 삭제</button>
       </div>
       <div id="ep-status" class="status" style="display:none"></div>
-      <table class="episodes" id="ep-table" style="display:none">
+      <div class="ep-table-wrap" id="ep-table-wrap" style="display:none">
+      <table class="episodes" id="ep-table">
+        <colgroup id="ep-colgroup">
+          <col data-col="check" style="width:28px">
+          <col data-col="date" style="width:96px">
+          <col data-col="notebook" style="width:160px">
+          <col data-col="title" style="width:480px">
+          <col data-col="format" style="width:64px">
+          <col data-col="size" style="width:72px">
+          <col data-col="actions" style="width:140px">
+        </colgroup>
         <thead>
           <tr>
-            <th class="col-check"><input type="checkbox" id="ep-check-all"></th>
-            <th class="sortable" data-key="date"><span data-i18n="episodes.col.date">날짜</span><span class="arrow">▲▼</span></th>
-            <th class="sortable" data-key="notebook"><span data-i18n="episodes.col.notebook">노트북</span><span class="arrow">▲▼</span></th>
-            <th class="sortable" data-key="title"><span data-i18n="episodes.col.title">제목</span><span class="arrow">▲▼</span></th>
-            <th class="sortable" data-key="format"><span data-i18n="episodes.col.format">형식</span><span class="arrow">▲▼</span></th>
-            <th class="sortable num" data-key="size"><span data-i18n="episodes.col.size">크기</span><span class="arrow">▲▼</span></th>
-            <th class="col-actions"></th>
+            <th class="col-check" data-col="check"><span class="th-inner"><input type="checkbox" id="ep-check-all"></span></th>
+            <th class="sortable" data-col="date" data-key="date"><span class="th-inner"><span data-i18n="episodes.col.date">날짜</span><span class="arrow">▲▼</span></span></th>
+            <th class="sortable" data-col="notebook" data-key="notebook"><span class="th-inner"><span data-i18n="episodes.col.notebook">노트북</span><span class="arrow">▲▼</span></span></th>
+            <th class="sortable" data-col="title" data-key="title"><span class="th-inner"><span data-i18n="episodes.col.title">제목</span><span class="arrow">▲▼</span></span></th>
+            <th class="sortable" data-col="format" data-key="format"><span class="th-inner"><span data-i18n="episodes.col.format">형식</span><span class="arrow">▲▼</span></span></th>
+            <th class="sortable num" data-col="size" data-key="size"><span class="th-inner"><span data-i18n="episodes.col.size">크기</span><span class="arrow">▲▼</span></span></th>
+            <th class="col-actions" data-col="actions"><span class="th-inner"></span></th>
           </tr>
         </thead>
         <tbody id="ep-tbody"></tbody>
       </table>
+      </div>
       <p class="ep-empty" id="ep-empty" data-i18n="episodes.empty" style="display:none">아직 푸시된 에피소드가 없거나 token/repo 설정 후 [↻ 새로고침] 클릭하세요.</p>
     </section>
 
