@@ -3,6 +3,7 @@
 Includes ONLY the files Chrome needs to run the extension:
     manifest.json
     src/**
+    vendor/**       — bundled libraries (lamejs.js etc.) referenced from src/
     icons/icon16.png, icon48.png, icon128.png
     LICENSE
 
@@ -30,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 INCLUDE_FILES = ["manifest.json", "LICENSE"]
-INCLUDE_DIRS = ["src"]
+INCLUDE_DIRS = ["src", "vendor"]
 INCLUDE_ICONS = ["icons/icon16.png", "icons/icon48.png", "icons/icon128.png"]
 
 

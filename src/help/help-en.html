@@ -171,7 +171,15 @@
   <li>Progress bar (done/total)</li>
   <li>Stat summary (N notebooks · N cards · N ok · N failed)</li>
   <li>Error list — which notebook/card failed and why (max 20, oldest at top)</li>
-  <li><strong>Recent GitHub push activity log</strong> — the last 30 push results live (✓ ok / ↻ skip / ✗ fail), card title + file size + feed update + "X seconds ago". The header shows cumulative counts and total bytes (e.g., ✓ 12 · ↻ 3 · ✗ 1 · 142.7 MB).</li>
+  <li><strong>Recent GitHub push activity log</strong> — the last 30 push results live. Four icons distinguish the outcome:
+    <ul>
+      <li><strong>✓ ok</strong> (green): PUT to GitHub succeeded. File size and feed-update status shown alongside.</li>
+      <li><strong>↻ dedup skip</strong> (gray): a file with the same artifact UUID already exists in the repo, so the PUT was skipped — this is normal behavior.</li>
+      <li><strong>⚠ no GitHub config</strong> (yellow background): the token or repo in the options page is empty, so the push was rejected before any HTTP call. <em>No request actually reached GitHub.</em> If you intended to back up to GitHub, fill in [GitHub settings] and re-download. The Chrome download itself is unaffected.</li>
+      <li><strong>✗ fail</strong> (red): the push was attempted but rejected by network / permissions / repository constraints. The failure reason appears at the end of the line.</li>
+    </ul>
+    The header shows cumulative counts and total bytes (e.g., ✓ 12 · ↻ 3 · ⚠ 2 · ✗ 1 · 142.7 MB).
+  </li>
 </ul>
 <p>The [Clear] button only appears when the task is idle / completed / failed — clicking it hides the panel (the next task automatically shows it again).</p>
 <p>The panel auto-hides when there is no task, so the form takes the full screen during normal use.</p>

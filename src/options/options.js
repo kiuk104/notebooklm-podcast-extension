@@ -255,23 +255,26 @@ function renderRecentPushes(recent) {
 
   // 누적 바이트 (성공 push 만)
   let totalBytes = 0;
-  let okN = 0, skipN = 0, errN = 0;
+  let okN = 0, skipN = 0, warnN = 0, errN = 0;
   for (const p of recent) {
     if (p.ok && typeof p.size === "number") totalBytes += p.size;
     if (p.ok) okN++;
+    else if (p.skipped && p.skipKind === "no-config") warnN++;
     else if (p.skipped) skipN++;
     else errN++;
   }
   const summaryParts = [];
   if (okN > 0) summaryParts.push(`✓ ${okN}`);
   if (skipN > 0) summaryParts.push(`↻ ${skipN}`);
+  if (warnN > 0) summaryParts.push(`⚠ ${warnN}`);
   if (errN > 0) summaryParts.push(`✗ ${errN}`);
   if (totalBytes > 0) summaryParts.push(formatBytes(totalBytes));
   taskRecentSummaryEl.textContent = summaryParts.join(" · ");
 
   taskRecentEl.innerHTML = reversed.map((p) => {
-    const cls = p.ok ? "ok" : p.skipped ? "skip" : "err";
-    const icon = p.ok ? "✓" : p.skipped ? "↻" : "✗";
+    const isWarn = p.skipped && p.skipKind === "no-config";
+    const cls = p.ok ? "ok" : isWarn ? "warn" : p.skipped ? "skip" : "err";
+    const icon = p.ok ? "✓" : isWarn ? "⚠" : p.skipped ? "↻" : "✗";
     const title = escapeHtml(p.episodeTitle || p.filename || "—");
     let detail = "";
     if (p.skipped) {

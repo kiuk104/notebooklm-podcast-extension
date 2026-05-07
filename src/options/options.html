@@ -73,6 +73,7 @@
   .task-recent .recent-item .icon { display: inline-block; width: 14px; text-align: center; }
   .task-recent .recent-item.ok { color: #166534; }
   .task-recent .recent-item.skip { color: #6b7280; }
+  .task-recent .recent-item.warn { color: #92400e; background: #fef3c7; padding-left: 4px; padding-right: 4px; }
   .task-recent .recent-item.err { color: #991b1b; }
   .task-recent .recent-item .size { color: #888; font-size: 10px; margin-left: 4px; }
   .task-recent .recent-item .feed-tag { color: #2563eb; font-size: 10px; margin-left: 4px; }
@@ -278,7 +279,9 @@
 
         <label><span data-i18n="github.repo">Repo (owner/name)</span>
           <input type="text" id="repo" placeholder="kiuk104/my-notebooklm-podcast" required autocomplete="off">
-          <div class="hint" data-i18n="github.repo.hint">아직 없으면 GitHub 에서 빈 public repo 를 먼저 만들고 입력하세요. Pages 활성화는 README 참고.</div>
+          <div class="hint" data-i18n-html="github.repo.hint">
+            형식: <code>owner/name</code> (예: <code>kiuk104/my-notebooklm-podcast</code>). 없으면 <a href="https://github.com/new" target="_blank">github.com/new</a> 열기 → <em>Owner</em> = 본인 사용자명, <em>Repository name</em> = 자유, <em>Public</em> 체크, [Create repository]. <strong>PAT 을 발급한 계정이 repo 의 owner 와 같아야 합니다</strong> (조직 repo 는 PAT 의 SSO 인가 별도 필요). Pages 활성화: repo → Settings → Pages → Source 를 <code>main</code> + <code>/docs</code> 로.
+          </div>
         </label>
 
         <label><span data-i18n="github.feedUrl">내 RSS feed URL</span>

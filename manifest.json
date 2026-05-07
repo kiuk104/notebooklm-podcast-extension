@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NotebookLM Podcast Sync",
-  "version": "0.4.24",
+  "version": "0.4.27",
   "description": "Turn your NotebookLM Audio Overviews into a personal podcast RSS feed pushed to your own GitHub repo.",
   "permissions": ["activeTab", "storage", "downloads", "scripting", "alarms", "debugger", "offscreen", "notifications"],
   "icons": {

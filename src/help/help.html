@@ -171,7 +171,15 @@
   <li>진행률 막대 (done/total 비율)</li>
   <li>통계 요약 (노트북 N 개 · 카드 N 개 · 성공 N · 실패 N)</li>
   <li>실패 목록 — 어느 노트북/카드에서 어떤 이유로 실패했는지 (max 20개, 위에서부터 오래된 것)</li>
-  <li><strong>최근 GitHub push 활동 로그</strong> — 마지막 30 건의 push 결과를 라이브 표시 (✓ 성공 / ↻ dedup 스킵 / ✗ 실패), 카드 제목 + 파일 크기 + feed 갱신 여부 + "X초전". 헤더에 누적 카운트와 push 된 총 byte (예: ✓ 12 · ↻ 3 · ✗ 1 · 142.7MB).</li>
+  <li><strong>최근 GitHub push 활동 로그</strong> — 마지막 30 건의 push 결과를 라이브 표시. 4 가지 아이콘으로 구분:
+    <ul>
+      <li><strong>✓ 성공</strong> (초록): GitHub 으로 PUT 정상 완료. 파일 크기와 feed 갱신 여부 함께 표시.</li>
+      <li><strong>↻ dedup 스킵</strong> (회색): 같은 artifact UUID 의 파일이 이미 저장소에 있어 PUT 건너뜀 — 정상 동작입니다.</li>
+      <li><strong>⚠ GitHub 설정 없음</strong> (노란 배경): 옵션 페이지의 token 또는 repo 가 비어있어 push 시도가 즉시 거절됨. <em>실제로 GitHub 으로 호출이 가지 않은 상태</em>이므로 GitHub 백업이 의도였다면 [GitHub 설정] 을 채우고 다시 받기 하셔야 합니다. Chrome 다운로드 자체는 이와 무관하게 정상 진행.</li>
+      <li><strong>✗ 실패</strong> (빨강): push 시도는 했지만 네트워크 / 권한 / 저장소 문제로 거절됨. 실패 사유가 줄 끝에 표시.</li>
+    </ul>
+    헤더에 누적 카운트와 push 된 총 byte (예: ✓ 12 · ↻ 3 · ⚠ 2 · ✗ 1 · 142.7MB).
+  </li>
 </ul>
 <p>작업이 idle / completed / failed 상태일 때만 [초기화] 버튼이 노출 — 누르면 패널이 사라집니다 (다음 작업 시작하면 자동으로 다시 표시).</p>
 <p>패널은 작업이 없을 때 (idle) 자동으로 숨겨지므로 평소엔 옵션 폼만 보입니다.</p>

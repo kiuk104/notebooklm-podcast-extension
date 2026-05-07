@@ -171,7 +171,15 @@
   <li>Fortschrittsbalken (done/total)</li>
   <li>Statistik-Zusammenfassung (N Notebooks · N Karten · N OK · N fehlgeschlagen)</li>
   <li>Fehlerliste — welches Notebook/Karte aus welchem Grund fehlschlug (max. 20, älteste oben)</li>
-  <li><strong>Letzte GitHub-Push-Aktivität</strong> — die letzten 30 Push-Resultate live (✓ ok / ↻ skip / ✗ fail), Karten-Titel + Dateigröße + Feed-Update + „vor X Sekunden". Header zeigt Summen und insgesamt gepushte Bytes (z. B. ✓ 12 · ↻ 3 · ✗ 1 · 142,7 MB).</li>
+  <li><strong>Letzte GitHub-Push-Aktivität</strong> — die letzten 30 Push-Resultate live. Vier Symbole unterscheiden das Ergebnis:
+    <ul>
+      <li><strong>✓ ok</strong> (grün): PUT auf GitHub erfolgreich. Dateigröße und Feed-Update-Status werden mit angezeigt.</li>
+      <li><strong>↻ Dedup-Skip</strong> (grau): Eine Datei mit derselben artifact-UUID liegt bereits im Repo, daher wurde PUT übersprungen — normales Verhalten.</li>
+      <li><strong>⚠ Keine GitHub-Konfig</strong> (gelber Hintergrund): Token oder Repo auf der Optionen-Seite ist leer, der Push wurde sofort abgelehnt. <em>Kein HTTP-Aufruf hat GitHub erreicht.</em> Falls eine Sicherung auf GitHub gewünscht war, [GitHub-Einstellungen] ausfüllen und erneut laden. Der Chrome-Download selbst ist davon unberührt.</li>
+      <li><strong>✗ fehlgeschlagen</strong> (rot): Push wurde versucht, aber wegen Netzwerk / Berechtigungen / Repository-Problemen abgelehnt. Fehlerursache am Zeilenende.</li>
+    </ul>
+    Header zeigt Summen und insgesamt gepushte Bytes (z. B. ✓ 12 · ↻ 3 · ⚠ 2 · ✗ 1 · 142,7 MB).
+  </li>
 </ul>
 <p>[Zurücksetzen] erscheint nur bei idle / fertig / fehlgeschlagen — Klick blendet das Panel aus (nächste Aufgabe zeigt es automatisch wieder).</p>
 <p>Ohne laufende Aufgabe ist das Panel ausgeblendet, sodass das Formular die volle Fläche bekommt.</p>

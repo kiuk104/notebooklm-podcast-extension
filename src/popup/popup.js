@@ -322,7 +322,9 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (!state) return;
     const feedNote = feedSuffix(msg);
     if (msg.skipped) {
-      setRow(state, "ok", t("popup.push.skipped") + feedNote, msg.reason || "");
+      const isWarn = msg.skipKind === "no-config";
+      const label = isWarn ? t("popup.push.noconfig") : t("popup.push.skipped");
+      setRow(state, isWarn ? "warn" : "ok", label + feedNote, msg.reason || "");
     } else if (msg.ok) {
       setRow(state, "ok", t("popup.push.ok") + feedNote, msg.filename);
     } else {

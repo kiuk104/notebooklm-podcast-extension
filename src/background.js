@@ -373,6 +373,7 @@ async function appendRecentPush(detail) {
     filename: detail.filename || "",
     ok: !!detail.ok,
     skipped: !!detail.skipped,
+    skipKind: detail.skipKind || "",
     error: detail.error || "",
     reason: detail.reason || "",
     size: typeof detail.size === "number" ? detail.size : null,
@@ -1291,7 +1292,7 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
     "token", "repo", "rssMode", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {
-    return { skipped: true, reason: "GitHub 설정 없음" };
+    return { skipped: true, skipKind: "no-config", reason: "GitHub 설정 없음" };
   }
 
   // episodes 폴더 list 후 두 경로로 dedup:
@@ -1324,6 +1325,7 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
     console.log(`[push] ${filename} dedup hit (existing=${existingMatch.name} size=${existingMatch.size}), skip`);
     return {
       skipped: true,
+      skipKind: "dedup",
       reason: existingMatch.name === filename ? "이미 존재" : `이미 존재 (${existingMatch.name})`,
       matchedFilename: existingMatch.name,
     };
@@ -1391,7 +1393,7 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   let pushResult;
   if (existing && existing.size === size) {
     console.log(`[push] ${filename} 이미 존재 (같은 크기), skip`);
-    pushResult = { skipped: true, reason: "이미 존재" };
+    pushResult = { skipped: true, skipKind: "dedup", reason: "이미 존재" };
   } else {
     await ghPut(cfg.repo, path, b64,
       `Add episode ${filename}`, existing?.sha, cfg.token, committer);
