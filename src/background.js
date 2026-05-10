@@ -307,7 +307,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const cfg = await cfgGet(["token", "repo"]);
         const pushedIndex = (cfg.token && cfg.repo)
           ? await loadPushedIndex(cfg.repo, cfg.token)
-          : { shortIds: new Set(), legacyKeys: new Set() };
+          : { shortIds: new Set(), legacyKeys: new Set(), titleKeys: new Set() };
         const enriched = last.notebooks.map((nb) => ({
           ...nb,
           audios: (nb.audios || []).map((a) => ({
@@ -825,19 +825,29 @@ function notifyBulkComplete(success, total) {
 async function loadPushedIndex(repo, token) {
   const shortIds = new Set();
   const legacyKeys = new Set();
+  // 4-segment 파일도 (date, titleSlug, ext) 키로 한 번 더 인덱싱. artifact-labels DOM
+  // 이 늦게 렌더되어 scan 결과의 audio.artifactId 가 빈 문자열로 들어오는 race 가 있는데,
+  // 그 케이스에선 shortId 매칭이 무조건 미스 → 이미 받은 카드도 "신규" 로 잡혀 반복
+  // 다운로드. 같은 (date, titleSlug, ext) 보조 키로 fallback 매칭하면 회복됨.
+  const titleKeys = new Set();
   try {
     const list = await ghList(repo, "docs/episodes", token);
     for (const f of list) {
       const m = LEGACY_DEDUP_RE.exec(f.name);
       if (!m) continue;
       const [, date, fShortId, fTitle, fExt] = m;
-      if (fShortId) shortIds.add(fShortId);
-      else legacyKeys.add(`${date}|${fTitle}|${fExt.toLowerCase()}`);
+      const key = `${date}|${fTitle}|${fExt.toLowerCase()}`;
+      if (fShortId) {
+        shortIds.add(fShortId);
+        titleKeys.add(key);
+      } else {
+        legacyKeys.add(key);
+      }
     }
   } catch (e) {
     console.warn("[loadPushedIndex] ghList 실패:", e.message);
   }
-  return { shortIds, legacyKeys };
+  return { shortIds, legacyKeys, titleKeys };
 }
 
 // extractDate 의 strict 변형 — 못 파싱하면 null. legacy 매칭은 정확한 날짜가 있어야만
@@ -850,7 +860,8 @@ function extractDateStrict(coverDateAttr) {
   return null;
 }
 
-// 카드 하나가 이미 repo 에 push 됐는지. shortId (1차) → legacy date+titleSlug (2차).
+// 카드 하나가 이미 repo 에 push 됐는지. shortId (1차) → legacy date+titleSlug (2차) →
+// 4-segment 파일의 titleSlug fallback (3차, artifactId 가 빈 채 들어오는 race 회복용).
 // transcode 결과는 보통 .mp3 지만 raw m4a fallback 도 있어 세 ext 모두 본다.
 function isAudioPushed(audio, coverDateAttr, pushedIndex) {
   const sid = (audio.artifactId || "").slice(0, 8);
@@ -859,7 +870,9 @@ function isAudioPushed(audio, coverDateAttr, pushedIndex) {
   const titleSlug = audio.title ? slugify(audio.title) : "";
   if (date && titleSlug) {
     for (const ext of ["mp3", "m4a", "mp4"]) {
-      if (pushedIndex.legacyKeys.has(`${date}|${titleSlug}|${ext}`)) return true;
+      const key = `${date}|${titleSlug}|${ext}`;
+      if (pushedIndex.legacyKeys.has(key)) return true;
+      if (pushedIndex.titleKeys.has(key)) return true;
     }
   }
   return false;
@@ -1472,11 +1485,13 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
     return { skipped: true, skipKind: "no-config", reason: "GitHub 설정 없음" };
   }
 
-  // episodes 폴더 list 후 두 경로로 dedup:
+  // episodes 폴더 list 후 세 경로로 dedup:
   //  (a) shortId 가 있으면 `__${shortId}__` 부분 문자열 매칭 — 새 4-segment 포맷.
   //  (b) shortId 없는 옛 3-segment 파일은 (date, titleSlug, ext) 로 매칭. 옛 포맷에는
   //      노트북-슬러그가 들어가지만 포함시키지 않음 — 사용자가 노트북 이름을
   //      바꾸고 다시 받아도 같은 audio 로 인식되도록.
+  //  (c) shortId 가 비었을 때 (artifact-labels 가 늦게 렌더되는 race) 4-segment 파일과도
+  //      (date, titleSlug, ext) 로 매칭 — 같은 카드를 한 번 더 push 하는 사고 방지.
   const committer = cfg.committerName && cfg.committerEmail
     ? { name: cfg.committerName, email: cfg.committerEmail }
     : null;
@@ -1489,6 +1504,7 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
       existingMatch = list.find((f) => {
         if (shortId && f.name.includes(`__${shortId}__`)) return true;
         if (date && titleSlug && legacyFilenameMatches(f.name, date, titleSlug, ext)) return true;
+        if (!shortId && date && titleSlug && titleFilenameMatches(f.name, date, titleSlug, ext)) return true;
         return false;
       });
     } catch (e) {
@@ -1830,6 +1846,17 @@ function legacyFilenameMatches(name, date, titleSlug, ext) {
   if (!m) return false;
   const [, fDate, fShortId, fTitle, fExt] = m;
   if (fShortId) return false; // 4-segment 는 shortId 매칭으로 처리
+  const wantExt = (ext || "").replace(/^\./, "").toLowerCase();
+  return fDate === date && fTitle === titleSlug && fExt.toLowerCase() === wantExt;
+}
+
+// shortId 가 비었을 때 (download:expect 시점에 artifact-labels 가 아직 안 떴음)
+// 4-segment 파일과도 (date, titleSlug, ext) 로 매칭. legacyFilenameMatches 와 달리
+// fShortId 가 있어도 통과 — race 케이스에서 같은 카드를 한 번 더 push 하는 사고 방지.
+function titleFilenameMatches(name, date, titleSlug, ext) {
+  const m = LEGACY_DEDUP_RE.exec(name);
+  if (!m) return false;
+  const [, fDate, , fTitle, fExt] = m;
   const wantExt = (ext || "").replace(/^\./, "").toLowerCase();
   return fDate === date && fTitle === titleSlug && fExt.toLowerCase() === wantExt;
 }

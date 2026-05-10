@@ -186,8 +186,28 @@
       return true; // async
     }
     if (msg?.type === "scan") {
-      sendResponse({ ok: true, cover: getCover(), audios: getAudioCards() });
-      return false;
+      (async () => {
+        // dedup 키 (artifactId, cover.dateAttr) 가 채워질 때까지 짧게 폴.
+        // 카드 제목은 떠 있는데 `<span id="artifact-labels-{UUID}">` 와
+        // `.cover-subtitle-date` 의 title 속성은 더 늦게 렌더되는 race 가
+        // 자주 발생. 그 상태로 응답해버리면 모든 4-segment 파일은 shortId
+        // 매칭만 되는데 빈 artifactId 로는 매칭 불가능 → 이미 받은 카드를
+        // 매번 "신규" 로 잡아 같은 카드를 반복 다운로드. (legacy fallback 도
+        // dateAttr 가 비면 today 로 fallback 해 매칭 어긋남.)
+        const start = Date.now();
+        let cover = getCover();
+        let audios = getAudioCards();
+        while (Date.now() - start < 3000) {
+          const real = audios.filter((a) => !a.isPlaceholder);
+          const ready = !!cover.dateAttr && real.length > 0 && real.every((a) => a.artifactId);
+          if (ready) break;
+          await new Promise((r) => setTimeout(r, 100));
+          cover = getCover();
+          audios = getAudioCards();
+        }
+        sendResponse({ ok: true, cover, audios });
+      })();
+      return true; // async
     }
     if (msg?.type === "download") {
       (async () => {

@@ -79,6 +79,18 @@ NotebookLM 카드 안 `<span class="artifact-labels" id="artifact-labels-{UUID}"
 
 GitHub `/repos/{owner}/{repo}/contents/...` GET 응답은 `Cache-Control: private, max-age=60` 으로 60초간 브라우저 HTTP 캐시에 머문다. PUT 직후 같은 디렉토리를 다시 list 하면 stale listing 이 와서 dedup 매칭이 미스 → 같은 audio 의 SW fetch 가 낭비되는 사고 발생 (실측에서 8.1MB push 직후 같은 카드 재클릭 시 list 가 새 파일을 못 찾아 fetch + 그 다음 ghGet 정확 path 폴백이 잡음). 모든 GitHub GET fetch 에 `cache: "no-store"` 적용 — extension push 흐름에서 dedup 정확성 > 60초 캐시 절약.
 
+#### artifact-labels 늦은 렌더 race (v0.4.31, 2026-05-10)
+
+증상: bulk 다운로드 81개 성공 직후 다시 스캔하면 같은 81개 중 80개가 다시 "신규" 로 잡혀 같은 카드 반복 다운로드.
+
+원인: content.js 의 `scan` 핸들러가 `getCover()` + `getAudioCards()` 를 동기적으로 한 번 부르고 즉시 응답. 카드 제목 (`.artifact-title`) 은 떠 있어도 `<span id="artifact-labels-{UUID}">` 와 `.cover-subtitle-date` 의 `title` 속성은 그보다 늦게 채워지는 경우가 잦다. 그 race 윈도우에서 응답하면 audios 의 `artifactId` 가 빈 문자열, cover 의 `dateAttr` 도 빈 문자열. 4-segment 파일 dedup 은 100% shortId 매칭이라 빈 artifactId 로는 절대 안 맞고, `dateAttr` 도 비어 있으면 legacy fallback 도 죽는다 → 모든 카드가 신규로 잡힘.
+
+수정 (v0.4.31):
+- content.js `scan` 핸들러를 async 로 바꿔 dedup 키 (artifactId, cover.dateAttr) 가 채워질 때까지 100ms 폴링, 최대 3초 budget 후 best-effort 응답.
+- background.js `loadPushedIndex` 에 `titleKeys` 보조 인덱스 추가 — 4-segment 파일도 (date, titleSlug, ext) 키로 함께 인덱싱. `isAudioPushed` 가 shortId 미스 시 이 키로 fallback 매칭. push 경로의 `pushEpisode` 도 `titleFilenameMatches` 추가로 같은 fallback 적용.
+
+향후 NotebookLM 이 DOM 구조를 바꿔 artifact-labels 가 영영 안 뜨면 다시 v1 처럼 (date, title) 기반 dedup 으로 운영 — fallback 인덱스가 그 안전망 역할도 겸한다.
+
 ---
 
 ## 2. audio URL 재fetch 의 인증/CORS 체인
