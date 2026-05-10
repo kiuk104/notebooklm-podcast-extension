@@ -79,6 +79,19 @@ NotebookLM 카드 안 `<span class="artifact-labels" id="artifact-labels-{UUID}"
 
 GitHub `/repos/{owner}/{repo}/contents/...` GET 응답은 `Cache-Control: private, max-age=60` 으로 60초간 브라우저 HTTP 캐시에 머문다. PUT 직후 같은 디렉토리를 다시 list 하면 stale listing 이 와서 dedup 매칭이 미스 → 같은 audio 의 SW fetch 가 낭비되는 사고 발생 (실측에서 8.1MB push 직후 같은 카드 재클릭 시 list 가 새 파일을 못 찾아 fetch + 그 다음 ghGet 정확 path 폴백이 잡음). 모든 GitHub GET fetch 에 `cache: "no-store"` 적용 — extension push 흐름에서 dedup 정확성 > 60초 캐시 절약.
 
+#### retention 영구 루프 + bulk skip cutoff + 영구 스킵 목록 (v0.4.32, 2026-05-10)
+
+증상: bulk 81 직후 docs/episodes/ 사용량이 retention.maxTotalMB (900) 한도 초과 → workflow 가 막 push 한 episode 부터 옛것순 자동 삭제. 익스텐션의 다음 스캔이 그 카드를 신규로 재인식 → push → 즉시 retention 컷 → 영구 다운로드 루프. v0.4.31 의 artifact-labels race fix 와 titleKeys fallback 도 이 케이스엔 효과 없음 — GitHub 에 파일 자체가 안 남기 때문.
+
+구조적 결함: retention 컷오프와 익스텐션 dedup 의 출처가 같은 곳 (docs/episodes/) 이라는 점. 한도 증액은 시간 벌기지 근본 fix 아님.
+
+v0.4.32 의 세 갈래 fix:
+1. **bulkSkipOlderDays cutoff (익스텐션 측)**: 노트북 cover-subtitle-date 가 N 일 이상 옛것이면 buildNewSelections 에서 통째로 스킵. default 730 (2년). 옵션 페이지에 입력란. retention.maxAgeDays 와 같은 기준을 익스텐션 측에 두면, 옛 노트북 카드가 push → workflow 즉시 컷 사이클이 처음부터 발동 안 함.
+2. **영구 스킵 목록**: chrome.storage.sync 의 `skippedShortIds` (Set<8자 shortId>). 사용자가 에피소드 목록의 [삭제] / [스킵] 액션으로 명시 등록. buildNewSelections + scan:result:pushed 에 적용. 다기기 sync 공유. quota: shortId 8자 × 1만건 ≈ 80KB ≤ 100KB.
+3. **저장소 사용량 + cutoff 안내 UI**: 진행 모니터 + 에피소드 목록 양쪽에 storage-usage-panel. 현재 사용량 / 한도 / % 진행바 (75% 노랑, 90% 빨강) + "한도 초과 시 옛것부터 자동 삭제 / 2년 이전 카드 스킵" 안내. background 의 `storage:usage` 핸들러가 ghList + podcast.json regex 로 maxTotalMB 추출.
+
+에피소드 목록 row 에 [스킵] 액션 추가 — 삭제 안 하고 영구 스킵만 등록. [스킵 목록] 토글 버튼으로 패널 펼침 — 등록된 shortId 목록 + 개별 [해제] + [전체 해제].
+
 #### artifact-labels 늦은 렌더 race (v0.4.31, 2026-05-10)
 
 증상: bulk 다운로드 81개 성공 직후 다시 스캔하면 같은 81개 중 80개가 다시 "신규" 로 잡혀 같은 카드 반복 다운로드.

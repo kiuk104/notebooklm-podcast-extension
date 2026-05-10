@@ -39,7 +39,15 @@ const PLACEHOLDER_TITLE_RE = /^audio[\s\-_]?\d+$/i;
 const CFG_KEYS = [
   "token", "repo", "rssMode", "autoDownloadNew",
   "committerName", "committerEmail", "uiLang",
+  "bulkSkipOlderDays",
 ];
+
+// 일괄 다운로드에서 cover-subtitle-date 기준으로 N 일 이상 옛 노트북의 카드는 처음부터
+// 스킵. 0 / 빈값이면 cutoff 안 함. default 730 (2년) — RSS retention.maxAgeDays 와
+// 같은 기준을 익스텐션 측에 두면, 옛 노트북 카드를 push → workflow 가 즉시 retention
+// 으로 삭제 → 다음 스캔에 신규 재인식 → 영구 루프 사고를 처음부터 회피. 사용자가 옛
+// 노트북을 NotebookLM 에서 안 지워도 익스텐션이 알아서 무시함.
+const DEFAULT_BULK_SKIP_OLDER_DAYS = 730;
 
 async function cfgGet(keys) {
   // sync 우선 + 비어있는 키만 local 에 fallback. 마이그레이션 완료 후엔 local
@@ -308,18 +316,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const pushedIndex = (cfg.token && cfg.repo)
           ? await loadPushedIndex(cfg.repo, cfg.token)
           : { shortIds: new Set(), legacyKeys: new Set(), titleKeys: new Set() };
-        const enriched = last.notebooks.map((nb) => ({
-          ...nb,
-          audios: (nb.audios || []).map((a) => ({
-            ...a,
-            isPushed: isAudioPushed(a, nb.cover?.dateAttr || "", pushedIndex),
-          })),
-        }));
+        const skipDays = await loadBulkSkipOlderDays();
+        const skippedShortIds = await loadSkippedShortIds();
+        const enriched = last.notebooks.map((nb) => {
+          const tooOld = isNotebookTooOld(nb.cover?.dateAttr || "", skipDays);
+          return {
+            ...nb,
+            isTooOld: tooOld,
+            audios: (nb.audios || []).map((a) => {
+              const sid = (a.artifactId || "").slice(0, 8);
+              return {
+                ...a,
+                isPushed: isAudioPushed(a, nb.cover?.dateAttr || "", pushedIndex),
+                isTooOld: tooOld,
+                isSkipped: !!(sid && skippedShortIds.has(sid)),
+              };
+            }),
+          };
+        });
         sendResponse({
           ok: true,
           notebooks: enriched,
           scannedAt: last.scannedAt || 0,
           pushedShortIds: Array.from(pushedIndex.shortIds),
+          skipOlderDays: skipDays,
+          skippedShortIds: Array.from(skippedShortIds),
         });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
@@ -409,6 +430,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === "episodes:delete") {
     // 단일 파일 ghDelete. 옵션 페이지의 [삭제] 버튼.
+    // addToSkip:true (default) 면 삭제와 동시에 그 카드의 shortId 를 영구 스킵
+    // 목록에 등록 — 다음 일괄 다운로드에서 같은 카드 받지 않음. 사용자가 명시
+    // 삭제한 카드를 retention 컷오프가 일으키는 영구 루프와 무관하게 영구히
+    // 무시. 옛 3-segment 파일은 shortId 추출 불가 → skip 등록만 못 하지만 삭제는 진행.
     (async () => {
       try {
         const cfg = await cfgGet(["token", "repo", "committerName", "committerEmail"]);
@@ -424,12 +449,57 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           cfg.token,
           committer,
         );
-        sendResponse({ ok: true });
+        let skippedSid = null;
+        if (msg.addToSkip !== false) {
+          const sid = extractShortIdFromFilename(msg.filename);
+          if (sid) {
+            await addSkippedShortId(sid);
+            skippedSid = sid;
+          }
+        }
+        sendResponse({ ok: true, skippedShortId: skippedSid });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
       }
     })();
     return true; // async
+  }
+  if (msg?.type === "skip:list") {
+    (async () => {
+      const set = await loadSkippedShortIds();
+      sendResponse({ ok: true, shortIds: Array.from(set) });
+    })();
+    return true;
+  }
+  if (msg?.type === "skip:add") {
+    (async () => {
+      try {
+        const sid = (msg.shortId || "").toLowerCase();
+        if (!/^[0-9a-f]{8}$/.test(sid)) {
+          sendResponse({ ok: false, error: "invalid shortId" });
+          return;
+        }
+        await addSkippedShortId(sid);
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  if (msg?.type === "skip:remove") {
+    (async () => {
+      const removed = await removeSkippedShortId(msg.shortId);
+      sendResponse({ ok: true, removed });
+    })();
+    return true;
+  }
+  if (msg?.type === "skip:clear") {
+    (async () => {
+      await chrome.storage.sync.set({ skippedShortIds: [] });
+      sendResponse({ ok: true });
+    })();
+    return true;
   }
   if (msg?.type === "list:pushed") {
     // popup 의 bulk 모드에서 "이미 받은 카드" 를 default 미체크로 두기 위한 사전 점검.
@@ -451,6 +521,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } catch (e) {
         console.warn("[list:pushed] 실패:", e.message);
         sendResponse({ ok: true, shortIds: [], names: [], reason: e.message });
+      }
+    })();
+    return true; // async
+  }
+  if (msg?.type === "storage:usage") {
+    // 옵션 페이지의 진행 모니터에서 "현재 docs/episodes/ 사용량 vs retention 한도"
+    // 를 표시. retention 이 한도 도달하면 옛 episode 자동 삭제 + 익스텐션 측에서
+    // 2년 이전 카드 push 스킵 — 둘의 동작 명시로 사용자가 사고 흐름을 미리 인지.
+    (async () => {
+      try {
+        const cfg = await cfgGet(["token", "repo", "bulkSkipOlderDays"]);
+        if (!cfg.token || !cfg.repo) {
+          sendResponse({ ok: false, error: "no-config" });
+          return;
+        }
+        const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
+        const totalBytes = list.reduce((s, f) => s + (f.size || 0), 0);
+        let maxTotalMB = null;
+        try {
+          const pj = await ghGet(cfg.repo, "docs/podcast.json", cfg.token);
+          if (pj?.content) {
+            // base64 → 문자열. JSON 파싱 안 하고 maxTotalMB 만 regex 로 추출 —
+            // 한글 등 non-ASCII 가 들어가도 atob 단독은 latin-1 으로 깨지므로
+            // Uint8Array 우회. 다만 숫자 필드 regex 는 ASCII 라 단순 atob 로 충분.
+            const decoded = atob(pj.content.replace(/\s/g, ""));
+            const m = /"maxTotalMB"\s*:\s*(\d+(?:\.\d+)?)/.exec(decoded);
+            if (m) maxTotalMB = parseFloat(m[1]);
+          }
+        } catch (e) {
+          console.warn("[storage:usage] podcast.json 조회 실패:", e.message);
+        }
+        const skipDays = await loadBulkSkipOlderDays();
+        sendResponse({
+          ok: true,
+          fileCount: list.length,
+          totalBytes,
+          maxTotalMB,
+          skipOlderDays: skipDays,
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
       }
     })();
     return true; // async
@@ -860,6 +971,61 @@ function extractDateStrict(coverDateAttr) {
   return null;
 }
 
+// cover-subtitle-date 기준 노트북 생성일이 skipDays 보다 옛것이면 true. skipDays 0 이면
+// cutoff 안 함. dateAttr 파싱 실패 시 false (안전쪽 — 모르면 일단 push 시도).
+function isNotebookTooOld(coverDateAttr, skipDays) {
+  if (!skipDays || skipDays <= 0) return false;
+  const ymd = extractDateStrict(coverDateAttr);
+  if (!ymd) return false;
+  const ms = Date.UTC(
+    parseInt(ymd.slice(0, 4), 10),
+    parseInt(ymd.slice(4, 6), 10) - 1,
+    parseInt(ymd.slice(6, 8), 10),
+  );
+  const ageDays = (Date.now() - ms) / (24 * 60 * 60 * 1000);
+  return ageDays > skipDays;
+}
+
+async function loadBulkSkipOlderDays() {
+  const cfg = await cfgGet(["bulkSkipOlderDays"]);
+  const raw = cfg.bulkSkipOlderDays;
+  if (raw === "" || raw === null || raw === undefined) return DEFAULT_BULK_SKIP_OLDER_DAYS;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_BULK_SKIP_OLDER_DAYS;
+}
+
+// 영구 스킵 목록 — 사용자가 에피소드 목록에서 삭제한 음성개요의 shortId 를 보관.
+// retention 으로 한 번 잘리면 dedup 출처 (docs/episodes/) 에서 사라져 영구 루프
+// 가 생기는데, 사용자가 "이 카드는 다시 받지 않겠다" 라고 명시한 건 이 목록으로
+// 항구적으로 기억. chrome.storage.sync 라 다기기 공유. quota: shortId 8자 * 1만건
+// ≈ 80KB 면 100KB 한도 안 — 일반 사용자 범위에선 여유 충분.
+async function loadSkippedShortIds() {
+  const out = await chrome.storage.sync.get(["skippedShortIds"]).catch(() => ({}));
+  const arr = Array.isArray(out.skippedShortIds) ? out.skippedShortIds : [];
+  return new Set(arr);
+}
+
+async function addSkippedShortId(sid) {
+  if (!sid) return;
+  const set = await loadSkippedShortIds();
+  if (set.has(sid)) return;
+  set.add(sid);
+  await chrome.storage.sync.set({ skippedShortIds: Array.from(set) });
+}
+
+async function removeSkippedShortId(sid) {
+  const set = await loadSkippedShortIds();
+  if (!set.delete(sid)) return false;
+  await chrome.storage.sync.set({ skippedShortIds: Array.from(set) });
+  return true;
+}
+
+// 파일명에서 shortId 추출. 4-segment 파일만 매칭, 3-segment 옛 파일은 null.
+function extractShortIdFromFilename(name) {
+  const m = /__([0-9a-f]{8})__/.exec(name || "");
+  return m ? m[1] : null;
+}
+
 // 카드 하나가 이미 repo 에 push 됐는지. shortId (1차) → legacy date+titleSlug (2차) →
 // 4-segment 파일의 titleSlug fallback (3차, artifactId 가 빈 채 들어오는 race 회복용).
 // transcode 결과는 보통 .mp3 지만 raw m4a fallback 도 있어 세 ext 모두 본다.
@@ -882,12 +1048,20 @@ function isAudioPushed(audio, coverDateAttr, pushedIndex) {
 // auto-download 와 관리 페이지의 [신규 받기] 양쪽이 공유.
 async function buildNewSelections(notebooks, repo, token) {
   const pushedIndex = await loadPushedIndex(repo, token);
+  const skipDays = await loadBulkSkipOlderDays();
+  const skippedShortIds = await loadSkippedShortIds();
   const selections = [];
   for (const nb of notebooks) {
     const coverDateAttr = nb.cover?.dateAttr || "";
+    // skipDays 보다 옛 노트북은 통째로 스킵. retention 정책이 옛것 자르는 것과
+    // 같은 기준을 익스텐션 측에 둬서 영구 루프 사고를 처음부터 회피.
+    if (isNotebookTooOld(coverDateAttr, skipDays)) continue;
     (nb.audios || []).forEach((audio, idx) => {
       if (audio.isPlaceholder) return;
       if (isAudioPushed(audio, coverDateAttr, pushedIndex)) return;
+      // 사용자가 에피소드 목록에서 명시 삭제한 카드는 영구 스킵.
+      const sid = (audio.artifactId || "").slice(0, 8);
+      if (sid && skippedShortIds.has(sid)) return;
       selections.push({
         notebookUrl: nb.url,
         cardIndex: idx,

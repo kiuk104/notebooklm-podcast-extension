@@ -5,6 +5,7 @@ const fields = {
   committerName: document.getElementById("committer-name"),
   committerEmail: document.getElementById("committer-email"),
   autoDownloadNew: document.getElementById("auto-download-new"),
+  bulkSkipOlderDays: document.getElementById("bulk-skip-older-days"),
 };
 const statusEl = document.getElementById("status");
 const feedUrlEl = document.getElementById("feed-url");
@@ -12,7 +13,7 @@ const openFeedEl = document.getElementById("open-feed");
 const copyFeedBtn = document.getElementById("copy-feed");
 const langSelectEl = document.getElementById("lang-select");
 
-const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "autoDownloadNew"];
+const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "autoDownloadNew", "bulkSkipOlderDays"];
 const RSS_MODE_DEFAULT = "actions";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -59,12 +60,18 @@ async function cfgSet(obj) {
   for (const k of KEYS) {
     if (k === "autoDownloadNew") {
       fields.autoDownloadNew.checked = !!stored.autoDownloadNew;
+    } else if (k === "bulkSkipOlderDays") {
+      // 빈값 / undefined 면 placeholder 의 default 가 보이도록 비워둠.
+      if (stored[k] !== undefined && stored[k] !== null && stored[k] !== "") {
+        fields.bulkSkipOlderDays.value = stored[k];
+      }
     } else if (stored[k]) {
       fields[k].value = stored[k];
     }
   }
   if (!stored.rssMode) fields.rssMode.value = RSS_MODE_DEFAULT;
   refreshFeedUrl();
+  loadStorageUsage();
 })();
 
 // 사이드바 도움말 링크가 현재 언어 매칭 help 파일로 라우팅되도록.
@@ -155,8 +162,10 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     committerName: fields.committerName.value.trim(),
     committerEmail: fields.committerEmail.value.trim(),
     autoDownloadNew: fields.autoDownloadNew.checked,
+    bulkSkipOlderDays: fields.bulkSkipOlderDays.value.trim(),
   });
   show(t("github.status.saved"), "success");
+  loadStorageUsage();
 });
 
 function show(text, kind) {
@@ -164,6 +173,83 @@ function show(text, kind) {
   statusEl.className = "status " + kind;
   statusEl.style.display = "block";
 }
+
+// 진행 모니터 + 에피소드 목록 양쪽의 저장소 사용량 박스를 동시에 갱신.
+// retention 한도 도달 시 옛 episode 자동 삭제 + 2년 이전 노트북 카드는 일괄
+// 다운로드에서 스킵 — 사용자가 사고 흐름을 미리 인지하도록 두 화면에 표시.
+async function loadStorageUsage() {
+  const ids = ["", "-ep"];
+  let r;
+  try {
+    r = await chrome.runtime.sendMessage({ type: "storage:usage" });
+  } catch { r = null; }
+  for (const suffix of ids) {
+    const panel = document.getElementById(`storage-usage-panel${suffix}`);
+    const summary = document.getElementById(`storage-usage-summary${suffix}`);
+    const meta = document.getElementById(`storage-usage-meta${suffix}`);
+    const fill = document.getElementById(`storage-usage-fill${suffix}`);
+    if (!panel) continue;
+    if (!r?.ok) { panel.style.display = "none"; continue; }
+    panel.style.display = "block";
+    const usedMB = r.totalBytes / 1024 / 1024;
+    const maxMB = r.maxTotalMB;
+    const pct = maxMB ? Math.min(100, (usedMB / maxMB) * 100) : 0;
+    summary.textContent = maxMB
+      ? t("monitor.storage.summary", { used: usedMB.toFixed(1), max: maxMB.toFixed(0), count: r.fileCount, pct: pct.toFixed(0) })
+      : t("monitor.storage.summaryNoLimit", { used: usedMB.toFixed(1), count: r.fileCount });
+    meta.textContent = t("monitor.storage.skipDays", { n: r.skipOlderDays });
+    fill.style.width = pct.toFixed(0) + "%";
+    fill.style.background = pct > 90 ? "#dc2626" : pct > 75 ? "#f59e0b" : "#10b981";
+  }
+}
+
+// 에피소드 페이지의 스킵 목록 토글 패널.
+async function renderSkipPanel() {
+  const panel = document.getElementById("ep-skip-panel");
+  const listEl = document.getElementById("ep-skip-list");
+  const countEl = document.getElementById("ep-skip-count");
+  if (!panel) return;
+  const r = await chrome.runtime.sendMessage({ type: "skip:list" }).catch(() => null);
+  const ids = r?.shortIds || [];
+  countEl.textContent = t("episodes.skip.count", { n: ids.length });
+  listEl.innerHTML = "";
+  if (ids.length === 0) {
+    listEl.innerHTML = `<div class="hint" style="margin:0;">${escapeHtml(t("episodes.skip.empty"))}</div>`;
+    return;
+  }
+  for (const sid of ids.sort()) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #eee;";
+    row.innerHTML = `<code>${escapeHtml(sid)}</code><button type="button" class="ep-skip-unset" data-sid="${escapeHtml(sid)}" style="font-size:12px; padding:2px 8px;">${escapeHtml(t("episodes.skip.unset"))}</button>`;
+    listEl.appendChild(row);
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const t2 = e.target;
+  if (t2.id === "ep-skip-toggle") {
+    const panel = document.getElementById("ep-skip-panel");
+    if (panel.style.display === "none") {
+      panel.style.display = "block";
+      await renderSkipPanel();
+    } else {
+      panel.style.display = "none";
+    }
+    return;
+  }
+  if (t2.id === "ep-skip-clear") {
+    if (!confirm(t("episodes.skip.confirmClear"))) return;
+    await chrome.runtime.sendMessage({ type: "skip:clear" });
+    await renderSkipPanel();
+    return;
+  }
+  if (t2.classList?.contains("ep-skip-unset")) {
+    const sid = t2.dataset.sid;
+    await chrome.runtime.sendMessage({ type: "skip:remove", shortId: sid });
+    await renderSkipPanel();
+    return;
+  }
+});
 
 document.getElementById("toggle-token").addEventListener("click", () => {
   const t = fields.token;
@@ -476,12 +562,15 @@ async function renderLastScanPanel() {
   // 옛 3-segment 파일이 영구 신규로 잡히는 갭이 있었음 — 같은 ghList 한 번이면 비용 동일.
   let newCount = 0;
   let placeholderCount = 0;
+  let tooOldCount = 0;
   try {
     const enriched = await chrome.runtime.sendMessage({ type: "scan:result:pushed" });
     for (const nb of (enriched?.notebooks || [])) {
       for (const audio of (nb.audios || [])) {
         if (audio.isPlaceholder) { placeholderCount++; continue; }
         if (audio.isPushed) continue;
+        // 옛 노트북 카드는 일괄 다운로드에서 스킵되므로 "신규" 로 안 셈.
+        if (audio.isTooOld) { tooOldCount++; continue; }
         newCount++;
       }
     }
@@ -502,6 +591,7 @@ async function renderLastScanPanel() {
     t("monitor.summary.cards", { n: cardCount }),
   ];
   if (placeholderCount > 0) parts.push(t("monitor.summary.placeholder", { n: placeholderCount }));
+  if (tooOldCount > 0) parts.push(t("monitor.summary.tooOld", { n: tooOldCount }));
   parts.push(t("monitor.summary.new", { n: newCount }));
   if (failedCount > 0) parts.push(t("monitor.summary.failed", { n: failedCount }));
   lastScanSummaryEl.textContent = parts.join(" · ");
@@ -1313,6 +1403,8 @@ function renderEpisodeTable() {
   const shareLabel = t("episodes.action.share");
   const shareTooltip = t("episodes.shareTooltip");
   const deleteLabel = t("episodes.action.delete");
+  const skipLabel = t("episodes.action.skip");
+  const skipTooltip = t("episodes.skipTooltip");
   const tooltipReady = t("episodes.editTooltipReady");
   const tooltipNoUrl = t("episodes.editTooltipNoUrl");
   const html = items.map((it) => {
@@ -1326,8 +1418,15 @@ function renderEpisodeTable() {
     const editAttrs = nbUrl
       ? `data-nb-url="${escapeHtml(nbUrl)}" title="${escapeHtml(tooltipReady)}"`
       : `disabled title="${escapeHtml(tooltipNoUrl)}"`;
+    // shortId 추출 — 4-segment 파일명 (date__nb__shortId__title.ext) 패턴. 옛
+    // 3-segment 파일은 null → [스킵] 비활성 (스킵 등록할 식별자 없음).
+    const sidMatch = /__([0-9a-f]{8})__/.exec(it.filename);
+    const sid = sidMatch ? sidMatch[1] : "";
+    const skipAttrs = sid
+      ? `data-sid="${escapeHtml(sid)}" title="${escapeHtml(skipTooltip)}"`
+      : `disabled title="${escapeHtml(t("episodes.skipTooltipNoSid"))}"`;
     return `
-      <tr class="ep-row" data-filename="${escapeHtml(it.filename)}" data-sha="${escapeHtml(it.sha)}">
+      <tr class="ep-row" data-filename="${escapeHtml(it.filename)}" data-sha="${escapeHtml(it.sha)}" data-sid="${escapeHtml(sid)}">
         <td class="col-check"><input type="checkbox" class="ep-check"></td>
         <td title="${escapeHtml(ymd)}">${escapeHtml(ymd)}</td>
         <td class="notebook" title="${escapeHtml(it.notebook)}">${escapeHtml(it.notebook)}</td>
@@ -1337,6 +1436,7 @@ function renderEpisodeTable() {
         <td class="col-actions">
           <button type="button" class="ep-action edit" ${editAttrs}>${escapeHtml(editLabel)}</button>
           <button type="button" class="ep-action share" title="${escapeHtml(shareTooltip)}">${escapeHtml(shareLabel)}</button>
+          <button type="button" class="ep-action skip" ${skipAttrs}>${escapeHtml(skipLabel)}</button>
           <button type="button" class="ep-action danger">${escapeHtml(deleteLabel)}</button>
         </td>
       </tr>`;
@@ -1494,23 +1594,57 @@ epTbody.addEventListener("click", async (e) => {
     if (item) await epShare(item);
     return;
   }
+  // [스킵] — 삭제 안 하고 영구 스킵 목록에만 등록. 다음 일괄 다운로드에서 제외.
+  // 옛 3-segment 파일은 shortId 없어서 버튼 disabled — 여기까지 안 옴.
+  if (e.target.classList.contains("skip")) {
+    const sid = e.target.dataset.sid;
+    if (!sid) return;
+    if (!confirm(t("episodes.confirmSkip", { sid }))) return;
+    e.target.disabled = true;
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "skip:add", shortId: sid });
+      if (!r?.ok) throw new Error(r?.error || "skip add failed");
+      epShowStatus(t("episodes.skipAdded", { sid }), "success");
+      if (document.getElementById("ep-skip-panel")?.style.display === "block") {
+        renderSkipPanel();
+      }
+    } catch (err) {
+      epShowStatus(t("episodes.skipFail", { msg: err.message }), "error");
+      e.target.disabled = false;
+    }
+    return;
+  }
   // 단일 삭제 — 편집 (제목 변경) 은 NotebookLM 원본에서. 잘못 받은 카드만
   // 여기서 ghDelete 하고, 다음 sweep 에서 새 제목으로 다시 받아오는 흐름.
+  // 삭제 시 default 로 shortId 를 영구 스킵 목록에 등록 — retention 컷오프와
+  // 무관하게 다음 일괄 다운로드에서 같은 카드 안 받음. confirm 으로 분기 가능.
   if (e.target.classList.contains("danger")) {
     const row = e.target.closest("tr.ep-row");
     if (!row) return;
     const fn = row.dataset.filename;
     const sha = row.dataset.sha;
-    if (!confirm(t("episodes.confirmDelete", { filename: fn }))) return;
+    const addToSkip = confirm(t("episodes.confirmDeleteWithSkip", { filename: fn }));
+    // confirm 취소면 삭제 자체도 취소.
+    if (!addToSkip && !confirm(t("episodes.confirmDeleteOnly", { filename: fn }))) return;
     e.target.disabled = true;
     epShowStatus(t("episodes.deleting", { filename: fn }), "");
     try {
       const r = await chrome.runtime.sendMessage({
-        type: "episodes:delete", filename: fn, sha,
+        type: "episodes:delete", filename: fn, sha, addToSkip,
       });
       if (!r?.ok) throw new Error(r?.error || "delete failed");
-      epShowStatus(t("episodes.deleted", { filename: fn }), "success");
+      epShowStatus(
+        r.skippedShortId
+          ? t("episodes.deletedWithSkip", { filename: fn, sid: r.skippedShortId })
+          : t("episodes.deleted", { filename: fn }),
+        "success",
+      );
       await loadEpisodeList();
+      loadStorageUsage();
+      // 스킵 패널이 열려 있으면 갱신.
+      if (document.getElementById("ep-skip-panel")?.style.display === "block") {
+        renderSkipPanel();
+      }
     } catch (err) {
       epShowStatus(t("episodes.deleteFail", { msg: err.message }), "error");
       e.target.disabled = false;
@@ -1556,6 +1690,8 @@ function showPage(name) {
     a.classList.toggle("active", a.dataset.page === name);
   });
   refreshMonitorChrome();
+  // 모니터 / 에피소드 페이지로 이동 시 저장소 사용량 자동 갱신.
+  if (name === "monitor" || name === "episodes") loadStorageUsage();
 }
 
 // 진행 모니터 페이지의 "비어있음" 메시지 + 사이드바 [진행 모니터] 의 빨간 뱃지.

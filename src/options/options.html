@@ -238,6 +238,18 @@
         </div>
       </div>
 
+      <div class="task-panel" id="storage-usage-panel" style="display:none; margin-top:12px;">
+        <div class="task-head">
+          <span class="task-title" data-i18n="monitor.storage.title">저장소 사용량</span>
+          <span class="task-elapsed" id="storage-usage-meta"></span>
+        </div>
+        <div class="task-message" id="storage-usage-summary"></div>
+        <div class="progress-track"><div class="progress-fill" id="storage-usage-fill" style="width:0%; background:#10b981;"></div></div>
+        <div class="hint" id="storage-usage-hint" style="margin-top:8px;" data-i18n="monitor.storage.hint">
+          한도 초과 시 옛 episode 부터 자동 삭제됩니다. 노트북 생성일이 2년 (기본 730일) 이전인 카드는 일괄 다운로드에서도 처음부터 스킵됩니다 — 영구 다운로드 루프 회피용.
+        </div>
+      </div>
+
       <div class="task-panel" id="last-scan-panel" style="display:none; margin-top:12px;">
         <div class="task-head">
           <span class="task-title" data-i18n="monitor.lastScan.title">직전 스캔 결과</span>
@@ -365,6 +377,14 @@
           [모든 노트북 스캔] 직후 repo 에 없는 카드들을 그대로 이어서 다운로드 + push 합니다 (v1 cron 동등). 첫 사용 시 수십~수백 개가 한꺼번에 들어올 수 있어 default 는 OFF — 수동 검수 후 [신규 받기] 클릭이 안전.
         </div>
 
+        <label style="margin-top:18px;">
+          <span data-i18n="github.bulkSkipOlderDays">옛 카드 자동 스킵 (일)</span>
+          <input type="number" id="bulk-skip-older-days" min="0" step="1" placeholder="730">
+          <div class="hint" data-i18n="github.bulkSkipOlderDays.hint">
+            노트북 생성일이 지정 일수보다 옛 카드는 일괄 다운로드에서 처음부터 스킵. default 730 (2년). 0 또는 빈값이면 cutoff 없이 모두 시도 — repo 의 retention 한도 도달 시 같은 카드가 push → 즉시 삭제 → 다음 스캔에 신규 재인식되는 영구 루프 위험이 있어 비활성 비권장.
+          </div>
+        </label>
+
         <label><span data-i18n="github.committer">커밋 시 사용할 이름 / 이메일 (선택)</span>
           <input type="text" id="committer-name" placeholder="kiuk104">
           <input type="email" id="committer-email" placeholder="kiuk104@gmail.com" style="margin-top:6px">
@@ -467,13 +487,37 @@
         <p class="sub" data-i18n-html="page.episodes.sub">repo 의 <code>docs/episodes/</code> 에 저장된 음성개요 목록. 클릭으로 정렬, 노트북별 그룹, 다중 선택 삭제 가능. <strong>[편집]</strong> 은 해당 NotebookLM 노트북을 새 탭으로 열어 — 제목/내용은 거기서 직접 수정하시고, 잘못 받은 카드는 여기서 삭제 후 다음 sweep 에서 새로 받습니다.</p>
       </div>
 
+      <div class="task-panel" id="storage-usage-panel-ep" style="display:none; margin-bottom:12px;">
+        <div class="task-head">
+          <span class="task-title" data-i18n="monitor.storage.title">저장소 사용량</span>
+          <span class="task-elapsed" id="storage-usage-meta-ep"></span>
+        </div>
+        <div class="task-message" id="storage-usage-summary-ep"></div>
+        <div class="progress-track"><div class="progress-fill" id="storage-usage-fill-ep" style="width:0%; background:#10b981;"></div></div>
+        <div class="hint" style="margin-top:8px;" data-i18n="monitor.storage.hintEp">
+          한도 초과 시 옛 episode 부터 자동 삭제. 미리 정리하면 retention 컷이 새 episode 를 못 잡습니다. 노트북 생성일이 2년 (기본 730일) 이전인 카드는 일괄 다운로드에서 처음부터 스킵.
+        </div>
+      </div>
+
       <div class="ep-toolbar">
         <button type="button" id="ep-reload" data-i18n="episodes.reload">↻ 새로고침</button>
         <button type="button" class="toggle" id="ep-group-toggle" data-i18n="episodes.groupToggle">노트북별 그룹화</button>
         <button type="button" id="ep-reset-sort" data-i18n="episodes.resetSort">정렬 초기화 (날짜 ↓)</button>
+        <button type="button" id="ep-skip-toggle" title="삭제 시 자동 등록된 스킵 목록" data-i18n="episodes.skipToggle">스킵 목록</button>
         <span class="ep-summary" id="ep-summary"></span>
         <span class="selected-count" id="ep-selected-count"></span>
         <button type="button" class="batch-delete" id="ep-batch-delete" data-i18n="episodes.batchDelete" disabled>선택 삭제</button>
+      </div>
+      <div id="ep-skip-panel" class="task-panel" style="display:none; margin-bottom:12px;">
+        <div class="task-head">
+          <span class="task-title" data-i18n="episodes.skip.title">일괄 다운로드 스킵 목록</span>
+          <span class="task-elapsed" id="ep-skip-count"></span>
+        </div>
+        <div class="hint" data-i18n="episodes.skip.hint">에피소드 삭제 시 자동 등록. 같은 카드를 다시 다운로드하지 않게 합니다. 해제하면 다음 스캔에서 다시 신규로 잡힘.</div>
+        <div id="ep-skip-list" style="margin-top:8px; max-height:200px; overflow-y:auto; font-family:monospace; font-size:13px;"></div>
+        <div class="task-actions" style="margin-top:8px;">
+          <button type="button" id="ep-skip-clear" data-i18n="episodes.skip.clear">전체 해제</button>
+        </div>
       </div>
       <div id="ep-status" class="status" style="display:none"></div>
       <div class="ep-table-wrap" id="ep-table-wrap" style="display:none">
