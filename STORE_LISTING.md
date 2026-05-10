@@ -32,7 +32,7 @@ Push NotebookLM Audio Overviews to your own GitHub repo and turn them into a per
 
 ### 1-4. 언어
 - 1차: **한국어 (ko)** — 도움말 / popup 이 한국어.
-- 추가: **영어 (en)**, **독일어 (de)** — v0.4.20 부터 관리 페이지 사이드바 셀렉터로 즉시 전환 가능 (`src/options/i18n.js` 의 ~120 키 × 3개 언어 테이블, `chrome.i18n.getUILanguage()` 기준 자동 초기설정 + 사용자 선택은 `chrome.storage.local.uiLang` 에 영구 저장).
+- 추가: **영어 (en)**, **독일어 (de)** — v0.4.23 부터 popup + 관리 페이지 + 도움말 모두 사이드바 셀렉터로 즉시 전환 가능 (`src/i18n.js` 가 popup/options 공유, ~150 키 × 3개 언어 테이블, `chrome.i18n.getUILanguage()` 기준 자동 초기설정 + 사용자 선택은 `chrome.storage.local.uiLang` 에 영구 저장. 도움말은 `src/help/help.html` / `help-en.html` / `help-de.html` 3종, popup·options 의 [❓ 도움말] 링크가 현재 `uiLang` 에 따라 자동 라우팅).
 
 ---
 

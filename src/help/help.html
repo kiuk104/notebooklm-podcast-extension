@@ -427,7 +427,7 @@
   <tr><td><code>host_permissions: api.github.com</code></td><td>본인 repo 에 audio / RSS push.</td></tr>
 </table>
 
-<p><strong>토큰 저장 위치</strong>: <code>chrome.storage.local</code>. 외부 서버로 전송되지 않으며, GitHub API 호출 시에만 Authorization 헤더로 사용됩니다. 익스텐션을 제거하면 같이 삭제됩니다.</p>
+<p><strong>토큰 저장 위치</strong>: <code>chrome.storage.sync</code>. 같은 Google 계정으로 로그인한 다른 Chrome 의 같은 익스텐션과 자동 공유됩니다 (다기기 동기화). Chrome Sync 패스프레이즈가 켜져 있으면 end-to-end 암호화 — Google 도 못 읽음. 안 켜져 있으면 Google 계정 키로 암호화되어 Anthropic 같은 외부 서버엔 안 가지만 Google 은 이론상 접근 가능. GitHub API 호출 시에만 Authorization 헤더로 사용되고, 익스텐션을 제거하면 같이 삭제됩니다. 진행 상태 / 스캔 결과 / 노트북 URL 맵 같은 기기별 데이터는 동기화 안 되고 <code>chrome.storage.local</code> (해당 기기) 에만 보관됩니다.</p>
 
 <p><strong>NotebookLM 세션 쿠키</strong>: audio 재fetch 시 <code>credentials:"include"</code> 로 동행. 이 쿠키는 redirect 체인 (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>) 을 통과하기 위해서만 사용되며 익스텐션이 따로 저장하지 않습니다.</p>
 

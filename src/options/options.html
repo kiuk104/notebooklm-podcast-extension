@@ -246,10 +246,53 @@
         <div class="task-message" id="last-scan-summary"></div>
         <div class="task-actions">
           <button type="button" id="last-scan-download" class="primary-action" data-i18n="monitor.lastScan.download" style="background:#2563eb; color:#fff; border:0;">신규 받기</button>
+          <button type="button" id="last-scan-pick-toggle" data-i18n="monitor.lastScan.pick">선택해서 받기 ▾</button>
           <button type="button" id="last-scan-retry-failed" style="background:#fff7ed; border:1px solid #fdba74; color:#9a3412; display:none;"></button>
+          <button type="button" id="last-scan-recount" title="repo 상태 다시 조회해 신규 카운트만 갱신" data-i18n="monitor.lastScan.recount">↻ 새로고침</button>
           <button type="button" id="last-scan-clear" data-i18n="monitor.lastScan.clear">지우기</button>
         </div>
+
+        <div id="last-scan-pick" style="display:none; margin-top:12px; border-top:1px solid #e5e7eb; padding-top:10px;">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; cursor:pointer;">
+              <input type="checkbox" id="pick-master" style="width:auto; margin:0;">
+              <span data-i18n="pick.master">전체 선택/해제</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; color:#374151;">
+              <input type="checkbox" id="pick-show-pushed" style="width:auto; margin:0;">
+              <span data-i18n="pick.showPushed">이미 받은 카드도 보기</span>
+            </label>
+            <span id="pick-summary" style="font-size:11px; color:#6b7280; margin-left:auto;"></span>
+          </div>
+          <div id="pick-tree" style="max-height:380px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:5px; padding:6px 8px; background:#fff; font-size:12px;"></div>
+          <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+            <button type="button" id="pick-download" class="primary-action" data-i18n="pick.download" style="background:#2563eb; color:#fff; border:0;">선택 카드 받기</button>
+            <button type="button" id="pick-cancel" data-i18n="pick.cancel">접기</button>
+            <span id="pick-status" style="font-size:11px; color:#6b7280;"></span>
+          </div>
+        </div>
       </div>
+
+      <style>
+        #last-scan-pick .pick-nb { margin: 4px 0 6px; }
+        #last-scan-pick .pick-nb-head { display:flex; align-items:center; gap:6px; padding:4px 4px; border-radius:4px; cursor:pointer; user-select:none; }
+        #last-scan-pick .pick-nb-head:hover { background:#f3f4f6; }
+        #last-scan-pick .pick-nb-head input { width:auto; margin:0; }
+        #last-scan-pick .pick-nb-head .pick-nb-toggle { width:14px; color:#9ca3af; font-size:10px; }
+        #last-scan-pick .pick-nb-head .pick-nb-title { flex:1; font-weight:600; }
+        #last-scan-pick .pick-nb-head .pick-nb-meta { color:#6b7280; font-size:11px; }
+        #last-scan-pick .pick-cards { margin: 2px 0 4px 28px; }
+        #last-scan-pick .pick-card { display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:3px; }
+        #last-scan-pick .pick-card:hover { background:#f9fafb; }
+        #last-scan-pick .pick-card input { width:auto; margin:0; }
+        #last-scan-pick .pick-card label { display:flex; align-items:center; gap:6px; flex:1; cursor:pointer; margin:0; font-weight:normal; font-size:12px; }
+        #last-scan-pick .pick-card.is-pushed { opacity:0.55; }
+        #last-scan-pick .pick-card.is-pushed .pick-card-tag { background:#e5e7eb; color:#6b7280; }
+        #last-scan-pick .pick-card.is-placeholder { opacity:0.55; }
+        #last-scan-pick .pick-card.is-placeholder .pick-card-tag { background:#fef3c7; color:#92400e; }
+        #last-scan-pick .pick-card-tag { font-size:10px; padding:1px 5px; border-radius:8px; background:#dcfce7; color:#166534; font-weight:500; }
+        #last-scan-pick .pick-card-title { flex:1; }
+      </style>
 
       <div class="task-empty" id="monitor-empty" data-i18n-html="monitor.empty">
         진행 중인 작업도, 저장된 스캔 결과도 없습니다.<br>
@@ -262,6 +305,11 @@
       <div class="page-header">
         <h2 data-i18n="page.github.title">GitHub 연결</h2>
         <p class="sub" data-i18n="page.github.sub">PAT + repo 입력 → [저장] → [설정 검증] 으로 push 권한 확인. RSS feed URL 도 여기서 확인/복사.</p>
+      </div>
+
+      <div class="sync-notice" data-i18n-html="github.syncNotice"
+           style="margin: 12px 0 4px; padding: 10px 12px; border-radius: 6px; background: #eff6ff; border: 1px solid #bfdbfe; font-size: 12px; color: #1e3a8a; line-height: 1.55;">
+        <strong>🔄 다기기 동기화 (Chrome Sync)</strong>: 이 페이지의 GitHub 설정 (PAT 포함) + UI 언어는 <code>chrome.storage.sync</code> 에 저장되어 같은 Google 계정으로 로그인한 다른 Chrome 의 같은 익스텐션과 자동 공유됩니다. <strong>PAT 보안</strong>: <a href="https://support.google.com/chrome/answer/165139?hl=ko#zippy=%2C%EB%8F%99%EA%B8%B0%ED%99%94-%EC%95%94%ED%98%B8-%EC%84%A4%EC%A0%95-%EB%B3%80%EA%B2%BD%ED%95%98%EA%B8%B0" target="_blank">Chrome Sync 패스프레이즈</a> 를 켜두면 end-to-end 암호화로 Google 도 못 읽음. 안 켜져 있으면 Google 계정 키로 암호화 (이론상 Google 접근 가능). 진행 상태 / 스캔 결과 / 노트북 URL 맵 같은 기기별 데이터는 동기화 안 됨.
       </div>
 
       <form id="form">

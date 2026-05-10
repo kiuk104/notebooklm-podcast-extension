@@ -16,11 +16,36 @@ const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "au
 const RSS_MODE_DEFAULT = "actions";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
+// 다기기간 동기화: GitHub 설정 + uiLang 은 chrome.storage.sync 보관, 다른 기기와
+// 자동 공유. background.js 의 동일 헬퍼와 짝 — 옛 데이터는 SW startup migration
+// 으로 옮겨지지만 옵션 페이지가 먼저 떠도 안전하게 sync→local fallback. 자세한
+// 정당화는 background.js 의 CFG_KEYS 주석 참고.
+const CFG_KEYS = [
+  "token", "repo", "rssMode", "autoDownloadNew",
+  "committerName", "committerEmail", "uiLang",
+];
+
+async function cfgGet(keys) {
+  const want = keys ?? CFG_KEYS;
+  const [s, l] = await Promise.all([
+    chrome.storage.sync.get(want).catch(() => ({})),
+    chrome.storage.local.get(want).catch(() => ({})),
+  ]);
+  const out = {};
+  for (const k of want) out[k] = s[k] !== undefined ? s[k] : l[k];
+  return out;
+}
+
+async function cfgSet(obj) {
+  await chrome.storage.sync.set(obj);
+  try { await chrome.storage.local.remove(Object.keys(obj)); } catch {}
+}
+
 (async () => {
   // ui lang 먼저 — applyTranslations() 후에야 나머지 dynamic render 가 올바른 언어로.
   // 우선순위: 사용자가 셀렉터로 명시 선택한 값 > Chrome 브라우저 UI 언어 > navigator.language > ko.
   // chrome.i18n.getUILanguage() 가 "ko-KR"/"en-US"/"de-DE" 형태로 줌 — 앞 2자만 사용.
-  const langStored = await chrome.storage.local.get(["uiLang"]);
+  const langStored = await cfgGet(["uiLang"]);
   let lang = langStored.uiLang;
   if (!lang) {
     const chromeLang = (chrome.i18n?.getUILanguage?.() || navigator.language || "ko").toLowerCase().slice(0, 2);
@@ -30,7 +55,7 @@ const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
   if (langSelectEl) langSelectEl.value = i18nGetLang();
   refreshHelpLink();
 
-  const stored = await chrome.storage.local.get(KEYS);
+  const stored = await cfgGet(KEYS);
   for (const k of KEYS) {
     if (k === "autoDownloadNew") {
       fields.autoDownloadNew.checked = !!stored.autoDownloadNew;
@@ -56,12 +81,17 @@ function refreshHelpLink() {
 if (langSelectEl) {
   langSelectEl.addEventListener("change", async () => {
     const v = langSelectEl.value;
-    await chrome.storage.local.set({ uiLang: v });
+    await cfgSet({ uiLang: v });
     i18nSetLang(v);
     // dynamic render 를 다시 — 진행 모니터 / 직전 스캔 / 에피소드 목록 의 동적 텍스트.
     if (lastRenderedState) renderTaskState(lastRenderedState);
     renderLastScanPanel();
     if (epItems.length > 0) renderEpisodeTable();
+    // 선택해서 받기 트리가 열려있으면 태그 텍스트 재렌더.
+    if (pickEl && pickEl.style.display === "block" && pickState) {
+      renderPickTree();
+      lastScanPickToggleBtn.textContent = t("monitor.lastScan.pickClose");
+    }
     refreshHelpLink();
     // sidebar version label.
     try {
@@ -118,7 +148,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     show(t("github.status.repoFormat"), "error");
     return;
   }
-  await chrome.storage.local.set({
+  await cfgSet({
     token: fields.token.value.trim(),
     repo,
     rssMode: fields.rssMode.value || RSS_MODE_DEFAULT,
@@ -401,8 +431,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     renderTaskState(msg.state);
     // 스캔 완료 시점엔 lastScanResult 가 막 persist 됐으니, bulk:remote 완료 시점엔
     // 신규 카드 수가 줄어들었으니 — 둘 다 직전 스캔 패널 재렌더가 필요.
+    // GitHub Contents API 의 list 는 PUT 직후 짧게 stale 일 수 있어 (자체 캐시 +
+    // eventual consistency), 즉시 한 번 + 5초 후 한 번 더 갱신해 마지막 push 까지 반영.
     if (msg.state?.status === "completed" || msg.state?.status === "failed") {
       renderLastScanPanel();
+      if (msg.state.task === "bulk:remote") {
+        setTimeout(() => { renderLastScanPanel().catch(() => {}); }, 5000);
+      }
     }
   }
 });
@@ -423,6 +458,7 @@ const lastScanWhenEl = document.getElementById("last-scan-when");
 const lastScanSummaryEl = document.getElementById("last-scan-summary");
 const lastScanDownloadBtn = document.getElementById("last-scan-download");
 const lastScanRetryFailedBtn = document.getElementById("last-scan-retry-failed");
+const lastScanRecountBtn = document.getElementById("last-scan-recount");
 const lastScanClearBtn = document.getElementById("last-scan-clear");
 
 async function renderLastScanPanel() {
@@ -435,18 +471,17 @@ async function renderLastScanPanel() {
   }
   const cardCount = result.notebooks.reduce((s, n) => s + (n.audios?.length || 0), 0);
 
-  // 신규 카드 수는 ghList 기반으로 background 에서 계산할 수도 있지만, 일반 GET 한 번이면
-  // 충분하니 popup 처럼 list:pushed 를 직접 호출.
+  // 신규 카드 수는 background 의 scan:result:pushed 가 audio.isPushed 까지 박아주므로
+  // (shortId + legacy 둘 다 반영) 그 플래그만 세면 됨. list:pushed 는 shortId 만 알아서
+  // 옛 3-segment 파일이 영구 신규로 잡히는 갭이 있었음 — 같은 ghList 한 번이면 비용 동일.
   let newCount = 0;
   let placeholderCount = 0;
   try {
-    const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" });
-    const pushedSet = new Set(pushed?.shortIds || []);
-    for (const nb of result.notebooks) {
+    const enriched = await chrome.runtime.sendMessage({ type: "scan:result:pushed" });
+    for (const nb of (enriched?.notebooks || [])) {
       for (const audio of (nb.audios || [])) {
         if (audio.isPlaceholder) { placeholderCount++; continue; }
-        const sid = (audio.artifactId || "").slice(0, 8);
-        if (sid && pushedSet.has(sid)) continue;
+        if (audio.isPushed) continue;
         newCount++;
       }
     }
@@ -511,10 +546,318 @@ if (lastScanRetryFailedBtn) {
   });
 }
 
+if (lastScanRecountBtn) {
+  // GitHub Contents API 는 PUT 직후 list 응답이 짧게 stale 할 수 있어 (commit 51a5b42 참고),
+  // bulk 완료 broadcast 로 자동 호출되는 renderLastScanPanel 이 가끔 옛 카운트를 그대로
+  // 그릴 때가 있다. 사용자가 명시적으로 "지금 다시 봐줘" 를 누를 수 있도록 수동 새로고침.
+  lastScanRecountBtn.addEventListener("click", async () => {
+    lastScanRecountBtn.disabled = true;
+    try {
+      await renderLastScanPanel();
+    } finally {
+      lastScanRecountBtn.disabled = false;
+    }
+  });
+}
+
 lastScanClearBtn.addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "scan:result:clear" });
   lastScanPanel.style.display = "none";
+  // 트리가 열려있으면 함께 정리.
+  const pe = document.getElementById("last-scan-pick");
+  if (pe) pe.style.display = "none";
+  const tb = document.getElementById("last-scan-pick-toggle");
+  if (tb) tb.textContent = t("monitor.lastScan.pick");
 });
+
+// ---------- 선택해서 받기 (cross-notebook 트리 + 카드별 체크박스) ----------
+//
+// 사용자가 [신규 받기] 의 "전부 다" 동작 대신 카드 단위로 골라 받고 싶을 때.
+// 직전 스캔 결과 + 현재 repo 의 push 된 shortId 집합을 한 번에 가져와 트리로 표시:
+//   ▾ 노트북 A  (3 신규 / 5 카드)
+//      [✓] 카드1.mp3   [신규]
+//      [✓] 카드2.mp3   [신규]
+//      [ ] 카드3.mp3   [받음]   (default 미체크 + 흐림)
+//      ...
+// default: 신규 카드만 체크 + 이미 받은 카드는 숨김 (pick-show-pushed 로 토글).
+// placeholder 제목 카드는 비활성 (다음 스캔에서 실제 제목 붙은 뒤 받게).
+
+const lastScanPickToggleBtn = document.getElementById("last-scan-pick-toggle");
+const pickEl = document.getElementById("last-scan-pick");
+const pickTreeEl = document.getElementById("pick-tree");
+const pickMasterEl = document.getElementById("pick-master");
+const pickShowPushedEl = document.getElementById("pick-show-pushed");
+const pickSummaryEl = document.getElementById("pick-summary");
+const pickDownloadBtn = document.getElementById("pick-download");
+const pickCancelBtn = document.getElementById("pick-cancel");
+const pickStatusEl = document.getElementById("pick-status");
+
+// 마지막으로 enrich 받은 데이터를 in-memory 보관 — 트리 redraw 시 재요청 안 함.
+// shape: { notebooks: [...with audio.isPushed flagged...], scannedAt }
+let pickState = null;
+
+if (lastScanPickToggleBtn) {
+  lastScanPickToggleBtn.addEventListener("click", async () => {
+    if (pickEl.style.display === "block") {
+      pickEl.style.display = "none";
+      lastScanPickToggleBtn.textContent = t("monitor.lastScan.pick");
+      return;
+    }
+    pickEl.style.display = "block";
+    lastScanPickToggleBtn.textContent = t("monitor.lastScan.pickClose");
+    pickStatusEl.textContent = t("pick.loading");
+    pickTreeEl.innerHTML = "";
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "scan:result:pushed" });
+      if (!r?.ok) throw new Error(r?.error || "?");
+      // background 가 audio.isPushed 를 직접 박아주므로 (shortId + legacy 둘 다 반영)
+      // UI 는 그 플래그만 읽으면 됨. pushedSet 은 더 이상 필요 없음.
+      pickState = {
+        notebooks: r.notebooks || [],
+        scannedAt: r.scannedAt || 0,
+      };
+      pickStatusEl.textContent = "";
+      renderPickTree();
+    } catch (e) {
+      pickStatusEl.textContent = `Load failed: ${e.message}`;
+    }
+  });
+}
+
+if (pickCancelBtn) {
+  pickCancelBtn.addEventListener("click", () => {
+    pickEl.style.display = "none";
+    lastScanPickToggleBtn.textContent = t("monitor.lastScan.pick");
+  });
+}
+
+if (pickShowPushedEl) {
+  pickShowPushedEl.addEventListener("change", () => renderPickTree());
+}
+
+if (pickMasterEl) {
+  pickMasterEl.addEventListener("change", () => {
+    const checked = pickMasterEl.checked;
+    pickTreeEl.querySelectorAll(".pick-card-cb:not(:disabled)").forEach((cb) => {
+      cb.checked = checked;
+    });
+    pickTreeEl.querySelectorAll(".pick-nb-cb").forEach((cb) => {
+      cb.checked = checked;
+      cb.indeterminate = false;
+    });
+    refreshPickSummary();
+  });
+}
+
+function renderPickTree() {
+  if (!pickState) return;
+  const showPushed = !!pickShowPushedEl.checked;
+  const frag = document.createDocumentFragment();
+  let totalNew = 0;
+  let totalPushed = 0;
+  let totalPlaceholder = 0;
+
+  for (const nb of pickState.notebooks) {
+    const nbDiv = document.createElement("div");
+    nbDiv.className = "pick-nb";
+
+    const head = document.createElement("div");
+    head.className = "pick-nb-head";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "pick-nb-cb";
+    const toggle = document.createElement("span");
+    toggle.className = "pick-nb-toggle";
+    toggle.textContent = "▾";
+    const title = document.createElement("span");
+    title.className = "pick-nb-title";
+    title.textContent = nb.cover?.title || nb.url || "(untitled)";
+    const meta = document.createElement("span");
+    meta.className = "pick-nb-meta";
+    head.appendChild(cb);
+    head.appendChild(toggle);
+    head.appendChild(title);
+    head.appendChild(meta);
+    nbDiv.appendChild(head);
+
+    const cardsBox = document.createElement("div");
+    cardsBox.className = "pick-cards";
+    nbDiv.appendChild(cardsBox);
+
+    let nbNew = 0, nbPushed = 0, nbPlaceholder = 0;
+    let visibleCount = 0;
+    (nb.audios || []).forEach((audio, idx) => {
+      const isPushed = !!audio.isPushed;
+      const isPlaceholder = !!audio.isPlaceholder;
+      if (isPushed) nbPushed++;
+      else if (isPlaceholder) nbPlaceholder++;
+      else nbNew++;
+
+      if (isPushed && !showPushed) return;
+
+      visibleCount++;
+      const row = document.createElement("div");
+      row.className = "pick-card";
+      if (isPushed) row.classList.add("is-pushed");
+      if (isPlaceholder) row.classList.add("is-placeholder");
+
+      const cardCb = document.createElement("input");
+      cardCb.type = "checkbox";
+      cardCb.className = "pick-card-cb";
+      cardCb.dataset.notebookUrl = nb.url || "";
+      cardCb.dataset.cardIndex = String(idx);
+      cardCb.dataset.artifactId = audio.artifactId || "";
+      cardCb.dataset.episodeTitle = audio.title || "";
+      cardCb.dataset.kind = isPushed ? "pushed" : isPlaceholder ? "placeholder" : "new";
+      // default: 신규만 체크. placeholder 는 disabled (background 가 어차피 거절).
+      cardCb.disabled = isPlaceholder;
+      cardCb.checked = !isPushed && !isPlaceholder;
+
+      const lbl = document.createElement("label");
+      const tagEl = document.createElement("span");
+      tagEl.className = "pick-card-tag";
+      tagEl.textContent = isPushed
+        ? t("pick.tag.pushed")
+        : isPlaceholder
+          ? t("pick.tag.placeholder")
+          : t("pick.tag.new");
+      const titleEl = document.createElement("span");
+      titleEl.className = "pick-card-title";
+      titleEl.textContent = audio.title || `audio ${idx}`;
+      lbl.appendChild(cardCb);
+      lbl.appendChild(tagEl);
+      lbl.appendChild(titleEl);
+      row.appendChild(lbl);
+      cardsBox.appendChild(row);
+
+      cardCb.addEventListener("change", () => {
+        updateNbHeadState(nbDiv);
+        refreshPickSummary();
+      });
+    });
+
+    totalNew += nbNew;
+    totalPushed += nbPushed;
+    totalPlaceholder += nbPlaceholder;
+
+    const metaParts = [];
+    metaParts.push(t("pick.nb.new", { n: nbNew }));
+    if (nbPushed > 0) metaParts.push(t("pick.nb.pushed", { n: nbPushed }));
+    if (nbPlaceholder > 0) metaParts.push(t("pick.nb.placeholder", { n: nbPlaceholder }));
+    meta.textContent = metaParts.join(" · ");
+
+    if (visibleCount === 0) {
+      nbDiv.style.display = "none";
+    }
+
+    head.addEventListener("click", (e) => {
+      // 헤더 자체 클릭은 토글, 체크박스 클릭은 별도.
+      if (e.target === cb) return;
+      const collapsed = cardsBox.style.display === "none";
+      cardsBox.style.display = collapsed ? "" : "none";
+      toggle.textContent = collapsed ? "▾" : "▸";
+    });
+    cb.addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => {
+      cardsBox.querySelectorAll(".pick-card-cb:not(:disabled)").forEach((c) => {
+        c.checked = cb.checked;
+      });
+      refreshPickSummary();
+    });
+
+    updateNbHeadState(nbDiv);
+    frag.appendChild(nbDiv);
+  }
+
+  pickTreeEl.innerHTML = "";
+  pickTreeEl.appendChild(frag);
+
+  if (pickState.notebooks.length === 0) {
+    pickTreeEl.innerHTML = `<div style="padding:12px; color:#6b7280; text-align:center;">${t("pick.empty")}</div>`;
+  }
+
+  refreshPickSummary();
+}
+
+function updateNbHeadState(nbDiv) {
+  const head = nbDiv.querySelector(".pick-nb-cb");
+  const cards = nbDiv.querySelectorAll(".pick-card-cb:not(:disabled)");
+  if (cards.length === 0) {
+    head.checked = false;
+    head.indeterminate = false;
+    head.disabled = true;
+    return;
+  }
+  head.disabled = false;
+  let on = 0;
+  cards.forEach((c) => { if (c.checked) on++; });
+  if (on === 0) {
+    head.checked = false;
+    head.indeterminate = false;
+  } else if (on === cards.length) {
+    head.checked = true;
+    head.indeterminate = false;
+  } else {
+    head.checked = false;
+    head.indeterminate = true;
+  }
+}
+
+function collectPickedSelections() {
+  const out = [];
+  pickTreeEl.querySelectorAll(".pick-card-cb:not(:disabled)").forEach((cb) => {
+    if (!cb.checked) return;
+    out.push({
+      notebookUrl: cb.dataset.notebookUrl,
+      cardIndex: Number(cb.dataset.cardIndex),
+      artifactId: cb.dataset.artifactId || "",
+      episodeTitle: cb.dataset.episodeTitle || "",
+    });
+  });
+  return out;
+}
+
+function refreshPickSummary() {
+  const sels = collectPickedSelections();
+  pickSummaryEl.textContent = t("pick.summary", { n: sels.length });
+  pickDownloadBtn.disabled = sels.length === 0;
+  pickDownloadBtn.textContent = sels.length === 0
+    ? t("pick.download")
+    : t("pick.downloadN", { n: sels.length });
+  // master 상태 업데이트.
+  const allCards = pickTreeEl.querySelectorAll(".pick-card-cb:not(:disabled)");
+  if (allCards.length === 0) {
+    pickMasterEl.checked = false;
+    pickMasterEl.indeterminate = false;
+  } else {
+    let on = 0;
+    allCards.forEach((c) => { if (c.checked) on++; });
+    pickMasterEl.checked = on === allCards.length;
+    pickMasterEl.indeterminate = on > 0 && on < allCards.length;
+  }
+}
+
+if (pickDownloadBtn) {
+  pickDownloadBtn.addEventListener("click", async () => {
+    const selections = collectPickedSelections();
+    if (selections.length === 0) return;
+    pickDownloadBtn.disabled = true;
+    pickStatusEl.textContent = t("pick.starting");
+    const r = await chrome.runtime.sendMessage({
+      type: "bulk:remote:selected",
+      payload: { selections },
+    });
+    if (!r?.ok) {
+      pickStatusEl.textContent = `Start failed: ${r?.error || "?"}`;
+      pickDownloadBtn.disabled = false;
+      return;
+    }
+    // 진행 모니터에 task 가 표시되므로 트리는 접고 사용자에게 모니터로 안내.
+    pickEl.style.display = "none";
+    lastScanPickToggleBtn.textContent = t("monitor.lastScan.pick");
+    show(t("pick.startedN", { n: r.count || selections.length }), "success");
+  });
+}
 
 // ---------- 팟캐스트 메타 (docs/podcast.json) ----------
 
@@ -582,7 +925,7 @@ function populateMetaForm(json) {
 }
 
 async function loadPodcastMeta() {
-  const stored = await chrome.storage.local.get(["token", "repo"]);
+  const stored = await cfgGet(["token", "repo"]);
   if (!stored.token || !stored.repo) {
     showMetaStatus("먼저 GitHub Token + Repo 를 저장하세요.", "");
     return;
@@ -623,7 +966,7 @@ metaReloadBtn.addEventListener("click", () => loadPodcastMeta());
 
 metaForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const stored = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+  const stored = await cfgGet(["token", "repo", "committerName", "committerEmail"]);
   if (!stored.token || !stored.repo) {
     showMetaStatus("먼저 GitHub Token + Repo 를 저장하세요.", "error");
     return;
@@ -695,7 +1038,7 @@ metaImageUploadEl.addEventListener("change", async (e) => {
     return;
   }
 
-  const stored = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+  const stored = await cfgGet(["token", "repo", "committerName", "committerEmail"]);
   if (!stored.token || !stored.repo) {
     showMetaStatus("먼저 GitHub Token + Repo 를 저장하세요.", "error");
     return;
@@ -761,12 +1104,45 @@ metaImageUploadEl.addEventListener("change", async (e) => {
 
 // 옵션 페이지 첫 오픈 + token/repo 가 이미 저장된 상태면 자동 로드.
 (async () => {
-  const stored = await chrome.storage.local.get(["token", "repo"]);
+  const stored = await cfgGet(["token", "repo"]);
   if (stored.token && stored.repo && REPO_RE.test(stored.repo)) {
     loadPodcastMeta();
     loadEpisodeList();
   }
 })();
+
+// 다른 기기에서 push 된 sync 변경을 라이브 반영. 같은 옵션 페이지가 두 기기에서
+// 동시에 열려 있을 때 한 쪽 [저장] → 다른 쪽 폼이 자동 갱신. token 같이 민감한
+// 값이 다른 기기에서 들어오면 사용자가 인지할 수 있도록 status 라인에도 안내.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync") return;
+  const cfgChanged = Object.keys(changes).some((k) => CFG_KEYS.includes(k));
+  if (!cfgChanged) return;
+
+  for (const [k, { newValue }] of Object.entries(changes)) {
+    if (!CFG_KEYS.includes(k)) continue;
+    if (k === "uiLang") {
+      if (newValue && i18nGetLang() !== newValue) {
+        i18nSetLang(newValue);
+        if (langSelectEl) langSelectEl.value = newValue;
+        if (lastRenderedState) renderTaskState(lastRenderedState);
+        renderLastScanPanel();
+        if (epItems.length > 0) renderEpisodeTable();
+        refreshHelpLink();
+      }
+      continue;
+    }
+    if (k === "autoDownloadNew") {
+      fields.autoDownloadNew.checked = !!newValue;
+      continue;
+    }
+    if (fields[k] && document.activeElement !== fields[k]) {
+      fields[k].value = newValue ?? "";
+      if (k === "repo") refreshFeedUrl();
+    }
+  }
+  show(t("github.status.syncedFromOther"), "success");
+});
 
 // ---------- 에피소드 목록 (push 된 docs/episodes/ 의 row-level 관리) ----------
 

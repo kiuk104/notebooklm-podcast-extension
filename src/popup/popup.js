@@ -10,12 +10,17 @@ const selectAllEl = document.getElementById("select-all");
 const bulkDlBtn = document.getElementById("bulk-dl");
 const versionLineEl = document.getElementById("version-line");
 
-// i18n: 옵션 페이지에서 사용자가 선택한 uiLang (chrome.storage.local) 또는
-// chrome.i18n.getUILanguage() (Chrome 브라우저 UI 언어) 기준. popup 자체엔 셀렉터
-// 없음 — 옵션 페이지 셀렉터가 single source of truth. popup 매번 첫 오픈 시 초기화.
+// i18n: 옵션 페이지에서 사용자가 선택한 uiLang (chrome.storage.sync, 다기기 동기화)
+// 또는 chrome.i18n.getUILanguage() (Chrome 브라우저 UI 언어) 기준. popup 자체엔
+// 셀렉터 없음 — 옵션 페이지 셀렉터가 single source of truth. popup 매번 첫 오픈 시
+// 초기화. sync 비어있으면 옛 local 위치도 fallback (background.js 의 마이그레이션이
+// 완료되기 전 popup 이 먼저 열리는 경우 안전망).
 async function initI18n() {
-  const r = await chrome.storage.local.get(["uiLang"]);
-  let lang = r.uiLang;
+  const [s, l] = await Promise.all([
+    chrome.storage.sync.get(["uiLang"]).catch(() => ({})),
+    chrome.storage.local.get(["uiLang"]).catch(() => ({})),
+  ]);
+  let lang = s.uiLang ?? l.uiLang;
   if (!lang) {
     const chromeLang = (chrome.i18n?.getUILanguage?.() || navigator.language || "ko").toLowerCase().slice(0, 2);
     lang = chromeLang;

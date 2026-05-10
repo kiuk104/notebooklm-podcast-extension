@@ -34,6 +34,21 @@
     };
   }
 
+  // bulk:remote 가 카드 ready 와 동시에 download:prepare 를 보내면 `.cover-title` 이
+  // 아직 비어있는 경우가 있다 — 그 상태로 download:expect 가 나가면 background 의
+  // slugify("") 가 "episode" 폴백을 만들어 노트북 슬러그가 사라진 파일이 생긴다
+  // (예: 20260510__episode__shortId__title.mp3). 카드는 이미 떠 있으니 cover 도
+  // 곧 채워짐 — 짧게 폴링.
+  async function getCoverWaitingTitle(timeoutMs = 2000) {
+    let cover = getCover();
+    const start = Date.now();
+    while (!cover.title && Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 100));
+      cover = getCover();
+    }
+    return cover;
+  }
+
   function getAudioCardEls() {
     return Array.from(document.querySelectorAll(SEL.cards)).filter((card) =>
       card.querySelector(SEL.play),
@@ -177,7 +192,7 @@
     if (msg?.type === "download") {
       (async () => {
         try {
-          const cover = getCover();
+          const cover = await getCoverWaitingTitle();
           // artifactId 우선 매칭 + lazy render fallback. msg.artifactId 가 없으면
           // 옛 popup (single download) 처럼 index 만으로 동작.
           const targetEl = await findCard({ artifactId: msg.artifactId, index: msg.index });
@@ -216,7 +231,7 @@
     if (msg?.type === "download:prepare") {
       (async () => {
         try {
-          const cover = getCover();
+          const cover = await getCoverWaitingTitle();
           const targetEl = await findCard({ artifactId: msg.artifactId, index: msg.index });
           const cardData = {
             title: targetEl.querySelector(SEL.cardTitle)?.textContent?.trim() ?? "",

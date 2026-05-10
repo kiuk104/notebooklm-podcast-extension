@@ -428,7 +428,7 @@
   <tr><td><code>host_permissions: api.github.com</code></td><td>Push audio / RSS to your repo.</td></tr>
 </table>
 
-<p><strong>Where the token is stored</strong>: <code>chrome.storage.local</code>. It is never sent to any external server; it is only used as the Authorization header on GitHub API calls. Removing the extension also clears it.</p>
+<p><strong>Where the token is stored</strong>: <code>chrome.storage.sync</code>. Automatically shared across other Chromes signed in to the same Google account with this extension installed (multi-device sync). With a Chrome Sync passphrase enabled, the data is end-to-end encrypted and Google cannot read it. Without a passphrase it is still encrypted with your Google account key (so it doesn't reach external servers), but Google can technically access it. The token is only used as the Authorization header on GitHub API calls and is cleared when the extension is uninstalled. Per-device state (task progress, scan results, notebook URL map) is not synced and stays in <code>chrome.storage.local</code> on each device.</p>
 
 <p><strong>NotebookLM session cookies</strong>: when re-fetching audio, the extension uses <code>credentials:"include"</code> so cookies follow along through the redirect chain (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>). The extension does not store these cookies separately.</p>
 

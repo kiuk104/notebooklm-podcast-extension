@@ -428,7 +428,7 @@
   <tr><td><code>host_permissions: api.github.com</code></td><td>Audio / RSS in dein Repo pushen.</td></tr>
 </table>
 
-<p><strong>Token-Speicherort</strong>: <code>chrome.storage.local</code>. Wird nie an externe Server gesendet, nur als Authorization-Header bei GitHub-API-Calls. Beim Deinstallieren der Erweiterung wird er ebenfalls entfernt.</p>
+<p><strong>Token-Speicherort</strong>: <code>chrome.storage.sync</code>. Wird automatisch mit anderen Chromes geteilt, die mit demselben Google-Konto angemeldet sind und die Erweiterung installiert haben (geräteübergreifende Synchronisation). Mit aktivierter Chrome-Sync-Passphrase wird er Ende-zu-Ende-verschlüsselt — Google kann ihn nicht lesen. Ohne Passphrase wird er mit deinem Google-Kontoschlüssel verschlüsselt (gelangt also nicht an externe Server), aber Google hat technisch Zugriff. Der Token wird nur als Authorization-Header bei GitHub-API-Calls verwendet und beim Deinstallieren entfernt. Gerätespezifischer Zustand (Aufgabenfortschritt, Scan-Ergebnisse, Notebook-URL-Map) wird nicht synchronisiert und bleibt in <code>chrome.storage.local</code> auf dem jeweiligen Gerät.</p>
 
 <p><strong>NotebookLM-Session-Cookies</strong>: Beim Re-Fetch der Audio-Datei nutzt die Erweiterung <code>credentials:"include"</code>, damit Cookies die Redirect-Kette (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>) durchlaufen. Die Erweiterung speichert diese Cookies nicht separat.</p>
 

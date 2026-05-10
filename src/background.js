@@ -26,6 +26,73 @@ const STALE_MS = 5 * 60 * 1000;
 // 대비한 2차 방어선 (IMPLEMENTATION_NOTES.md §1).
 const PLACEHOLDER_TITLE_RE = /^audio[\s\-_]?\d+$/i;
 
+// 다기기간 동기화: 사용자가 옵션 페이지에서 입력한 GitHub 설정 / UI 언어를
+// chrome.storage.sync 에 보관 — 같은 Google 계정 + 같은 익스텐션이 설치된 다른
+// 기기와 자동 공유. Chrome Sync 패스프레이즈 켜져 있으면 E2EE; 안 켜져 있으면
+// Google 계정 키로 암호화 (Google 이 이론상 접근 가능). 옵션 페이지의 sync
+// 안내 박스 참고. quota: 100KB 총합 / 8KB per item / 1800 writes/hour — token
+// 56byte + repo + 메타 합쳐 ~수백 byte 로 여유 충분.
+//
+// runtime/ephemeral state (currentTaskState, lastScanResult, notebookUrlMap,
+// bulkFailedSelections, epColWidths) 는 device-local 의미라 chrome.storage.local
+// 그대로 유지. notebookUrlMap 은 누적 가능성이 있어 sync quota 도 위험.
+const CFG_KEYS = [
+  "token", "repo", "rssMode", "autoDownloadNew",
+  "committerName", "committerEmail", "uiLang",
+];
+
+async function cfgGet(keys) {
+  // sync 우선 + 비어있는 키만 local 에 fallback. 마이그레이션 완료 후엔 local
+  // 에 남아있는 게 정상적으론 없지만, 마이그레이션 실패 / 부분 실패 케이스 안전망.
+  const want = keys ?? CFG_KEYS;
+  const [s, l] = await Promise.all([
+    chrome.storage.sync.get(want).catch(() => ({})),
+    chrome.storage.local.get(want).catch(() => ({})),
+  ]);
+  const out = {};
+  for (const k of want) {
+    out[k] = s[k] !== undefined ? s[k] : l[k];
+  }
+  return out;
+}
+
+async function cfgSet(obj) {
+  // sync 만 쓴다 (local 에도 쓰면 두 저장소가 분기되어 다음 cfgGet 이 어느 쪽
+  // 우선인지 헷갈림). 마이그레이션 후 local 에 같은 키가 남아있으면 정리.
+  await chrome.storage.sync.set(obj);
+  try { await chrome.storage.local.remove(Object.keys(obj)); } catch {}
+}
+
+// 1회성 마이그레이션: 옛 버전이 chrome.storage.local 에 보관한 설정을 sync 로
+// 옮긴다. sync 에 같은 키가 이미 있으면 (다른 기기에서 먼저 push 된 값) 덮지 않음.
+async function migrateConfigToSync() {
+  try {
+    const [s, l] = await Promise.all([
+      chrome.storage.sync.get(CFG_KEYS),
+      chrome.storage.local.get(CFG_KEYS),
+    ]);
+    const toMigrate = {};
+    const toRemoveLocal = [];
+    for (const k of CFG_KEYS) {
+      if (l[k] === undefined) continue;
+      if (s[k] === undefined) toMigrate[k] = l[k];
+      toRemoveLocal.push(k);
+    }
+    if (Object.keys(toMigrate).length > 0) {
+      await chrome.storage.sync.set(toMigrate);
+      console.log(`[cfg] migrated ${Object.keys(toMigrate).length} keys to sync`);
+    }
+    if (toRemoveLocal.length > 0) {
+      await chrome.storage.local.remove(toRemoveLocal);
+    }
+  } catch (e) {
+    console.warn("[cfg] migration failed:", e);
+  }
+}
+
+// SW 시작 시 한 번. 빈 sync 또는 같은 기기에서 이전 버전 사용 흔적이 있으면 옮김.
+migrateConfigToSync();
+
 // v1 의 episode 파일명 컨벤션. v2 는 노트북/오디오 슬러그 각각 40자로 잘라서
 // MAX_PATH (260) / GitHub path 255-byte 제한을 처음부터 회피.
 const SLUG_MAX = 40;
@@ -190,6 +257,76 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return false;
   }
+  if (msg?.type === "bulk:remote:selected") {
+    // 사용자가 직전 스캔 결과에서 직접 체크박스로 고른 카드들만 다운로드.
+    // payload.selections: [{ notebookUrl, cardIndex, artifactId, episodeTitle }, ...]
+    // (buildNewSelections 가 만드는 형태와 동일). 옵션 페이지의 [선택해서 받기]
+    // 트리 UI 가 생성. dedup 은 pushEpisode 안에서 어차피 한 번 더 걸리므로
+    // UI 단계의 "이미 받은 카드" 체크는 사용자가 강제로 켜면 그대로 진행됨.
+    if (inProgressTask) {
+      sendResponse({ ok: false, error: "이미 진행 중인 작업이 있습니다" });
+      return false;
+    }
+    const sel = Array.isArray(msg.payload?.selections) ? msg.payload.selections : [];
+    if (sel.length === 0) {
+      sendResponse({ ok: false, error: "선택된 카드가 없습니다" });
+      return false;
+    }
+    sendResponse({ ok: true, started: true, count: sel.length });
+    inProgressTask = "bulk:remote";
+    cancelRequested = false;
+    (async () => {
+      try {
+        await runBulkRemote(sel);
+      } catch (e) {
+        console.error("[bulk:remote:selected]", e);
+        await setTaskState({
+          status: "failed",
+          message: `Bulk 다운로드 실패: ${e.message}`,
+          endedAt: Date.now(),
+        });
+      } finally {
+        await cleanupOwnedTabs();
+        await stopKeepalive();
+        inProgressTask = null;
+      }
+    })();
+    return false;
+  }
+  if (msg?.type === "scan:result:pushed") {
+    // 옵션 페이지의 선택 트리가 "이미 push 된 카드" 표시 / 기본 미체크용으로 사용.
+    // 각 audio 에 isPushed 플래그를 직접 박아 반환 — UI 가 dedup 로직 (shortId + legacy)
+    // 을 중복 구현할 필요 없게. pushedShortIds 도 같이 반환해 popup 의 별도 흐름 호환.
+    (async () => {
+      try {
+        const last = await loadLastScanResult();
+        if (!last?.notebooks?.length) {
+          sendResponse({ ok: true, notebooks: [], pushedShortIds: [], scannedAt: 0 });
+          return;
+        }
+        const cfg = await cfgGet(["token", "repo"]);
+        const pushedIndex = (cfg.token && cfg.repo)
+          ? await loadPushedIndex(cfg.repo, cfg.token)
+          : { shortIds: new Set(), legacyKeys: new Set() };
+        const enriched = last.notebooks.map((nb) => ({
+          ...nb,
+          audios: (nb.audios || []).map((a) => ({
+            ...a,
+            isPushed: isAudioPushed(a, nb.cover?.dateAttr || "", pushedIndex),
+          })),
+        }));
+        sendResponse({
+          ok: true,
+          notebooks: enriched,
+          scannedAt: last.scannedAt || 0,
+          pushedShortIds: Array.from(pushedIndex.shortIds),
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
   if (msg?.type === "bulk:remote:from-last-scan") {
     // 직전 스캔 결과 + 현재 repo 상태 기준으로 신규 selections 만들어 바로 bulk:remote.
     if (inProgressTask) {
@@ -201,7 +338,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     cancelRequested = false;
     (async () => {
       try {
-        const cfg = await chrome.storage.local.get(["token", "repo"]);
+        const cfg = await cfgGet(["token", "repo"]);
         if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음");
         const last = await loadLastScanResult();
         if (!last?.notebooks?.length) throw new Error("저장된 스캔 결과 없음");
@@ -237,7 +374,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // 옛 3-segment 포맷도 호환 (shortId 없음 — 표에선 빈칸).
     (async () => {
       try {
-        const cfg = await chrome.storage.local.get(["token", "repo"]);
+        const cfg = await cfgGet(["token", "repo"]);
         if (!cfg.token || !cfg.repo) {
           sendResponse({ ok: false, error: "GitHub 설정 없음 (token/repo)" });
           return;
@@ -274,7 +411,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // 단일 파일 ghDelete. 옵션 페이지의 [삭제] 버튼.
     (async () => {
       try {
-        const cfg = await chrome.storage.local.get(["token", "repo", "committerName", "committerEmail"]);
+        const cfg = await cfgGet(["token", "repo", "committerName", "committerEmail"]);
         if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음");
         if (!msg.filename || !msg.sha) throw new Error("filename/sha 누락");
         const committer = cfg.committerName && cfg.committerEmail
@@ -299,7 +436,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // ghList 가 실패해도 popup 흐름이 멈추면 안 되므로 빈 배열로 fallback.
     (async () => {
       try {
-        const cfg = await chrome.storage.local.get(["token", "repo"]);
+        const cfg = await cfgGet(["token", "repo"]);
         if (!cfg.token || !cfg.repo) {
           sendResponse({ ok: true, shortIds: [], names: [], reason: "no-config" });
           return;
@@ -679,25 +816,65 @@ function notifyBulkComplete(success, total) {
   } catch {}
 }
 
-// 노트북 array 와 ghList 결과로부터 "아직 repo 에 없는" 카드들의 selections 를 만든다.
-// auto-download 와 관리 페이지의 [신규 받기] 양쪽이 공유.
-async function buildNewSelections(notebooks, repo, token) {
-  const pushedShortIds = new Set();
+// docs/episodes/ 한 번 list 해서 두 dedup 키를 동시에 만든다:
+//  - shortIds: 4-segment 파일의 shortId (UUID 첫 8자) 집합
+//  - legacyKeys: 3-segment (옛 v0.4.0 미만) 파일의 `${date}|${titleSlug}|${ext}` 집합
+// pushEpisode 의 dedup hint (1차 shortId, 2차 legacy date+title) 와 동일한 두 경로를
+// "신규 카드 판정" 쪽에서도 쓰기 위함. 한쪽만 쓰면 옛 포맷 파일이 영구 신규로 잡혀
+// 매번 같은 카드를 다시 다운로드.
+async function loadPushedIndex(repo, token) {
+  const shortIds = new Set();
+  const legacyKeys = new Set();
   try {
     const list = await ghList(repo, "docs/episodes", token);
     for (const f of list) {
-      const m = /__([0-9a-f]{8})__/.exec(f.name);
-      if (m) pushedShortIds.add(m[1]);
+      const m = LEGACY_DEDUP_RE.exec(f.name);
+      if (!m) continue;
+      const [, date, fShortId, fTitle, fExt] = m;
+      if (fShortId) shortIds.add(fShortId);
+      else legacyKeys.add(`${date}|${fTitle}|${fExt.toLowerCase()}`);
     }
   } catch (e) {
-    console.warn("[buildNewSelections] ghList 실패:", e.message);
+    console.warn("[loadPushedIndex] ghList 실패:", e.message);
   }
+  return { shortIds, legacyKeys };
+}
+
+// extractDate 의 strict 변형 — 못 파싱하면 null. legacy 매칭은 정확한 날짜가 있어야만
+// 의미 있어서 "오늘 날짜 fallback" (extractDate 의 default) 을 쓰면 안 됨.
+function extractDateStrict(coverDateAttr) {
+  const m = DATE_RE.exec(coverDateAttr || "");
+  if (m && MONTHS[m[1]]) {
+    return m[3] + String(MONTHS[m[1]]).padStart(2, "0") + m[2].padStart(2, "0");
+  }
+  return null;
+}
+
+// 카드 하나가 이미 repo 에 push 됐는지. shortId (1차) → legacy date+titleSlug (2차).
+// transcode 결과는 보통 .mp3 지만 raw m4a fallback 도 있어 세 ext 모두 본다.
+function isAudioPushed(audio, coverDateAttr, pushedIndex) {
+  const sid = (audio.artifactId || "").slice(0, 8);
+  if (sid && pushedIndex.shortIds.has(sid)) return true;
+  const date = extractDateStrict(coverDateAttr);
+  const titleSlug = audio.title ? slugify(audio.title) : "";
+  if (date && titleSlug) {
+    for (const ext of ["mp3", "m4a", "mp4"]) {
+      if (pushedIndex.legacyKeys.has(`${date}|${titleSlug}|${ext}`)) return true;
+    }
+  }
+  return false;
+}
+
+// 노트북 array 와 ghList 결과로부터 "아직 repo 에 없는" 카드들의 selections 를 만든다.
+// auto-download 와 관리 페이지의 [신규 받기] 양쪽이 공유.
+async function buildNewSelections(notebooks, repo, token) {
+  const pushedIndex = await loadPushedIndex(repo, token);
   const selections = [];
   for (const nb of notebooks) {
+    const coverDateAttr = nb.cover?.dateAttr || "";
     (nb.audios || []).forEach((audio, idx) => {
       if (audio.isPlaceholder) return;
-      const sid = (audio.artifactId || "").slice(0, 8);
-      if (sid && pushedShortIds.has(sid)) return;
+      if (isAudioPushed(audio, coverDateAttr, pushedIndex)) return;
       selections.push({
         notebookUrl: nb.url,
         cardIndex: idx,
@@ -1103,7 +1280,7 @@ async function runScanAll() {
   // 이미 "scan:all" 이라 외부 message 는 거부되지만, 우리가 호출한 건 통과.
   // task state 는 runBulkRemote 안에서 자동으로 "bulk:remote" 로 전환됨.
   try {
-    const cfg = await chrome.storage.local.get(["autoDownloadNew", "token", "repo"]);
+    const cfg = await cfgGet(["autoDownloadNew", "token", "repo"]);
     if (cfg.autoDownloadNew && cfg.token && cfg.repo) {
       const selections = await buildNewSelections(notebooks, cfg.repo, cfg.token);
       if (selections.length > 0) {
@@ -1288,7 +1465,7 @@ async function runBulkRemote(selections) {
 }
 
 async function pushEpisode(audioUrl, filename, dedupHints) {
-  const cfg = await chrome.storage.local.get([
+  const cfg = await cfgGet([
     "token", "repo", "rssMode", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {

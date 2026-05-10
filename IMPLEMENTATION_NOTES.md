@@ -674,6 +674,142 @@ GitHub Actions `ubuntu-latest` 가 2025년 4월부터 22.04 → 24.04 로 업그
 
 ---
 
+## 15. 패키징 INCLUDE_DIRS 누락 — `vendor/` 가 25개 zip 에서 빠짐 (2026-05-07)
+
+### 증상
+
+수면 아래에서 v0.4.0 ~ v0.4.25 의 모든 zip 빌드가 `vendor/lamejs.js` 없이 출시. unpacked 로드한 사용자가 GitHub Contents API 한계 (~37 MiB) 를 넘는 큰 음성개요를 받으면 offscreen transcode 가 `import("./vendor/lamejs.js")` 단계에서 404 → mp3 인코딩 실패 → push 자체가 실패. 평균 음성개요는 한계 안이라 대다수 사용자에겐 보이지 않았고, 버그 리포트 0건. 개발자 본인이 git clone 으로 직접 로드해 워킹트리의 `vendor/` 가 항상 존재했기 때문에 self-test 에서도 안 잡힘.
+
+### 원인
+
+[scripts/package.py](scripts/package.py) 의 `INCLUDE_DIRS = ["src"]` — `vendor/` 디렉터리가 화이트리스트에서 빠져 있었음. lamejs 도입 (v0.4.11) 시점에 `src/offscreen/transcode.js` 의 `import` 경로는 `vendor/lamejs.js` 로 작성됐지만, 같은 패치에서 패키징 스크립트를 함께 손대지 않음.
+
+### 대응 (v0.4.27)
+
+```python
+INCLUDE_DIRS = ["src", "vendor"]
+```
+
+한 줄 추가. zip 빌드 후 unzip 으로 `vendor/lamejs.js` 존재 확인. 추가 검증 필요한 경로:
+
+1. 빌드된 zip 을 `chrome://extensions/` 에 unpacked 로드 → 큰 m4a 다운로드 → 콘솔에 `[transcode] mp3 written XX MB` 가 찍히는지.
+2. offscreen 콘솔 (`chrome://extensions/` 의 service worker 카드에서 inspect → Frames 탭의 `transcode.html`) 에 `import` 404 가 없는지.
+
+### 학습
+
+- **화이트리스트 패키징은 새 디렉터리 추가 시 빠뜨리기 쉬움** — 신규 dependency 가 새 top-level dir 로 들어오는 PR 은 `package.py` (또는 `manifest.json` 의 `web_accessible_resources` 등) 도 함께 손대야 함. 검토 체크리스트에 "신규 import 경로의 root dir 가 빌드 화이트리스트에 있는가?" 추가.
+- **개발 모드와 출시 모드의 갭이 silent bug 를 키움** — 개발자가 unpacked 로 git clone 폴더 로드하면 워킹트리의 모든 파일이 보여서 누락이 안 드러남. 출시 zip 을 *그 자체* 로 별도 디렉터리에 풀어서 한 번 더 unpacked 로드하는 sanity 단계가 필요. [RELEASING.md](RELEASING.md) 에 "패키징된 zip 으로 한 번 더 로드 테스트" 단계 명시 권장.
+- **사용자 silence 는 버그 부재 신호가 아님** — 25개 버전 동안 0건 리포트였지만 실제로는 long-form 음성개요 사용자가 영향. 텔레메트리가 없는 익스텐션에서 silent failure 는 극히 발견하기 어려움. fallback path 가 의도대로 도달하는지 회귀 테스트 필요.
+- **패키징 스크립트 자체에 self-check 가 있으면 좋음** — 빌드 후 zip 안에서 `manifest.json` 의 host_permissions / `src/**` 의 `import` 경로 모든 것을 grep 해서 zip 에 실제로 존재하는지 확인하는 단계. 한 줄 누락으로 25 버전이 조용히 깨질 수 있는 위험을 미리 잡는 layered defense.
+
+---
+
+## 16. 다기기 동기화 — `chrome.storage.sync` 로 분리 (2026-05-09)
+
+### 배경
+
+v0.4.0~v0.4.27 은 모든 영구 상태를 `chrome.storage.local` 에 보관 — 한 기기에 묶임. 사용자가 직장/집/노트북 등 여러 Chrome 에서 같은 NotebookLM 계정을 쓸 때 매번 PAT/repo 를 다시 입력하는 마찰. 익스텐션 설정의 다기기 자동 공유는 Chrome Sync 의 정공법인 `chrome.storage.sync` 로 해결 — 같은 Google 계정 + 같은 익스텐션 설치된 다른 Chrome 과 자동 공유.
+
+### 디자인 결정 — sync vs local 의 분할 기준
+
+키를 두 그룹으로 나눠 의미 기반으로 분리:
+
+| 키 | 저장소 | 사유 |
+|---|---|---|
+| `token` (PAT) | `sync` | 사용자 입력 자격 증명. 다기기 공유가 핵심 가치 |
+| `repo`, `rssMode`, `autoDownloadNew`, `committerName`, `committerEmail` | `sync` | 사용자 의도 — 어느 기기에서 보든 같은 결과 기대 |
+| `uiLang` | `sync` | UI 선호. 한 번 정한 언어가 모든 기기에서 일관 |
+| `currentTaskState` | `local` | 진행 중 작업은 그 기기 SW 의 in-flight Promise 와 짝 — 다른 기기에서 보면 stale |
+| `lastScanResult` | `local` | 그 기기의 NotebookLM 세션이 본 결과. 다른 기기 세션과 무관 |
+| `notebookUrlMap` | `local` | 누적 데이터 — sync quota 100KB 위험. 다른 기기에서 매핑 자동 채워짐 |
+| `bulkFailedSelections` | `local` | 그 기기에서 실패한 selections. 다른 기기에서 retry 의미 없음 |
+| `epColWidths` | `local` | 화면 폭 의존 UI 선호. 기기마다 적정 폭 다름 |
+
+원칙: **사용자 의도 = sync, 기기 상태 = local**. PAT 는 의도이니 sync. 진행 중 task state 는 그 기기 SW 살아있는 동안만 의미 있어 local.
+
+### PAT sync 의 보안 — 사용자에게 명시
+
+`chrome.storage.sync` 는 사용자 Google 계정으로 암호화되어 Chrome Sync 백엔드에 저장. 두 모드:
+
+- **Chrome Sync 패스프레이즈 켬**: end-to-end 암호화. 사용자 패스프레이즈만 키 — Google 도 못 읽음.
+- **패스프레이즈 안 켬**: Google 계정 키로 암호화. Anthropic 같은 외부 서버엔 안 가지만 Google 은 이론상 접근 가능.
+
+PAT 같은 자격 증명을 sync 에 보관하는 건 user trust 기반의 결정이라 옵션 페이지 GitHub 섹션 상단에 안내 박스 추가 (Chrome Sync 패스프레이즈 권장 링크 포함). 한·영·독 i18n 키 `github.syncNotice`. 도움말 §11 (권한 & 프라이버시) 의 토큰 저장 위치 설명도 동기화 함의 명시로 갱신.
+
+### 구현 — `cfgGet` / `cfgSet` 헬퍼 + 1회성 마이그레이션
+
+[src/background.js](src/background.js) 의 `CFG_KEYS` 화이트리스트 + `cfgGet` / `cfgSet` 헬퍼:
+
+```js
+const CFG_KEYS = [
+  "token", "repo", "rssMode", "autoDownloadNew",
+  "committerName", "committerEmail", "uiLang",
+];
+
+async function cfgGet(keys) {
+  // sync 우선 + 비어있는 키만 local 에 fallback (마이그레이션 부분 실패 안전망).
+  const want = keys ?? CFG_KEYS;
+  const [s, l] = await Promise.all([
+    chrome.storage.sync.get(want).catch(() => ({})),
+    chrome.storage.local.get(want).catch(() => ({})),
+  ]);
+  const out = {};
+  for (const k of want) out[k] = s[k] !== undefined ? s[k] : l[k];
+  return out;
+}
+
+async function cfgSet(obj) {
+  await chrome.storage.sync.set(obj);
+  try { await chrome.storage.local.remove(Object.keys(obj)); } catch {}
+}
+```
+
+마이그레이션은 SW 시작 시 한 번 (`migrateConfigToSync()`):
+1. `local` + `sync` 의 `CFG_KEYS` 동시 fetch.
+2. `local` 에만 있고 `sync` 가 비어있는 키만 `sync` 로 복사 (다른 기기에서 먼저 push 된 값은 보존).
+3. `local` 의 같은 키들 제거 (두 저장소 분기 방지).
+
+옵션 페이지 / popup 도 같은 헬퍼 inline 보관 (각자 모듈 / 클래식 스크립트라 import 경로가 갈림 — 30 줄 코드 중복 허용).
+
+### 라이브 반영 — `storage.onChanged` 리스너
+
+같은 옵션 페이지가 두 기기에서 동시에 열려 있을 때 한 쪽 [저장] → 다른 쪽 폼이 자동 갱신:
+
+```js
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync") return;
+  for (const [k, { newValue }] of Object.entries(changes)) {
+    if (!CFG_KEYS.includes(k)) continue;
+    if (k === "uiLang") { i18nSetLang(newValue); ... }
+    else if (k === "autoDownloadNew") fields.autoDownloadNew.checked = !!newValue;
+    else if (fields[k] && document.activeElement !== fields[k]) {
+      fields[k].value = newValue ?? "";
+      if (k === "repo") refreshFeedUrl();
+    }
+  }
+  show(t("github.status.syncedFromOther"), "success");
+});
+```
+
+`document.activeElement` 가드로 사용자가 입력 중인 필드는 덮어쓰지 않음 — 동시 편집 race 방지.
+
+### 함정 / 주의
+
+- **Quota**: sync 는 8KB/item, 100KB 총합, 1800 writes/hour. 현재 `CFG_KEYS` 합계는 ~1KB 미만이라 여유 충분. `notebookUrlMap` 을 sync 에 넣었으면 누적되면서 100KB 넘을 위험 — 그래서 local 유지.
+- **마이그레이션 idempotency**: 두 번째 SW 시작에선 `local` 이 이미 비어 있어 자동으로 no-op. 다른 기기가 먼저 sync 에 값을 푸시한 상태에서 새 기기가 깔리면 그 기기 `local` 은 비어 있어 마이그레이션 skip → sync 값 그대로 사용.
+- **sync 비활성/오프라인**: `chrome.storage.sync` 는 Chrome Sync 가 꺼져 있어도 단일 기기 local store 처럼 동작. 따라서 익스텐션은 sync 상태와 무관하게 항상 안전.
+- **patentially destructive sync overwrite**: 한 기기에서 잘못된 PAT 를 [저장] 하면 sync 가 다른 기기로 전파. 이건 의도된 동작 — [설정 검증] 버튼이 같은 기기에서 401 를 잡아주므로 사용자가 sync 전파 전에 인지 가능. cross-device 발견은 다른 기기의 다음 push 실패 시 진행 모니터에서 401 표시.
+
+### 학습
+
+- **storage 분리는 "사용자 의도 vs 기기 상태" 축으로**. 데이터 사이즈만 보면 다 sync 에 넣어도 quota 안에 들지만, 의미 안 맞으면 `currentTaskState` 가 다른 기기에서 stale 한 진행률을 표시하는 등 UX 사고. 분류 기준이 명확하면 의사결정이 빠름.
+- **PAT 같은 자격 증명 sync 는 사용자 옵트인 명시 필요** — UI 박스로 "이게 어디 가는가, 패스프레이즈 켜면 더 안전" 한 번에 안내. 묵시적 sync 는 trust 위반.
+- **`storage.onChanged` 의 area 구분**. 옛 코드가 `local` 을 가정하고 짠 곳이 있으면 area 필터로 가드 안 하면 sync 변경에 잘못 반응. listener 추가 시 항상 `if (area !== "sync") return;` 같은 명시.
+
+구현 위치: [src/background.js](src/background.js) (`CFG_KEYS`, `cfgGet`, `cfgSet`, `migrateConfigToSync`), [src/options/options.js](src/options/options.js) (inline 헬퍼 + `storage.onChanged` 리스너), [src/popup/popup.js](src/popup/popup.js) (uiLang sync 우선 fetch), [src/options/options.html](src/options/options.html) (`github.syncNotice` 박스), [src/i18n.js](src/i18n.js) (`github.syncNotice` / `github.status.syncedFromOther` ko/en/de).
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```
