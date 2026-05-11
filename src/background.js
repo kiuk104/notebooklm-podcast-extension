@@ -1946,6 +1946,32 @@ async function ghPut(repo, path, contentB64, message, sha, token, committer) {
   throw new Error(`ghPut ${path}: transient errors after 4 attempts (workflow racing or rule timeouts)`);
 }
 
+// Contents API DELETE — path 의 file 을 sha 기반으로 삭제. 옵션 페이지의 [삭제] /
+// [스킵] 버튼이 거쳐가는 episodes:delete 핸들러가 사용. workflow rebuild 와의 race
+// 시 409 가 가능하지만 빈도가 낮고 사용자가 다시 누르면 됨 — retry 안 함.
+async function ghDelete(repo, path, sha, message, token, committer) {
+  const body = { message, sha };
+  if (committer) {
+    body.committer = committer;
+    body.author = committer;
+  }
+  const r = await fetch(ghContentsUrl(repo, path), {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const errText = (await r.text()).slice(0, 200);
+    throw new Error(`ghDelete ${path}: ${r.status} ${errText}`);
+  }
+  return r.json();
+}
+
 // Git Data API (blobs/trees/commits/refs) 로 50 MiB 초과 파일 push.
 // Contents API 는 단일 PUT 으로 끝나지만 그쪽은 ~37 MiB 가 실질 한계라 NotebookLM
 // 의 더 긴 m4a 는 못 올림. Git Data API 는 5번의 chained API 호출이지만
