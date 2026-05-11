@@ -463,6 +463,13 @@
           <span data-i18n="meta.explicit">명시적 콘텐츠 (성인)</span>
         </label>
 
+        <label><span data-i18n="meta.maxTotalMB">저장소 retention 한도 (MB)</span>
+          <input type="number" id="meta-max-total-mb" min="0" step="50" placeholder="2000" autocomplete="off">
+          <div class="hint" data-i18n="meta.maxTotalMB.hint">
+            docs/episodes/ 누적 크기가 이 한도를 넘으면 build_feed.py 가 옛 episode 부터 자동 삭제. default 2000 (GitHub repo 1GB 권장 초과지만 5GB hard 안). 익스텐션의 진행 모니터 / 에피소드 목록 사용량 박스 + [한도 초과분 정리] 가 이 값을 기준으로 동작.
+          </div>
+        </label>
+
         <label><span data-i18n="meta.image">커버 이미지 URL</span>
           <div class="meta-image-row">
             <input type="text" id="meta-image" class="meta-image-input" placeholder="https://kiuk104.github.io/notebooklm-podcast-feed/cover.jpg" autocomplete="off">

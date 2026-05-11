@@ -1021,8 +1021,11 @@ const metaExplicitEl = document.getElementById("meta-explicit");
 const metaImageEl = document.getElementById("meta-image");
 const metaImagePreviewEl = document.getElementById("meta-image-preview");
 const metaImageUploadEl = document.getElementById("meta-image-upload");
+const metaMaxTotalMBEl = document.getElementById("meta-max-total-mb");
 const metaReloadBtn = document.getElementById("meta-reload");
 const metaStatusEl = document.getElementById("meta-status");
+
+const DEFAULT_MAX_TOTAL_MB = 2000;
 
 // repo 의 podcast.json 의 sha + 폼에 노출 안 하는 필드 (retention/transcode/baseUrl) 보존용.
 let podcastJsonSha = null;
@@ -1070,6 +1073,8 @@ function populateMetaForm(json) {
   }
   metaExplicitEl.checked = !!json?.explicit;
   metaImageEl.value = json?.image || "";
+  const mb = json?.retention?.maxTotalMB;
+  metaMaxTotalMBEl.value = (typeof mb === "number" && mb > 0) ? mb : "";
   updateImagePreview();
 }
 
@@ -1125,7 +1130,15 @@ metaForm.addEventListener("submit", async (e) => {
     return;
   }
 
-  // 폼에 노출 안 한 필드 (retention / transcode / baseUrl 등) 는 그대로 보존.
+  // 폼에 노출 안 한 필드 (transcode / baseUrl 등) 는 그대로 보존. retention 은
+  // 입력값으로 갱신 — maxTotalMB 만 폼에 노출, maxItems/maxAgeDays 등 다른 키는
+  // 사용자가 podcast.json 에 직접 둔 경우 유지.
+  const mbRaw = metaMaxTotalMBEl.value.trim();
+  const mbVal = mbRaw ? parseFloat(mbRaw) : DEFAULT_MAX_TOTAL_MB;
+  const updatedRetention = {
+    ...(podcastJsonOriginal.retention || {}),
+    maxTotalMB: Number.isFinite(mbVal) && mbVal > 0 ? mbVal : DEFAULT_MAX_TOTAL_MB,
+  };
   const updated = {
     ...podcastJsonOriginal,
     title: metaTitleEl.value.trim() || "내 NotebookLM 팟캐스트",
@@ -1136,6 +1149,7 @@ metaForm.addEventListener("submit", async (e) => {
     image: metaImageEl.value.trim(),
     category: metaCategoryEl.value || "Education",
     explicit: metaExplicitEl.checked,
+    retention: updatedRetention,
   };
 
   const content = JSON.stringify(updated, null, 2) + "\n";
@@ -1167,6 +1181,8 @@ metaForm.addEventListener("submit", async (e) => {
     podcastJsonSha = data.content?.sha || null;
     podcastJsonOriginal = updated;
     showMetaStatus(t("meta.status.saved"), "success");
+    // retention.maxTotalMB 가 바뀌었으면 사용량 박스도 즉시 갱신.
+    loadStorageUsage();
   } catch (e) {
     showMetaStatus(`Save failed: ${e.message}`, "error");
   }
