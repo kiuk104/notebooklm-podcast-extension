@@ -46,7 +46,7 @@
     <li><a href="#usage">Usage (single / current notebook / all notebooks)</a></li>
     <li><a href="#rss">RSS feed generation</a></li>
     <li><a href="#meta">Podcast metadata (title / owner / cover)</a></li>
-    <li><a href="#episodes">Pushed episodes management (edit / delete)</a></li>
+    <li><a href="#episodes">Pushed episodes management (edit / delete / skip sync)</a></li>
     <li><a href="#retention">Retention policy (rolling window)</a></li>
     <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
     <li><a href="#filename">Filename convention</a></li>
@@ -276,6 +276,25 @@
 
 <div class="tip">
   Delete only removes the file from the repo — the NotebookLM card itself stays. On the next sweep, [Download] will re-pull it (shortId dedup prevents duplicate pushes). Useful for cleaning up wrongly-pulled cards or placeholder-titled cards.
+</div>
+
+<div class="tip">
+  <strong>Multi-device behavior:</strong> Delete removes the file directly from the GitHub repo (the shared source of truth across all devices), so deleting on one device makes it disappear on every other device the moment they hit [↻ Reload] — no chrome.storage sync delay involved.
+</div>
+
+<h3 id="skip-list">6-5. Skip (permanent exclusion) and the skip list</h3>
+<ul>
+  <li>Each row's <strong>[Skip]</strong> — deletes the repo file <em>and</em> registers the card's shortId in the permanent skip list. Excluded from future sweep candidates.</li>
+  <li>The top <strong>[Bulk skip]</strong> — multi-select skip. Useful for cleaning up old cards that keep getting retention-cut.</li>
+  <li>The <strong>[Skip list]</strong> toggle reveals registered entries. Each row has <strong>[Unset]</strong>, and there's a <strong>[Clear all]</strong> at the bottom (the card becomes a fresh candidate on the next scan).</li>
+</ul>
+
+<div class="tip">
+  <strong>[Delete] vs [Skip]:</strong> Delete only removes the repo file → the next sweep can re-push the same card. Skip deletes <em>and</em> permanently registers the shortId → even though the NotebookLM card is still alive, it never gets re-downloaded. This is what breaks the "old card → retention cut → re-detected as new → re-downloaded" infinite loop.
+</div>
+
+<div class="tip">
+  <strong>Multi-device sync:</strong> The skip list (<code>skippedShortIds</code>) is stored in <code>chrome.storage.sync</code> and auto-syncs to every device / browser signed in with the same Google account. Skip a card on one device → the next sweep on every other device automatically skips it too. (storage.sync limit is ~100KB ≈ 400 entries; the oldest are trimmed if exceeded.)
 </div>
 
 <h2 id="retention">7. Retention policy (rolling window)</h2>

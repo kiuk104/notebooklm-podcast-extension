@@ -516,7 +516,7 @@
         <button type="button" id="ep-reload" data-i18n="episodes.reload">↻ 새로고침</button>
         <button type="button" class="toggle" id="ep-group-toggle" data-i18n="episodes.groupToggle">노트북별 그룹화</button>
         <button type="button" id="ep-reset-sort" data-i18n="episodes.resetSort">정렬 초기화 (날짜 ↓)</button>
-        <button type="button" id="ep-skip-toggle" title="삭제 시 자동 등록된 스킵 목록" data-i18n="episodes.skipToggle">스킵 목록</button>
+        <button type="button" id="ep-skip-toggle" title="[스킵] 으로 등록된 영구 제외 목록 — 같은 Google 계정의 다른 기기에 자동 동기화" data-i18n="episodes.skipToggle">스킵 목록</button>
         <span class="ep-summary" id="ep-summary"></span>
         <span class="selected-count" id="ep-selected-count"></span>
         <button type="button" id="ep-batch-skip" data-i18n="episodes.batchSkip" disabled style="background:#2563eb; color:#fff; border:0;">선택 스킵</button>
@@ -527,7 +527,7 @@
           <span class="task-title" data-i18n="episodes.skip.title">일괄 다운로드 스킵 목록</span>
           <span class="task-elapsed" id="ep-skip-count"></span>
         </div>
-        <div class="hint" data-i18n="episodes.skip.hint">에피소드 삭제 시 자동 등록. 같은 카드를 다시 다운로드하지 않게 합니다. 해제하면 다음 스캔에서 다시 신규로 잡힘.</div>
+        <div class="hint" data-i18n="episodes.skip.hint">[스킵] 으로 등록된 음성개요. 서버 파일은 이미 삭제됐고, 일괄 다운로드에서도 영구 제외됩니다. 해제하면 다음 스캔에서 다시 신규 후보로 잡힘. 이 목록은 chrome.storage.sync 에 저장돼 같은 Google 계정의 다른 기기에 자동 동기화됩니다.</div>
         <div id="ep-skip-list" style="margin-top:8px; max-height:200px; overflow-y:auto; font-family:monospace; font-size:13px;"></div>
         <div class="task-actions" style="margin-top:8px;">
           <button type="button" id="ep-skip-clear" data-i18n="episodes.skip.clear">전체 해제</button>

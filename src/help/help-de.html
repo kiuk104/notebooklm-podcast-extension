@@ -46,7 +46,7 @@
     <li><a href="#usage">Benutzung (einzeln / aktuelles Notebook / alle Notebooks)</a></li>
     <li><a href="#rss">RSS-Feed-Generierung</a></li>
     <li><a href="#meta">Podcast-Metadaten (Titel / Autor / Cover)</a></li>
-    <li><a href="#episodes">Verwaltung gepushter Episoden (bearbeiten / löschen)</a></li>
+    <li><a href="#episodes">Verwaltung gepushter Episoden (bearbeiten / löschen / Skip-Sync)</a></li>
     <li><a href="#retention">Aufbewahrungsrichtlinie (Rolling Window)</a></li>
     <li><a href="#transcode">Transcode (m4a → mp3)</a></li>
     <li><a href="#filename">Dateinamenskonvention</a></li>
@@ -276,6 +276,25 @@
 
 <div class="tip">
   Löschen entfernt nur die Datei aus dem Repo — die NotebookLM-Karte selbst bleibt. Beim nächsten Sweep zieht [Herunterladen] sie erneut (shortId-Dedup verhindert Doppel-Push). Praktisch, um falsch geholte Karten oder Karten mit Platzhalter-Titel zu bereinigen.
+</div>
+
+<div class="tip">
+  <strong>Geräteübergreifendes Verhalten:</strong> Löschen entfernt die Datei direkt aus dem GitHub-Repo (der gemeinsamen Source of Truth aller Geräte). Wer auf einem Gerät löscht, sieht die Karte auf jedem anderen Gerät sofort nach [↻ Aktualisieren] verschwinden — ohne chrome.storage-Sync-Verzögerung.
+</div>
+
+<h3 id="skip-list">6-5. Skip (dauerhafter Ausschluss) und die Skip-Liste</h3>
+<ul>
+  <li>[Skip] in der Zeile — löscht die Repo-Datei <em>und</em> trägt die shortId in die dauerhafte Skip-Liste ein. Ab dem nächsten Sweep ausgeschlossen.</li>
+  <li>Oben <strong>[Bulk-Skip]</strong> — Mehrfachauswahl mit Skip. Praktisch, um alte Karten zu räumen, die regelmäßig dem Retention-Cut zum Opfer fallen.</li>
+  <li>Toggle <strong>[Skip-Liste]</strong> klappt die Einträge auf. Pro Zeile <strong>[Aufheben]</strong>, ganz unten <strong>[Alle aufheben]</strong> (die Karte wird beim nächsten Scan wieder als neu eingestuft).</li>
+</ul>
+
+<div class="tip">
+  <strong>[Löschen] vs. [Skip]:</strong> Löschen entfernt nur die Repo-Datei → der nächste Sweep kann dieselbe Karte erneut pushen. Skip löscht <em>und</em> registriert die shortId dauerhaft → auch wenn die NotebookLM-Karte noch existiert, wird sie nie wieder heruntergeladen. Damit lässt sich die Endlosschleife „alte Karte → Retention-Cut → wieder als neu erkannt → erneut geholt" verhindern.
+</div>
+
+<div class="tip">
+  <strong>Geräteübergreifende Synchronisation:</strong> Die Skip-Liste (<code>skippedShortIds</code>) liegt in <code>chrome.storage.sync</code> und synchronisiert sich automatisch über alle Geräte / Browser mit derselben Google-Anmeldung. Skip auf einem Gerät → der nächste Sweep auf allen anderen Geräten überspringt die Karte ebenfalls. (storage.sync-Limit ~100 KB ≈ 400 Einträge; bei Überlauf werden die ältesten verworfen.)
 </div>
 
 <h2 id="retention">7. Aufbewahrungsrichtlinie (Rolling Window)</h2>
