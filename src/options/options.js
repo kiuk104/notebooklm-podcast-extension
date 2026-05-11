@@ -203,24 +203,50 @@ async function loadStorageUsage() {
   }
 }
 
-// 에피소드 페이지의 스킵 목록 토글 패널.
+// 에피소드 페이지의 스킵 목록 토글 패널. shortId 외 메타 (filename, title, date,
+// notebookTitle, skippedAt) 도 표시 — 사용자가 어떤 파일을 스킵 등록했는지 사후 확인.
 async function renderSkipPanel() {
   const panel = document.getElementById("ep-skip-panel");
   const listEl = document.getElementById("ep-skip-list");
   const countEl = document.getElementById("ep-skip-count");
   if (!panel) return;
   const r = await chrome.runtime.sendMessage({ type: "skip:list" }).catch(() => null);
-  const ids = r?.shortIds || [];
-  countEl.textContent = t("episodes.skip.count", { n: ids.length });
+  const entries = r?.entries || [];
+  countEl.textContent = t("episodes.skip.count", { n: entries.length });
   listEl.innerHTML = "";
-  if (ids.length === 0) {
+  if (entries.length === 0) {
     listEl.innerHTML = `<div class="hint" style="margin:0;">${escapeHtml(t("episodes.skip.empty"))}</div>`;
     return;
   }
-  for (const sid of ids.sort()) {
+  // 등록 시각 역순 (최근 등록한 게 위). skippedAt 0 (옛 마이그레이션) 은 맨 아래.
+  const sorted = entries.slice().sort((a, b) => (b.skippedAt || 0) - (a.skippedAt || 0));
+  for (const e2 of sorted) {
     const row = document.createElement("div");
-    row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #eee;";
-    row.innerHTML = `<code>${escapeHtml(sid)}</code><button type="button" class="ep-skip-unset" data-sid="${escapeHtml(sid)}" style="font-size:12px; padding:2px 8px;">${escapeHtml(t("episodes.skip.unset"))}</button>`;
+    row.style.cssText = "padding:6px 0; border-bottom:1px solid #eee;";
+    const dateStr = e2.skippedAt ? new Date(e2.skippedAt).toLocaleDateString() : "—";
+    const epDate = e2.date
+      ? `${e2.date.slice(0, 4)}-${e2.date.slice(4, 6)}-${e2.date.slice(6, 8)}`
+      : "";
+    const titleLine = e2.title
+      ? `<div style="font-size:13px;">${escapeHtml(e2.title)}</div>`
+      : e2.filename
+        ? `<div style="font-size:13px; color:#666;">${escapeHtml(e2.filename)}</div>`
+        : `<div style="font-size:13px; color:#999; font-style:italic;">${escapeHtml(t("episodes.skip.noMeta"))}</div>`;
+    const metaLine = (epDate || e2.notebookTitle)
+      ? `<div style="font-size:12px; color:#888; margin-top:2px;">${escapeHtml([epDate, e2.notebookTitle].filter(Boolean).join(" · "))}</div>`
+      : "";
+    row.innerHTML = `
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+        <div style="flex:1; min-width:0;">
+          ${titleLine}
+          ${metaLine}
+          <div style="font-size:11px; color:#aaa; margin-top:2px;">
+            <code>${escapeHtml(e2.shortId)}</code>
+            <span style="margin-left:8px;">${escapeHtml(t("episodes.skip.skippedAt", { date: dateStr }))}</span>
+          </div>
+        </div>
+        <button type="button" class="ep-skip-unset" data-sid="${escapeHtml(e2.shortId)}" style="font-size:12px; padding:2px 8px; flex-shrink:0;">${escapeHtml(t("episodes.skip.unset"))}</button>
+      </div>`;
     listEl.appendChild(row);
   }
 }
@@ -1594,17 +1620,33 @@ epTbody.addEventListener("click", async (e) => {
     if (item) await epShare(item);
     return;
   }
-  // [스킵] — 삭제 안 하고 영구 스킵 목록에만 등록. 다음 일괄 다운로드에서 제외.
-  // 옛 3-segment 파일은 shortId 없어서 버튼 disabled — 여기까지 안 옴.
+  // [스킵] — GitHub 파일 삭제 + 영구 스킵 등록 (공간 확보 + 우후 차단).
+  // [삭제] 와 차이: [삭제] 는 파일만 지우고 미래 스캔에서 다시 받을 수 있음 vs
+  // [스킵] 은 다음 일괄 다운로드에서도 영구 제외. 옛 3-segment 파일은 shortId
+  // 없어 버튼 disabled — 여기까지 안 옴.
   if (e.target.classList.contains("skip")) {
+    const row = e.target.closest("tr.ep-row");
+    if (!row) return;
     const sid = e.target.dataset.sid;
-    if (!sid) return;
-    if (!confirm(t("episodes.confirmSkip", { sid }))) return;
+    const fn = row.dataset.filename;
+    const sha = row.dataset.sha;
+    if (!sid || !fn || !sha) return;
+    if (!confirm(t("episodes.confirmSkip", { filename: fn, sid }))) return;
     e.target.disabled = true;
+    epShowStatus(t("episodes.deleting", { filename: fn }), "");
+    // 스킵 목록 패널이 어떤 파일이었는지 보여줄 메타 — row 데이터에서 추출.
+    const item = epItems.find((i) => i.filename === fn);
     try {
-      const r = await chrome.runtime.sendMessage({ type: "skip:add", shortId: sid });
-      if (!r?.ok) throw new Error(r?.error || "skip add failed");
-      epShowStatus(t("episodes.skipAdded", { sid }), "success");
+      const r = await chrome.runtime.sendMessage({
+        type: "episodes:delete", filename: fn, sha, addToSkip: true,
+        title: item?.title || "",
+        date: item?.date || "",
+        notebookTitle: item?.notebook || "",
+      });
+      if (!r?.ok) throw new Error(r?.error || "delete+skip failed");
+      epShowStatus(t("episodes.deletedWithSkip", { filename: fn, sid: r.skippedShortId || sid }), "success");
+      await loadEpisodeList();
+      loadStorageUsage();
       if (document.getElementById("ep-skip-panel")?.style.display === "block") {
         renderSkipPanel();
       }
@@ -1614,37 +1656,25 @@ epTbody.addEventListener("click", async (e) => {
     }
     return;
   }
-  // 단일 삭제 — 편집 (제목 변경) 은 NotebookLM 원본에서. 잘못 받은 카드만
-  // 여기서 ghDelete 하고, 다음 sweep 에서 새 제목으로 다시 받아오는 흐름.
-  // 삭제 시 default 로 shortId 를 영구 스킵 목록에 등록 — retention 컷오프와
-  // 무관하게 다음 일괄 다운로드에서 같은 카드 안 받음. confirm 으로 분기 가능.
+  // 단일 [삭제] — GitHub 파일만 ghDelete. 스킵 등록 안 함 — 미래 스캔에서 다시
+  // 받을 수 있음 (잘못 받은 카드를 NotebookLM 에서 제목/내용 고친 후 새로 받는
+  // 흐름). 영구 제외하려면 옆의 [스킵] 버튼을 쓴다.
   if (e.target.classList.contains("danger")) {
     const row = e.target.closest("tr.ep-row");
     if (!row) return;
     const fn = row.dataset.filename;
     const sha = row.dataset.sha;
-    const addToSkip = confirm(t("episodes.confirmDeleteWithSkip", { filename: fn }));
-    // confirm 취소면 삭제 자체도 취소.
-    if (!addToSkip && !confirm(t("episodes.confirmDeleteOnly", { filename: fn }))) return;
+    if (!confirm(t("episodes.confirmDelete", { filename: fn }))) return;
     e.target.disabled = true;
     epShowStatus(t("episodes.deleting", { filename: fn }), "");
     try {
       const r = await chrome.runtime.sendMessage({
-        type: "episodes:delete", filename: fn, sha, addToSkip,
+        type: "episodes:delete", filename: fn, sha, addToSkip: false,
       });
       if (!r?.ok) throw new Error(r?.error || "delete failed");
-      epShowStatus(
-        r.skippedShortId
-          ? t("episodes.deletedWithSkip", { filename: fn, sid: r.skippedShortId })
-          : t("episodes.deleted", { filename: fn }),
-        "success",
-      );
+      epShowStatus(t("episodes.deleted", { filename: fn }), "success");
       await loadEpisodeList();
       loadStorageUsage();
-      // 스킵 패널이 열려 있으면 갱신.
-      if (document.getElementById("ep-skip-panel")?.style.display === "block") {
-        renderSkipPanel();
-      }
     } catch (err) {
       epShowStatus(t("episodes.deleteFail", { msg: err.message }), "error");
       e.target.disabled = false;

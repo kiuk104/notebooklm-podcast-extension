@@ -317,7 +317,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           ? await loadPushedIndex(cfg.repo, cfg.token)
           : { shortIds: new Set(), legacyKeys: new Set(), titleKeys: new Set() };
         const skipDays = await loadBulkSkipOlderDays();
-        const skippedShortIds = await loadSkippedShortIds();
+        const skippedShortIds = await loadSkippedShortIdSet();
         const enriched = last.notebooks.map((nb) => {
           const tooOld = isNotebookTooOld(nb.cover?.dateAttr || "", skipDays);
           return {
@@ -340,7 +340,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           scannedAt: last.scannedAt || 0,
           pushedShortIds: Array.from(pushedIndex.shortIds),
           skipOlderDays: skipDays,
-          skippedShortIds: Array.from(skippedShortIds),
+          skippedShortIds: Array.from(skippedShortIds), // Set → array
         });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
@@ -453,7 +453,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (msg.addToSkip !== false) {
           const sid = extractShortIdFromFilename(msg.filename);
           if (sid) {
-            await addSkippedShortId(sid);
+            // 호출자가 row 의 메타 (title, date, notebookTitle) 를 넘기면 같이 저장.
+            // 옵션 페이지의 스킵 목록 패널이 그 정보로 어떤 파일이었는지 보여줌.
+            await addSkippedEntry({
+              shortId: sid,
+              filename: msg.filename,
+              title: msg.title || "",
+              date: msg.date || "",
+              notebookTitle: msg.notebookTitle || "",
+            });
             skippedSid = sid;
           }
         }
@@ -465,9 +473,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // async
   }
   if (msg?.type === "skip:list") {
+    // 메타 포함된 entry 배열 반환. 옵션 페이지의 스킵 패널이 어떤 파일이었는지
+    // (filename, title, date, notebookTitle, skippedAt) 같이 표시.
     (async () => {
-      const set = await loadSkippedShortIds();
-      sendResponse({ ok: true, shortIds: Array.from(set) });
+      const entries = await loadSkippedEntries();
+      sendResponse({
+        ok: true,
+        entries,
+        // 옛 API 호환 — 기존 popup 코드가 shortIds 만 기대했을 경우 대비.
+        shortIds: entries.map((e) => e.shortId),
+      });
     })();
     return true;
   }
@@ -479,7 +494,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: false, error: "invalid shortId" });
           return;
         }
-        await addSkippedShortId(sid);
+        await addSkippedEntry({
+          shortId: sid,
+          filename: msg.filename || "",
+          title: msg.title || "",
+          date: msg.date || "",
+          notebookTitle: msg.notebookTitle || "",
+        });
         sendResponse({ ok: true });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
@@ -994,29 +1015,66 @@ async function loadBulkSkipOlderDays() {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_BULK_SKIP_OLDER_DAYS;
 }
 
-// 영구 스킵 목록 — 사용자가 에피소드 목록에서 삭제한 음성개요의 shortId 를 보관.
+// 영구 스킵 목록 — 사용자가 에피소드 목록에서 명시적으로 영구 제외한 음성개요.
 // retention 으로 한 번 잘리면 dedup 출처 (docs/episodes/) 에서 사라져 영구 루프
 // 가 생기는데, 사용자가 "이 카드는 다시 받지 않겠다" 라고 명시한 건 이 목록으로
-// 항구적으로 기억. chrome.storage.sync 라 다기기 공유. quota: shortId 8자 * 1만건
-// ≈ 80KB 면 100KB 한도 안 — 일반 사용자 범위에선 여유 충분.
-async function loadSkippedShortIds() {
+// 항구적으로 기억. chrome.storage.sync 의 `skippedShortIds`. 다기기 공유.
+//
+// 데이터 형태: Array<{shortId, filename, title, date, notebookTitle, skippedAt}>.
+// 옛 v0.4.32 에선 string array (shortId 만) — 로딩 시 자동 마이그레이션.
+// 메타는 옵션 페이지의 스킵 목록 패널에서 어떤 파일이었는지 보여주기 위함.
+// quota: entry 평균 ~250byte × 400건 = 100KB 한도. 일반 사용자 범위 (수십~수백)
+// 에선 여유. 한계 도달 시 가장 옛것부터 자르는 fallback 으로 안전.
+async function loadSkippedEntries() {
   const out = await chrome.storage.sync.get(["skippedShortIds"]).catch(() => ({}));
-  const arr = Array.isArray(out.skippedShortIds) ? out.skippedShortIds : [];
-  return new Set(arr);
+  const raw = Array.isArray(out.skippedShortIds) ? out.skippedShortIds : [];
+  // 마이그레이션: 옛 string array → object array. shortId 만 있고 메타는 빈 string.
+  return raw.map((x) => typeof x === "string"
+    ? { shortId: x, filename: "", title: "", date: "", notebookTitle: "", skippedAt: 0 }
+    : x).filter((e) => e && e.shortId);
 }
 
-async function addSkippedShortId(sid) {
-  if (!sid) return;
-  const set = await loadSkippedShortIds();
-  if (set.has(sid)) return;
-  set.add(sid);
-  await chrome.storage.sync.set({ skippedShortIds: Array.from(set) });
+async function loadSkippedShortIdSet() {
+  const list = await loadSkippedEntries();
+  return new Set(list.map((e) => e.shortId));
+}
+
+async function saveSkippedEntries(entries) {
+  try {
+    await chrome.storage.sync.set({ skippedShortIds: entries });
+  } catch (e) {
+    // quota 초과 — 가장 옛것 100건 잘라내고 재시도.
+    if (entries.length > 100) {
+      const trimmed = entries.slice(-(entries.length - 100));
+      console.warn(`[skip] sync quota 초과, ${entries.length - trimmed.length}건 cut`, e);
+      await chrome.storage.sync.set({ skippedShortIds: trimmed });
+    } else {
+      throw e;
+    }
+  }
+}
+
+async function addSkippedEntry(meta) {
+  if (!meta?.shortId) return;
+  const list = await loadSkippedEntries();
+  const idx = list.findIndex((e) => e.shortId === meta.shortId);
+  const entry = {
+    shortId: meta.shortId,
+    filename: meta.filename || "",
+    title: meta.title || "",
+    date: meta.date || "",
+    notebookTitle: meta.notebookTitle || "",
+    skippedAt: Date.now(),
+  };
+  if (idx >= 0) list[idx] = entry; else list.push(entry);
+  await saveSkippedEntries(list);
 }
 
 async function removeSkippedShortId(sid) {
-  const set = await loadSkippedShortIds();
-  if (!set.delete(sid)) return false;
-  await chrome.storage.sync.set({ skippedShortIds: Array.from(set) });
+  const list = await loadSkippedEntries();
+  const next = list.filter((e) => e.shortId !== sid);
+  if (next.length === list.length) return false;
+  await saveSkippedEntries(next);
   return true;
 }
 
@@ -1049,7 +1107,7 @@ function isAudioPushed(audio, coverDateAttr, pushedIndex) {
 async function buildNewSelections(notebooks, repo, token) {
   const pushedIndex = await loadPushedIndex(repo, token);
   const skipDays = await loadBulkSkipOlderDays();
-  const skippedShortIds = await loadSkippedShortIds();
+  const skippedShortIds = await loadSkippedShortIdSet();
   const selections = [];
   for (const nb of notebooks) {
     const coverDateAttr = nb.cover?.dateAttr || "";
