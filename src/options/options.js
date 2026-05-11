@@ -253,6 +253,39 @@ async function renderSkipPanel() {
 
 document.addEventListener("click", async (e) => {
   const t2 = e.target;
+  // [한도 초과분 정리] — retention.maxTotalMB 한도 넘는 옛 파일 ghDelete + 영구 스킵
+  // 등록. workflow 의 retention 컷과 같은 알고리즘이지만 익스텐션 스킵 목록에도
+  // 등록돼 다음 스캔에 같은 카드가 신규로 다시 안 잡힘. 명시 클릭만 동작.
+  if (t2.classList?.contains("storage-cleanup-btn")) {
+    if (!confirm(t("monitor.storage.cleanup.confirm"))) return;
+    t2.disabled = true;
+    const origText = t2.textContent;
+    t2.textContent = t("monitor.storage.cleanup.running");
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "storage:cleanup" });
+      if (!r?.ok) throw new Error(r?.error || "cleanup failed");
+      const droppedMB = (r.droppedBytes / 1024 / 1024).toFixed(1);
+      if (r.droppedCount === 0) {
+        alert(t("monitor.storage.cleanup.noOp"));
+      } else {
+        alert(t("monitor.storage.cleanup.done", { count: r.droppedCount, mb: droppedMB }));
+      }
+      await loadStorageUsage();
+      // 에피소드 페이지면 목록도 갱신.
+      if (document.getElementById("page-episodes")?.classList.contains("active")) {
+        await loadEpisodeList();
+      }
+      if (document.getElementById("ep-skip-panel")?.style.display === "block") {
+        await renderSkipPanel();
+      }
+    } catch (err) {
+      alert(t("monitor.storage.cleanup.fail", { msg: err.message }));
+    } finally {
+      t2.disabled = false;
+      t2.textContent = origText;
+    }
+    return;
+  }
   if (t2.id === "ep-skip-toggle") {
     const panel = document.getElementById("ep-skip-panel");
     if (panel.style.display === "none") {
@@ -1476,6 +1509,8 @@ function refreshBatchUI() {
   const total = epTbody.querySelectorAll(".ep-check").length;
   epSelectedCountEl.textContent = checked ? t("episodes.selected", { n: checked }) : "";
   epBatchDeleteBtn.disabled = checked === 0;
+  const batchSkipBtn = document.getElementById("ep-batch-skip");
+  if (batchSkipBtn) batchSkipBtn.disabled = checked === 0;
   epCheckAll.indeterminate = checked > 0 && checked < total;
   epCheckAll.checked = checked > 0 && checked === total;
 }
@@ -1683,28 +1718,60 @@ epTbody.addEventListener("click", async (e) => {
   }
 });
 
-epBatchDeleteBtn.addEventListener("click", async () => {
-  const targets = Array.from(epTbody.querySelectorAll(".ep-check:checked")).map((cb) => {
+// 다중선택 row 들에서 메타 (title/date/notebook) 까지 추출해서 episodes:delete
+// 메시지에 같이 전달 — addToSkip=true 면 스킵 목록 패널에 메타가 그대로 보이도록.
+function collectBatchTargets() {
+  return Array.from(epTbody.querySelectorAll(".ep-check:checked")).map((cb) => {
     const row = cb.closest("tr.ep-row");
-    return { filename: row.dataset.filename, sha: row.dataset.sha };
+    const fn = row.dataset.filename;
+    const item = epItems.find((i) => i.filename === fn);
+    return {
+      filename: fn,
+      sha: row.dataset.sha,
+      title: item?.title || "",
+      date: item?.date || "",
+      notebookTitle: item?.notebook || "",
+    };
   });
+}
+
+async function runBatch(targets, addToSkip, confirmKey, doneKey) {
   if (targets.length === 0) return;
-  if (!confirm(t("episodes.confirmBulkDelete", { n: targets.length }))) return;
+  if (!confirm(t(confirmKey, { n: targets.length }))) return;
   epBatchDeleteBtn.disabled = true;
+  const batchSkipBtn = document.getElementById("ep-batch-skip");
+  if (batchSkipBtn) batchSkipBtn.disabled = true;
   let ok = 0, fail = 0;
   for (let i = 0; i < targets.length; i++) {
-    epShowStatus(t("episodes.bulkDoing", { i: i + 1, total: targets.length, filename: targets[i].filename.slice(0, 50) }), "");
+    const tgt = targets[i];
+    epShowStatus(t("episodes.bulkDoing", { i: i + 1, total: targets.length, filename: tgt.filename.slice(0, 50) }), "");
     try {
       const r = await chrome.runtime.sendMessage({
         type: "episodes:delete",
-        filename: targets[i].filename, sha: targets[i].sha,
+        filename: tgt.filename, sha: tgt.sha, addToSkip,
+        title: tgt.title, date: tgt.date, notebookTitle: tgt.notebookTitle,
       });
       if (r?.ok) ok++; else fail++;
     } catch { fail++; }
   }
-  epShowStatus(t("episodes.bulkDone", { ok, fail }), fail > 0 ? "error" : "success");
+  epShowStatus(t(doneKey, { ok, fail }), fail > 0 ? "error" : "success");
   await loadEpisodeList();
+  loadStorageUsage();
+  if (document.getElementById("ep-skip-panel")?.style.display === "block") {
+    renderSkipPanel();
+  }
+}
+
+epBatchDeleteBtn.addEventListener("click", async () => {
+  await runBatch(collectBatchTargets(), false, "episodes.confirmBulkDelete", "episodes.bulkDone");
 });
+
+const epBatchSkipBtn = document.getElementById("ep-batch-skip");
+if (epBatchSkipBtn) {
+  epBatchSkipBtn.addEventListener("click", async () => {
+    await runBatch(collectBatchTargets(), true, "episodes.confirmBulkSkip", "episodes.bulkSkipDone");
+  });
+}
 
 // ---------- 사이드바 라우팅 (hash 기반) ----------
 

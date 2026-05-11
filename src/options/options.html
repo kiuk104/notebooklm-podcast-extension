@@ -248,6 +248,9 @@
         <div class="hint" id="storage-usage-hint" style="margin-top:8px;" data-i18n="monitor.storage.hint">
           한도 초과 시 옛 episode 부터 자동 삭제됩니다. 노트북 생성일이 2년 (기본 730일) 이전인 카드는 일괄 다운로드에서도 처음부터 스킵됩니다 — 영구 다운로드 루프 회피용.
         </div>
+        <div class="task-actions" style="margin-top:8px;">
+          <button type="button" class="storage-cleanup-btn" data-suffix="" data-i18n="monitor.storage.cleanup">한도 초과분 정리</button>
+        </div>
       </div>
 
       <div class="task-panel" id="last-scan-panel" style="display:none; margin-top:12px;">
@@ -497,6 +500,9 @@
         <div class="hint" style="margin-top:8px;" data-i18n="monitor.storage.hintEp">
           한도 초과 시 옛 episode 부터 자동 삭제. 미리 정리하면 retention 컷이 새 episode 를 못 잡습니다. 노트북 생성일이 2년 (기본 730일) 이전인 카드는 일괄 다운로드에서 처음부터 스킵.
         </div>
+        <div class="task-actions" style="margin-top:8px;">
+          <button type="button" class="storage-cleanup-btn" data-suffix="-ep" data-i18n="monitor.storage.cleanup">한도 초과분 정리</button>
+        </div>
       </div>
 
       <div class="ep-toolbar">
@@ -506,6 +512,7 @@
         <button type="button" id="ep-skip-toggle" title="삭제 시 자동 등록된 스킵 목록" data-i18n="episodes.skipToggle">스킵 목록</button>
         <span class="ep-summary" id="ep-summary"></span>
         <span class="selected-count" id="ep-selected-count"></span>
+        <button type="button" id="ep-batch-skip" data-i18n="episodes.batchSkip" disabled style="background:#2563eb; color:#fff; border:0;">선택 스킵</button>
         <button type="button" class="batch-delete" id="ep-batch-delete" data-i18n="episodes.batchDelete" disabled>선택 삭제</button>
       </div>
       <div id="ep-skip-panel" class="task-panel" style="display:none; margin-bottom:12px;">

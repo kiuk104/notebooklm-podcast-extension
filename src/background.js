@@ -472,6 +472,127 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true; // async
   }
+  if (msg?.type === "storage:cleanup") {
+    // 사용량이 retention.maxTotalMB 한도를 초과하면 옛 파일부터 ghDelete + 영구
+    // 스킵 등록. workflow 도 같은 한도로 자르지만 그쪽은 익스텐션 스킵 목록에
+    // 등록 안 해서 다음 스캔에 같은 카드 신규로 다시 잡히는 영구 루프 위험.
+    // 익스텐션이 직접 정리하면 그 사고 회피 + 사용자가 명시 트리거.
+    //
+    // 파일명에서 (date, shortId, title, notebook) 추출 가능 — 4-segment 파일은
+    // 스킵 등록 완전 (메타 포함). 옛 3-segment 파일은 shortId 없어 스킵 등록 못
+    // 하지만 ghDelete 는 진행. workflow 의 build_feed.py 가 보존 정렬과 같은
+    // pubDate 기준이라 결과가 일치.
+    (async () => {
+      try {
+        const cfg = await cfgGet(["token", "repo", "committerName", "committerEmail"]);
+        if (!cfg.token || !cfg.repo) {
+          sendResponse({ ok: false, error: "no-config" });
+          return;
+        }
+        const committer = cfg.committerName && cfg.committerEmail
+          ? { name: cfg.committerName, email: cfg.committerEmail } : null;
+        const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
+        // podcast.json 의 maxTotalMB 추출.
+        let maxTotalMB = null;
+        try {
+          const pj = await ghGet(cfg.repo, "docs/podcast.json", cfg.token);
+          if (pj?.content) {
+            const decoded = atob(pj.content.replace(/\s/g, ""));
+            const m = /"maxTotalMB"\s*:\s*(\d+(?:\.\d+)?)/.exec(decoded);
+            if (m) maxTotalMB = parseFloat(m[1]);
+          }
+        } catch (e) {
+          console.warn("[storage:cleanup] podcast.json 조회 실패:", e.message);
+        }
+        if (!maxTotalMB || maxTotalMB <= 0) {
+          sendResponse({ ok: false, error: "no-retention-limit" });
+          return;
+        }
+        const cap = Math.floor(maxTotalMB * 1024 * 1024);
+        // 파일에서 pubDate 추출 (filename 의 YYYYMMDD prefix). 파싱 실패 시 epoch 0.
+        const items = list.map((f) => {
+          const m = /^(\d{8})__/.exec(f.name);
+          let ts = 0;
+          if (m) {
+            const ymd = m[1];
+            ts = Date.UTC(
+              parseInt(ymd.slice(0, 4), 10),
+              parseInt(ymd.slice(4, 6), 10) - 1,
+              parseInt(ymd.slice(6, 8), 10),
+            );
+          }
+          return { f, ts };
+        });
+        // 최신순 (build_feed.py 의 apply_retention 과 같은 정렬).
+        items.sort((a, b) => b.ts - a.ts);
+        // 누적 size 가 cap 넘는 시점부터 잘라냄. cap 보다 큰 단일 파일이 와도
+        // 가장 최신 1편은 살림 — build_feed.py 의 안전망과 동일.
+        const toKeep = [];
+        const toDrop = [];
+        let total = 0;
+        for (const it of items) {
+          if (toKeep.length === 0 || total + it.f.size <= cap) {
+            toKeep.push(it.f);
+            total += it.f.size;
+          } else {
+            toDrop.push(it.f);
+          }
+        }
+        if (toDrop.length === 0) {
+          sendResponse({
+            ok: true, droppedCount: 0, droppedBytes: 0,
+            currentBytes: total, maxTotalMB,
+          });
+          return;
+        }
+        // 옛것부터 ghDelete + 영구 스킵 등록. 실패 (race 409 등) 시 그 파일은
+        // skip 하고 다음으로 — 한 번에 80개 정리하다 한 두 개 실패해도 진행 지속.
+        let droppedCount = 0;
+        let droppedBytes = 0;
+        const errors = [];
+        for (const f of toDrop) {
+          try {
+            await ghDelete(
+              cfg.repo,
+              `docs/episodes/${f.name}`,
+              f.sha,
+              `Retention cleanup: drop ${f.name}`,
+              cfg.token,
+              committer,
+            );
+            droppedCount++;
+            droppedBytes += f.size || 0;
+            // 4-segment 파일이면 스킵 목록에도 메타와 함께 등록. 메타는 filename
+            // 에서 가능한 만큼 추출 (title 은 slug 라 raw 제목 못 복원 — 그대로 둠).
+            const sid = extractShortIdFromFilename(f.name);
+            if (sid) {
+              const dm = /^(\d{8})__([^_]+?)__[0-9a-f]{8}__(.+?)\.(m4a|mp3|mp4)$/i.exec(f.name);
+              await addSkippedEntry({
+                shortId: sid,
+                filename: f.name,
+                title: dm ? dm[3] : "",
+                date: dm ? dm[1] : "",
+                notebookTitle: dm ? dm[2] : "",
+              });
+            }
+          } catch (e) {
+            errors.push({ filename: f.name, message: e.message });
+          }
+        }
+        sendResponse({
+          ok: true,
+          droppedCount,
+          droppedBytes,
+          currentBytes: total,
+          maxTotalMB,
+          errors,
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // async
+  }
   if (msg?.type === "skip:list") {
     // 메타 포함된 entry 배열 반환. 옵션 페이지의 스킵 패널이 어떤 파일이었는지
     // (filename, title, date, notebookTitle, skippedAt) 같이 표시.
