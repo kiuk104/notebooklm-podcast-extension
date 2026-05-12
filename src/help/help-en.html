@@ -52,6 +52,7 @@
     <li><a href="#filename">Filename convention</a></li>
     <li><a href="#troubleshoot">Troubleshooting</a></li>
     <li><a href="#privacy">Permissions &amp; privacy</a></li>
+    <li><a href="#changelog">Changelog</a></li>
   </ol>
 </nav>
 
@@ -450,6 +451,90 @@
 <p><strong>Where the token is stored</strong>: <code>chrome.storage.sync</code>. Automatically shared across other Chromes signed in to the same Google account with this extension installed (multi-device sync). With a Chrome Sync passphrase enabled, the data is end-to-end encrypted and Google cannot read it. Without a passphrase it is still encrypted with your Google account key (so it doesn't reach external servers), but Google can technically access it. The token is only used as the Authorization header on GitHub API calls and is cleared when the extension is uninstalled. Per-device state (task progress, scan results, notebook URL map) is not synced and stays in <code>chrome.storage.local</code> on each device.</p>
 
 <p><strong>NotebookLM session cookies</strong>: when re-fetching audio, the extension uses <code>credentials:"include"</code> so cookies follow along through the redirect chain (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>). The extension does not store these cookies separately.</p>
+
+<h2 id="changelog">12. Changelog</h2>
+
+<p style="font-size: 12px; color: #666;">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. User-visible changes only below.</p>
+
+<h3>v0.4.35 (2026-05-12)</h3>
+<ul>
+  <li><strong>Edit retention cap from the metadata page</strong> — <code>retention.maxTotalMB</code> in <code>docs/podcast.json</code> can now be changed from the extension UI. Default 2000. Usage panel refreshes immediately on save.</li>
+</ul>
+
+<h3>v0.4.34 (2026-05-11)</h3>
+<ul>
+  <li><strong>[Clean up over-limit] button</strong> — in the usage panel (Progress Monitor + Episodes List), the extension itself deletes the oldest files past the retention cap and registers them in the permanent skip list. Same result as the workflow's retention cut, but also writes to the skip list so the next scan won't re-flag them as new.</li>
+  <li><strong>Bulk [Skip] action</strong> — episodes toolbar gets a blue [Bulk skip] next to [Bulk delete]. Select multiple via checkboxes and delete + register them in one go.</li>
+</ul>
+
+<h3>v0.4.33 (2026-05-10)</h3>
+<ul>
+  <li><strong>[Skip] now = delete + permanent block</strong> — [Delete] only removes the file (may be re-downloaded on next scan); [Skip] deletes and registers in the permanent skip list (frees space + future-proof block).</li>
+  <li><strong>Skip list keeps metadata</strong> — filename / title / notebook name / date / registered-at saved with each entry. The [Skip list] toggle panel shows what each entry was.</li>
+  <li>Older v0.4.32 skip entries (shortId only) are auto-migrated.</li>
+</ul>
+
+<h3>v0.4.32 (2026-05-10)</h3>
+<ul>
+  <li><strong>Permanent re-download loop avoided</strong> — fixes the structural issue where bulk push → workflow cuts via retention → next scan re-flags the same card as new → infinite download.</li>
+  <li><strong>Auto-skip old cards (default 730 days)</strong> — input in the GitHub settings page. Notebook cards older than N days are skipped from bulk downloads from the start.</li>
+  <li><strong>Storage usage panel</strong> — Progress Monitor + Episodes List both show usage / cap / % bar (75% yellow, 90% red).</li>
+  <li><strong>Skip-list management</strong> — persisted in chrome.storage.sync (multi-device). Episode rows get a [Skip] action; [Skip list] toggle lets you unset individual entries or clear all.</li>
+</ul>
+
+<h3>v0.4.31 (2026-05-10)</h3>
+<ul>
+  <li><strong>artifact-labels race fix</strong> — scans no longer return before NotebookLM's <code>&lt;span id="artifact-labels-{UUID}"&gt;</code> renders. content.js scan handler polls up to 3 seconds for dedup keys to populate.</li>
+  <li><strong>workflow push retry</strong> — when the extension's ghPut races with the workflow's git push, the workflow now resets to origin/main, rebuilds, and retries up to 3× with backoff.</li>
+  <li><strong>4-segment titleKey fallback</strong> — dedup recovers via (date, titleSlug, ext) even when artifactId is empty due to the race.</li>
+</ul>
+
+<h3>v0.4.30 (2026-05-10)</h3>
+<ul>
+  <li><strong>Multi-device sync via Chrome Sync</strong> — GitHub settings (PAT included) + UI language move to <code>chrome.storage.sync</code>. Automatically shared with the same extension on other Chromes signed into the same Google account.</li>
+  <li><strong>Picker mode (cross-notebook card picker)</strong> — [Pick cards ▾] opens per-notebook tree; checkboxes per card for partial downloads.</li>
+  <li><strong>Dedup gap fixes</strong> — older 3-segment files (pre-v0.4.0) now also matched by (date, title, ext). cover.title race fixed.</li>
+</ul>
+
+<h3>v0.4.27 (2026-05-08)</h3>
+<ul>
+  <li>Packaging fix · skip-kind UI · repo hint in the options page.</li>
+</ul>
+
+<h3>v0.4.21 – v0.4.26 (2026-05-04 — 05-07)</h3>
+<ul>
+  <li><strong>Options page i18n (ko/en/de)</strong> + sidebar grouped navigation.</li>
+  <li><strong>Bulk completion notifications</strong> + retry-failed-cards button.</li>
+  <li><strong>Share ↗ button</strong> (Web Share API / clipboard fallback) + persistent notebook URL map + resizable columns.</li>
+  <li><strong>Help page i18n</strong> (en/de added with a language switcher).</li>
+</ul>
+
+<h3>v0.4.11 – v0.4.20 (2026-04-30 — 05-03)</h3>
+<ul>
+  <li><strong>Client-side transcode (m4a → mp3 64k mono)</strong> — offscreen document + lamejs. ~6s for a 30-minute m4a.</li>
+  <li><strong>Episodes management page</strong> — sort / group / rename / delete.</li>
+  <li><strong>Large-file fallback</strong> — when Contents API ~37 MiB is exceeded, falls back to Git Data API blob (up to 100 MiB).</li>
+  <li>Transcode stability (offscreen lifetime, large file message channel).</li>
+</ul>
+
+<h3>v0.4.0 – v0.4.10 (2026-04-29 — 04-30)</h3>
+<ul>
+  <li><strong>Chrome Web Store readiness</strong> — icons / packaging script / store listing copy / privacy policy.</li>
+  <li><strong>Bulk download (Option 1)</strong> + <strong>cross-notebook sweep (Option 2 / v1 cron equivalent)</strong>.</li>
+  <li><strong>Progress Monitor</strong> — live state / stats / failed list / recent push activity log.</li>
+  <li><strong>Two RSS modes</strong> (GitHub Actions delegated / extension-direct) + <strong>retention</strong> (maxItems, maxAgeDays, maxTotalMB).</li>
+  <li><strong>UUID-based dedup</strong> — 4-segment filenames (date / notebook / shortId / title).</li>
+</ul>
+
+<h3>v0.3.x (2026-04-29)</h3>
+<ul>
+  <li>GitHub Contents API push — in parallel with the download trigger, the SW re-fetches the audio and PUTs it to the repo.</li>
+</ul>
+
+<h3>v0.2.x (2026-04-28)</h3>
+<ul>
+  <li>Download trigger — content script auto-clicks ⋮ menu → "Download"; background renames the file.</li>
+</ul>
 
 <hr>
 

@@ -52,6 +52,7 @@
     <li><a href="#filename">Dateinamenskonvention</a></li>
     <li><a href="#troubleshoot">Fehlerbehebung</a></li>
     <li><a href="#privacy">Berechtigungen &amp; Datenschutz</a></li>
+    <li><a href="#changelog">Versionsverlauf</a></li>
   </ol>
 </nav>
 
@@ -450,6 +451,62 @@
 <p><strong>Token-Speicherort</strong>: <code>chrome.storage.sync</code>. Wird automatisch mit anderen Chromes geteilt, die mit demselben Google-Konto angemeldet sind und die Erweiterung installiert haben (geräteübergreifende Synchronisation). Mit aktivierter Chrome-Sync-Passphrase wird er Ende-zu-Ende-verschlüsselt — Google kann ihn nicht lesen. Ohne Passphrase wird er mit deinem Google-Kontoschlüssel verschlüsselt (gelangt also nicht an externe Server), aber Google hat technisch Zugriff. Der Token wird nur als Authorization-Header bei GitHub-API-Calls verwendet und beim Deinstallieren entfernt. Gerätespezifischer Zustand (Aufgabenfortschritt, Scan-Ergebnisse, Notebook-URL-Map) wird nicht synchronisiert und bleibt in <code>chrome.storage.local</code> auf dem jeweiligen Gerät.</p>
 
 <p><strong>NotebookLM-Session-Cookies</strong>: Beim Re-Fetch der Audio-Datei nutzt die Erweiterung <code>credentials:"include"</code>, damit Cookies die Redirect-Kette (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>) durchlaufen. Die Erweiterung speichert diese Cookies nicht separat.</p>
+
+<h2 id="changelog">12. Versionsverlauf</h2>
+
+<p style="font-size: 12px; color: #666;">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind.</p>
+
+<h3>v0.4.35 (2026-05-12)</h3>
+<ul>
+  <li><strong>Retention-Grenze über die Metadatenseite editierbar</strong> — <code>retention.maxTotalMB</code> in <code>docs/podcast.json</code> direkt aus der Extension-UI änderbar. Standard 2000. Auslastungs-Panel wird beim Speichern sofort aktualisiert.</li>
+</ul>
+
+<h3>v0.4.34 (2026-05-11)</h3>
+<ul>
+  <li><strong>[Über Limit aufräumen]-Button</strong> — im Auslastungs-Panel (Fortschrittsmonitor + Episodenliste) löscht die Extension selbst die ältesten Dateien über der Retention-Grenze und registriert sie in der dauerhaften Skip-Liste.</li>
+  <li><strong>Bulk-[Skip]-Aktion</strong> — neben [Bulk-Löschen] in der Episodenliste. Mehrere via Checkboxen auswählen und in einem Schritt löschen + registrieren.</li>
+</ul>
+
+<h3>v0.4.33 (2026-05-10)</h3>
+<ul>
+  <li><strong>[Skip] = jetzt Löschen + dauerhafte Sperre</strong> — [Löschen] entfernt nur die Datei (kann beim nächsten Scan wieder geladen werden); [Skip] löscht und trägt in die Skip-Liste ein.</li>
+  <li><strong>Skip-Liste mit Metadaten</strong> — Dateiname / Titel / Notebook / Datum / Registrierungszeitpunkt pro Eintrag gespeichert. Im [Skip-Liste]-Panel sichtbar.</li>
+</ul>
+
+<h3>v0.4.32 (2026-05-10)</h3>
+<ul>
+  <li><strong>Endlose Wiederherunterladungsschleife behoben</strong> — strukturelle Lösung für: Bulk-Push → Workflow schneidet via Retention → nächster Scan markiert dieselbe Karte wieder als neu → endloser Download.</li>
+  <li><strong>Alte Karten automatisch überspringen (Standard 730 Tage)</strong> — Eingabefeld in den GitHub-Einstellungen.</li>
+  <li><strong>Auslastungs-Panel</strong> — Fortschrittsmonitor + Episodenliste zeigen Auslastung / Limit / %-Balken (75% gelb, 90% rot).</li>
+  <li><strong>Skip-Listen-Verwaltung</strong> — in chrome.storage.sync gespeichert (mehrgerätesynchron). [Skip]-Aktion pro Zeile; [Skip-Liste] zum einzelnen Aufheben oder Alle-Löschen.</li>
+</ul>
+
+<h3>v0.4.31 (2026-05-10)</h3>
+<ul>
+  <li><strong>artifact-labels-Race-Fix</strong> — Scans warten nun bis die Dedup-Schlüssel im DOM gerendert sind (bis zu 3 Sekunden Polling).</li>
+  <li><strong>Workflow Push-Retry</strong> — bei Race zwischen ghPut der Extension und Workflow-Push: reset auf origin/main, rebuild, retry (max. 3× mit Backoff).</li>
+  <li><strong>4-Segment titleKey-Fallback</strong> — Dedup funktioniert via (date, titleSlug, ext) auch bei leerem artifactId.</li>
+</ul>
+
+<h3>v0.4.30 (2026-05-10)</h3>
+<ul>
+  <li><strong>Mehrgerätesynchronisation via Chrome Sync</strong> — GitHub-Einstellungen (inkl. PAT) + UI-Sprache in <code>chrome.storage.sync</code>.</li>
+  <li><strong>Karten-Picker (notebookübergreifend)</strong> — [Karten auswählen ▾] öffnet einen Baum pro Notebook; Checkboxen pro Karte.</li>
+  <li><strong>Dedup-Lücken</strong> behoben — ältere 3-Segment-Dateien (vor v0.4.0) jetzt auch via (date, title, ext) erkannt. cover.title-Race behoben.</li>
+</ul>
+
+<h3>v0.4.0 – v0.4.27 (2026-04-29 — 05-08)</h3>
+<ul>
+  <li><strong>Bulk-Download</strong> + <strong>notebookübergreifender Sweep (v1-Cron-Äquivalent)</strong>.</li>
+  <li><strong>Fortschrittsmonitor</strong>, <strong>zwei RSS-Modi</strong> (GitHub Actions / Extension-direkt), <strong>Retention</strong> (maxItems, maxAgeDays, maxTotalMB).</li>
+  <li><strong>Client-Transcode</strong> (m4a → mp3) via Offscreen + lamejs.</li>
+  <li><strong>Episoden-Verwaltungsseite</strong>, <strong>UUID-basiertes Dedup</strong>, <strong>i18n</strong> (ko/en/de), <strong>Chrome Web Store-Vorbereitung</strong>.</li>
+</ul>
+
+<h3>v0.2.x – v0.3.x (2026-04-28 — 04-29)</h3>
+<ul>
+  <li>Download-Trigger + GitHub Contents API Push.</li>
+</ul>
 
 <hr>
 

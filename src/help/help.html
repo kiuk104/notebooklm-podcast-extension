@@ -52,6 +52,7 @@
     <li><a href="#filename">파일명 규약</a></li>
     <li><a href="#troubleshoot">트러블슈팅</a></li>
     <li><a href="#privacy">권한 &amp; 프라이버시</a></li>
+    <li><a href="#changelog">버전별 업데이트</a></li>
   </ol>
 </nav>
 
@@ -449,6 +450,90 @@
 <p><strong>토큰 저장 위치</strong>: <code>chrome.storage.sync</code>. 같은 Google 계정으로 로그인한 다른 Chrome 의 같은 익스텐션과 자동 공유됩니다 (다기기 동기화). Chrome Sync 패스프레이즈가 켜져 있으면 end-to-end 암호화 — Google 도 못 읽음. 안 켜져 있으면 Google 계정 키로 암호화되어 Anthropic 같은 외부 서버엔 안 가지만 Google 은 이론상 접근 가능. GitHub API 호출 시에만 Authorization 헤더로 사용되고, 익스텐션을 제거하면 같이 삭제됩니다. 진행 상태 / 스캔 결과 / 노트북 URL 맵 같은 기기별 데이터는 동기화 안 되고 <code>chrome.storage.local</code> (해당 기기) 에만 보관됩니다.</p>
 
 <p><strong>NotebookLM 세션 쿠키</strong>: audio 재fetch 시 <code>credentials:"include"</code> 로 동행. 이 쿠키는 redirect 체인 (<code>lh3.googleusercontent → ServiceLogin → lh3.google → drum.usercontent.google</code>) 을 통과하기 위해서만 사용되며 익스텐션이 따로 저장하지 않습니다.</p>
+
+<h2 id="changelog">12. 버전별 업데이트</h2>
+
+<p style="font-size: 12px; color: #666;">전체 commit 히스토리는 <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a> 참고. 아래는 사용자 입장에서 체감되는 변경만.</p>
+
+<h3>v0.4.35 (2026-05-12)</h3>
+<ul>
+  <li><strong>팟캐스트 메타 페이지에 retention 한도 입력란</strong> — <code>docs/podcast.json</code> 의 <code>retention.maxTotalMB</code> 를 익스텐션 UI 에서 직접 편집. default 2000. 저장 시 사용량 박스 즉시 갱신.</li>
+</ul>
+
+<h3>v0.4.34 (2026-05-11)</h3>
+<ul>
+  <li><strong>[한도 초과분 정리] 버튼</strong> — 사용량 박스 (진행 모니터 + 에피소드 목록) 에서 retention 한도 초과 시 옛 파일을 익스텐션이 직접 ghDelete + 영구 스킵 등록. workflow 의 retention 컷과 같은 결과지만 스킵 목록에도 같이 등록돼 다음 스캔에서 신규 재인식 회피.</li>
+  <li><strong>다중선택 [선택 스킵]</strong> — 에피소드 목록 툴바에 [선택 삭제] 옆 파란 버튼 추가. 체크박스 다수 선택 후 한꺼번에 삭제 + 스킵 등록.</li>
+</ul>
+
+<h3>v0.4.33 (2026-05-10)</h3>
+<ul>
+  <li><strong>[스킵] = 삭제 + 영구 차단으로 통합</strong> — [삭제] 는 단순 삭제 (다음 스캔에서 다시 받을 가능성 남김), [스킵] 은 삭제 + 영구 스킵 등록 (공간 확보 + 우후 차단) 으로 역할 명확 분리.</li>
+  <li><strong>스킵 목록에 메타 보관</strong> — 등록 시 filename / title / 노트북명 / 날짜 / 등록 시각 함께 저장. [스킵 목록] 토글 패널에서 어떤 파일이었는지 사후 확인 가능.</li>
+  <li>옛 v0.4.32 스킵 목록 (shortId 만) 자동 마이그레이션.</li>
+</ul>
+
+<h3>v0.4.32 (2026-05-10)</h3>
+<ul>
+  <li><strong>retention 영구 루프 회피</strong> — bulk push → workflow 가 retention 으로 즉시 삭제 → 다음 스캔이 같은 카드를 신규로 재인식 → 무한 다운로드 사고의 구조적 해결.</li>
+  <li><strong>옛 카드 자동 스킵 (default 730일)</strong> — GitHub 연결 페이지에 일수 입력란. 노트북 생성일이 N일 이전인 카드는 일괄 다운로드에서 처음부터 스킵.</li>
+  <li><strong>저장소 사용량 박스</strong> — 진행 모니터 + 에피소드 목록 양쪽에 사용량 / 한도 / % 진행바 (75% 노랑, 90% 빨강).</li>
+  <li><strong>스킵 목록 관리</strong> — chrome.storage.sync 영구 보관 (다기기 공유). 에피소드 row 에 [스킵] 액션 + [스킵 목록] 토글로 개별 해제 / 전체 해제.</li>
+</ul>
+
+<h3>v0.4.31 (2026-05-10)</h3>
+<ul>
+  <li><strong>artifact-labels race fix</strong> — 스캔 시 NotebookLM 의 <code>&lt;span id="artifact-labels-{UUID}"&gt;</code> 가 늦게 렌더되어 dedup 키가 비어 같은 카드를 매번 신규로 잡던 사고. content.js scan 핸들러가 dedup 키 채워질 때까지 최대 3초 폴.</li>
+  <li><strong>workflow push retry</strong> — 익스텐션 ghPut 와 workflow git push 가 race 날 때 origin/main 으로 reset + 재빌드 + push 재시도 (최대 3회 backoff).</li>
+  <li><strong>4-segment titleKey fallback</strong> — artifactId 가 race 로 빈 채 들어와도 (date, titleSlug, ext) 로 dedup 회복.</li>
+</ul>
+
+<h3>v0.4.30 (2026-05-10)</h3>
+<ul>
+  <li><strong>Chrome Sync 다기기 동기화</strong> — GitHub 설정 (PAT 포함) + UI 언어가 <code>chrome.storage.sync</code> 로 이동. 같은 Google 계정의 다른 Chrome 과 자동 공유.</li>
+  <li><strong>선택해서 받기 (cross-notebook 카드 picker)</strong> — [선택해서 받기 ▾] 클릭 시 노트북별 트리 펼침, 카드별 체크박스로 일부만 다운로드.</li>
+  <li><strong>dedup 갭 fix</strong> — 옛 v0.4.0 미만 시절 3-segment 파일도 (date, title, ext) 매칭으로 함께 인식. cover.title race fix.</li>
+</ul>
+
+<h3>v0.4.27 (2026-05-08)</h3>
+<ul>
+  <li>패키징 fix · skip 표시 UI · 옵션 페이지 repo 힌트.</li>
+</ul>
+
+<h3>v0.4.21 ~ v0.4.26 (2026-05-04 ~ 05-07)</h3>
+<ul>
+  <li><strong>옵션 페이지 i18n (ko/en/de)</strong> + 사이드바 그룹 네비.</li>
+  <li><strong>bulk 완료 알림</strong> + 실패 카드 재시도 버튼.</li>
+  <li><strong>공유 ↗ 버튼</strong> (Web Share API / 클립보드 fallback) + 영구 노트북 URL 맵 + 컬럼 너비 조정.</li>
+  <li><strong>도움말 페이지 i18n</strong> (en/de 추가, 언어 스위처).</li>
+</ul>
+
+<h3>v0.4.11 ~ v0.4.20 (2026-04-30 ~ 05-03)</h3>
+<ul>
+  <li><strong>Client-side transcode (m4a → mp3 64k mono)</strong> — offscreen document + lamejs. 30분 m4a ~6초.</li>
+  <li><strong>에피소드 목록 관리 페이지</strong> — 정렬 / 그룹 / 이름 변경 / 삭제.</li>
+  <li><strong>대형 파일 fallback</strong> — Contents API ~37 MiB 초과 시 Git Data API blob (100 MiB 까지).</li>
+  <li>transcode 안정화 (offscreen lifetime, large file message channel).</li>
+</ul>
+
+<h3>v0.4.0 ~ v0.4.10 (2026-04-29 ~ 04-30)</h3>
+<ul>
+  <li><strong>Chrome Web Store 등록 준비</strong> — 아이콘 / 패키징 스크립트 / 스토어 listing 카피 / privacy policy.</li>
+  <li><strong>일괄 다운로드 (Option 1)</strong> + <strong>Cross-notebook sweep (Option 2 / v1 cron 동등)</strong>.</li>
+  <li><strong>관리 페이지 진행 모니터</strong> — 라이브 진행 상태 / 통계 / 실패 목록 / 최근 push 활동 로그.</li>
+  <li><strong>RSS 두 모드</strong> (GitHub Actions 위임 / 익스텐션 직접 생성) + <strong>retention</strong> (maxItems, maxAgeDays, maxTotalMB).</li>
+  <li><strong>UUID 기반 dedup</strong> — 4-segment 파일명 (date / 노트북 / shortId / 제목).</li>
+</ul>
+
+<h3>v0.3.x (2026-04-29)</h3>
+<ul>
+  <li>GitHub Contents API push — 다운로드 트리거와 병행해 SW 가 audio 재fetch + repo 에 PUT.</li>
+</ul>
+
+<h3>v0.2.x (2026-04-28)</h3>
+<ul>
+  <li>다운로드 트리거 — content script 가 ⋮ 메뉴 → "다운로드" 자동 클릭, background 가 파일명 rename.</li>
+</ul>
 
 <hr>
 
