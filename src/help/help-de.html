@@ -456,6 +456,11 @@
 
 <p style="font-size: 12px; color: #666;">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind.</p>
 
+<h3>v0.4.36 (2026-05-12)</h3>
+<ul>
+  <li><strong>Lokalen Download nach erfolgreichem GitHub-Push automatisch löschen</strong> (Standard EIN) — Chrome-Downloads-Ordner wird nach erfolgreichem Push aufgeräumt. Da die mp3 nun in GitHub liegt, ist die lokale Kopie redundant. Fehlgeschlagene Pushes bleiben erhalten (retry-fähig). Im GitHub-Einstellungspanel umschaltbar.</li>
+</ul>
+
 <h3>v0.4.35 (2026-05-12)</h3>
 <ul>
   <li><strong>Retention-Grenze über die Metadatenseite editierbar</strong> — <code>retention.maxTotalMB</code> in <code>docs/podcast.json</code> direkt aus der Extension-UI änderbar. Standard 2000. Auslastungs-Panel wird beim Speichern sofort aktualisiert.</li>

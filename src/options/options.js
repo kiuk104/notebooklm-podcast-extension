@@ -6,6 +6,7 @@ const fields = {
   committerEmail: document.getElementById("committer-email"),
   autoDownloadNew: document.getElementById("auto-download-new"),
   bulkSkipOlderDays: document.getElementById("bulk-skip-older-days"),
+  deleteLocalOnPushSuccess: document.getElementById("delete-local-on-push"),
 };
 const statusEl = document.getElementById("status");
 const feedUrlEl = document.getElementById("feed-url");
@@ -13,7 +14,7 @@ const openFeedEl = document.getElementById("open-feed");
 const copyFeedBtn = document.getElementById("copy-feed");
 const langSelectEl = document.getElementById("lang-select");
 
-const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "autoDownloadNew", "bulkSkipOlderDays"];
+const KEYS = ["token", "repo", "rssMode", "committerName", "committerEmail", "autoDownloadNew", "bulkSkipOlderDays", "deleteLocalOnPushSuccess"];
 const RSS_MODE_DEFAULT = "actions";
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -60,6 +61,10 @@ async function cfgSet(obj) {
   for (const k of KEYS) {
     if (k === "autoDownloadNew") {
       fields.autoDownloadNew.checked = !!stored.autoDownloadNew;
+    } else if (k === "deleteLocalOnPushSuccess") {
+      // default ON — 옵션이 한 번도 저장 안 됐으면 (undefined) 자동 활성. 사용자가
+      // 명시적으로 false 저장한 경우만 비활성.
+      fields.deleteLocalOnPushSuccess.checked = stored.deleteLocalOnPushSuccess !== false;
     } else if (k === "bulkSkipOlderDays") {
       // 빈값 / undefined 면 placeholder 의 default 가 보이도록 비워둠.
       if (stored[k] !== undefined && stored[k] !== null && stored[k] !== "") {
@@ -163,6 +168,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     committerEmail: fields.committerEmail.value.trim(),
     autoDownloadNew: fields.autoDownloadNew.checked,
     bulkSkipOlderDays: fields.bulkSkipOlderDays.value.trim(),
+    deleteLocalOnPushSuccess: fields.deleteLocalOnPushSuccess.checked,
   });
   show(t("github.status.saved"), "success");
   loadStorageUsage();

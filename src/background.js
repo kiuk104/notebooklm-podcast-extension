@@ -39,7 +39,7 @@ const PLACEHOLDER_TITLE_RE = /^audio[\s\-_]?\d+$/i;
 const CFG_KEYS = [
   "token", "repo", "rssMode", "autoDownloadNew",
   "committerName", "committerEmail", "uiLang",
-  "bulkSkipOlderDays",
+  "bulkSkipOlderDays", "deleteLocalOnPushSuccess",
 ];
 
 // 일괄 다운로드에서 cover-subtitle-date 기준으로 N 일 이상 옛 노트북의 카드는 처음부터
@@ -736,13 +736,62 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   // 인지 판정하는 키 — shortId 가 1차, 옛 포맷 파일은 (date, titleSlug) 로 매칭해
   // 노트북 rename 도 견딘다.
   const dedupHints = { shortId, date, titleSlug, ext };
+  const downloadId = item.id;
   pushEpisode(item.url, filename, dedupHints).then((result) => {
-    notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, ...result });
+    notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, downloadId, ...result });
+    // push 성공 시 로컬 다운로드 자동 삭제 (옵션 ON 일 때).
+    // ok=true 면 GitHub 에 파일 있음 → 로컬은 잉여. skipped=true (dedup hit) 도
+    // 같은 의미 — 이미 GitHub 에 있으니 로컬도 안 둠. push 실패 (catch 분기) 만
+    // 보존 — 사용자가 재시도 또는 수동 업로드할 수 있게.
+    deleteLocalDownloadIfEnabled(downloadId).catch((e) => {
+      console.warn("[localDelete]", e.message);
+    });
   }).catch((err) => {
     console.error("[push]", filename, err);
-    notifyPush({ ok: false, episodeTitle: meta.episodeTitle, filename, error: err.message });
+    notifyPush({ ok: false, episodeTitle: meta.episodeTitle, filename, downloadId, error: err.message });
+    // push 실패 시 로컬 파일 유지 — 사용자가 재시도하거나 수동 GitHub 업로드 가능.
   });
 });
+
+// chrome.downloads.removeFile + erase 로 디스크 + history 정리. download 가 아직
+// in-progress 면 onChanged 로 complete 대기 후 처리. 옵션 OFF 면 no-op.
+async function deleteLocalDownloadIfEnabled(downloadId) {
+  if (!downloadId) return;
+  const cfg = await cfgGet(["deleteLocalOnPushSuccess"]);
+  // default ON — 사용자가 명시적으로 false 설정하지 않은 한 자동 삭제.
+  if (cfg.deleteLocalOnPushSuccess === false) return;
+  const doRemove = async () => {
+    try { await chrome.downloads.removeFile(downloadId); } catch {}
+    try { await chrome.downloads.erase({ id: downloadId }); } catch {}
+  };
+  try {
+    const items = await chrome.downloads.search({ id: downloadId });
+    const it = items?.[0];
+    if (!it) return;
+    if (it.state === "complete") {
+      await doRemove();
+      return;
+    }
+    // in_progress — onChanged 로 complete 대기. 5분 timeout 으로 안전 그물.
+    const listener = (delta) => {
+      if (delta.id !== downloadId) return;
+      if (delta.state?.current === "complete") {
+        chrome.downloads.onChanged.removeListener(listener);
+        clearTimeout(timer);
+        doRemove();
+      } else if (delta.state?.current === "interrupted") {
+        chrome.downloads.onChanged.removeListener(listener);
+        clearTimeout(timer);
+      }
+    };
+    chrome.downloads.onChanged.addListener(listener);
+    const timer = setTimeout(() => {
+      chrome.downloads.onChanged.removeListener(listener);
+    }, 5 * 60 * 1000);
+  } catch (e) {
+    console.warn("[localDelete] search 실패:", e.message);
+  }
+}
 
 function notifyPush(detail) {
   chrome.runtime.sendMessage({ type: "push:result", ...detail }).catch(() => {

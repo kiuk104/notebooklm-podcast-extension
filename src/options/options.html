@@ -388,6 +388,14 @@
           </div>
         </label>
 
+        <label style="display:flex; align-items:center; gap:8px; font-weight:500; margin-top:18px;">
+          <input type="checkbox" id="delete-local-on-push" style="width:auto; margin:0; padding:0;">
+          <span data-i18n="github.deleteLocal">GitHub push 성공 시 로컬 다운로드 자동 삭제</span>
+        </label>
+        <div class="hint" style="margin-left:24px;" data-i18n="github.deleteLocal.hint">
+          NotebookLM 의 ⋮ → "다운로드" 트리거가 만든 Chrome Downloads 폴더의 m4a/mp4 파일을 push 완료 후 chrome.downloads.removeFile + erase 로 정리. GitHub 에 mp3 가 안전하게 보관됐으니 로컬 사본은 잉여 디스크 사용. push 실패한 파일은 보존 — 재시도 또는 수동 업로드 가능. default ON.
+        </div>
+
         <label><span data-i18n="github.committer">커밋 시 사용할 이름 / 이메일 (선택)</span>
           <input type="text" id="committer-name" placeholder="kiuk104">
           <input type="email" id="committer-email" placeholder="kiuk104@gmail.com" style="margin-top:6px">

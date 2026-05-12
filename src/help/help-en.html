@@ -456,6 +456,11 @@
 
 <p style="font-size: 12px; color: #666;">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. User-visible changes only below.</p>
 
+<h3>v0.4.36 (2026-05-12)</h3>
+<ul>
+  <li><strong>Auto-remove local download after a successful GitHub push</strong> (default ON) — the m4a/mp4 in your Chrome Downloads folder is cleaned up after push. Since GitHub now holds the mp3, the local copy is redundant disk use. Failed pushes are kept (retry-able). Toggleable in the GitHub settings page.</li>
+</ul>
+
 <h3>v0.4.35 (2026-05-12)</h3>
 <ul>
   <li><strong>Edit retention cap from the metadata page</strong> — <code>retention.maxTotalMB</code> in <code>docs/podcast.json</code> can now be changed from the extension UI. Default 2000. Usage panel refreshes immediately on save.</li>
