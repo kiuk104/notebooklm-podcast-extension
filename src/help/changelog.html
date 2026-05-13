@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>NotebookLM Podcast Sync — 버전별 변경사항</title>
+<style>
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 24px 80px; color: #222; line-height: 1.6; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  p, li { font-size: 13px; }
+  p.sub { color: #666; margin-top: 0; font-size: 13px; }
+  code { background: #f4f4f5; padding: 1px 6px; border-radius: 3px; font-size: 12px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  ol li, ul li { margin: 4px 0; }
+  a { color: #2563eb; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+  .lang-switch { font-size: 12px; color: #6b7280; margin: 0 0 8px; }
+  .lang-switch a { color: #2563eb; text-decoration: none; margin-right: 10px; }
+  .lang-switch a.current { color: #111; font-weight: 600; text-decoration: underline; }
+  .back { font-size: 12.5px; margin: 0 0 16px; }
+</style>
+</head>
+<body>
+
+<p class="lang-switch">
+  <a href="changelog.html" class="current">한국어</a>
+  <a href="changelog-en.html">English</a>
+  <a href="changelog-de.html">Deutsch</a>
+</p>
+
+<p class="back">← <a href="help.html">도움말로 돌아가기</a></p>
+
+<h1>버전별 변경사항 (상세)</h1>
+<p class="sub">전체 commit 히스토리는 <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a> 참고. 아래는 사용자 입장에서 체감되는 변경만, 최신 버전부터.</p>
+
+<h3>v0.4.40 (2026-05-13) — 도움말 페이지 재구성</h3>
+<ul>
+  <li><strong>도움말의 §12 버전별 업데이트를 테마 요약으로 압축</strong> + 버전 단위 상세는 이 페이지 (changelog) 로 분기. 사용자가 도움말 페이지 한 화면에서 큰 흐름만 빠르게 훑고, 필요할 때 상세 페이지로 점프.</li>
+</ul>
+
+<h3>v0.4.39 (2026-05-13) — 다기기 스킵 누락 수정</h3>
+<ul>
+  <li><strong>스킵한 카드가 다른 기기에서 다시 다운로드되던 race 수정</strong> — 한 기기에서 음성개요를 스킵 → 다른 기기 스캔 시 그 카드의 <code>artifact-labels</code> DOM 이 늦게 렌더되면 shortId 가 빈 문자열로 들어와 스킵 필터가 우회되던 버그. <code>(date, titleSlug)</code> 폴백 매칭을 추가해 race 케이스도 정상 차단. 옵션 페이지 트리 UI 의 "스킵됨" 표시도 같이 정확해짐.</li>
+</ul>
+
+<h3>v0.4.38 (2026-05-13) — 일괄 스캔 가속</h3>
+<ul>
+  <li><strong>직전 스캔 결과 자동 재사용</strong> — 30분 안에 [모든 노트북 스캔] 을 또 누르면 풀 스캔 없이 곧바로 결과 표시. autoDownload 직후 한 번 더 확인하는 흐름의 대기시간을 0 에 가깝게. Shift+클릭으로 강제 풀 스캔.</li>
+  <li><strong>노트북별 변경 감지 캐시</strong> — 홈 페이지의 노트북 카드에서 절대 시간 / 카운트 시그널을 추출해 "구조적 지문" 생성. 4시간 이내에 한 번 스캔된 노트북은 변동 없으면 탭 안 열고 캐시 그대로 사용. 새 음성개요 추가 등 변동 시엔 지문이 바뀌어 자동 풀 스캔.</li>
+  <li><strong>graceful degrade</strong> — NotebookLM DOM 이 시그널을 노출 안 하면 매번 풀 스캔 (이전 동작과 동일). 추출률은 SW console 의 <code>[scan:list]</code> 로그에서 확인 가능.</li>
+</ul>
+
+<h3>v0.4.37 (2026-05-13) — 일괄 다운로드 안정화</h3>
+<ul>
+  <li><strong>UI freeze 해소</strong> — 큰 카드 (40MB m4a) 다운로드 도중 popup / 옵션 페이지가 1~2초씩 멈추던 현상 제거. SW thread 의 동기 base64 인코딩을 offscreen document 로 완전히 이관.</li>
+  <li><strong>일괄 다운로드 popup 윈도우 숨김</strong> — 다른 웹페이지 작업 중 NotebookLM popup 이 앞으로 튀어나오던 현상 회피. 화면 밖 좌표 (-32000, -32000) 로 띄움. 다운로드 동작은 동일.</li>
+  <li><strong>카드별 라이브 진행률 표시</strong> — 진행 모니터의 현재 카드 영역에 stage (다운로드/MP3 변환/업로드) + byte 진행률 바. "다운로드 시작/끝" 만 보이던 옛 UI 보다 훨씬 자세한 활동 표시.</li>
+  <li><strong>Stall 카드 빠른 회복</strong> — 한 카드가 멈추면 10분 고정 timeout 대신 90초 idle (진행률 0건) 감지 후 다음 카드로 자동 이동. 정상 카드는 idle 안 걸림 — fetch chunk 마다 활성 신호 발생.</li>
+</ul>
+
+<h3>v0.4.36 (2026-05-12)</h3>
+<ul>
+  <li><strong>GitHub push 성공 시 로컬 다운로드 자동 삭제</strong> (default ON) — Chrome Downloads 폴더의 m4a/mp4 가 push 후 자동 정리. GitHub 에 mp3 안전하게 보관됐으니 로컬 사본 잉여. push 실패한 파일은 보존 (재시도 가능). GitHub 연결 페이지에서 OFF 가능.</li>
+</ul>
+
+<h3>v0.4.35 (2026-05-12)</h3>
+<ul>
+  <li><strong>팟캐스트 메타 페이지에 retention 한도 입력란</strong> — <code>docs/podcast.json</code> 의 <code>retention.maxTotalMB</code> 를 익스텐션 UI 에서 직접 편집. default 2000. 저장 시 사용량 박스 즉시 갱신.</li>
+</ul>
+
+<h3>v0.4.34 (2026-05-11)</h3>
+<ul>
+  <li><strong>[한도 초과분 정리] 버튼</strong> — 사용량 박스 (진행 모니터 + 에피소드 목록) 에서 retention 한도 초과 시 옛 파일을 익스텐션이 직접 ghDelete + 영구 스킵 등록. workflow 의 retention 컷과 같은 결과지만 스킵 목록에도 같이 등록돼 다음 스캔에서 신규 재인식 회피.</li>
+  <li><strong>다중선택 [선택 스킵]</strong> — 에피소드 목록 툴바에 [선택 삭제] 옆 파란 버튼 추가. 체크박스 다수 선택 후 한꺼번에 삭제 + 스킵 등록.</li>
+</ul>
+
+<h3>v0.4.33 (2026-05-10)</h3>
+<ul>
+  <li><strong>[스킵] = 삭제 + 영구 차단으로 통합</strong> — [삭제] 는 단순 삭제 (다음 스캔에서 다시 받을 가능성 남김), [스킵] 은 삭제 + 영구 스킵 등록 (공간 확보 + 우후 차단) 으로 역할 명확 분리.</li>
+  <li><strong>스킵 목록에 메타 보관</strong> — 등록 시 filename / title / 노트북명 / 날짜 / 등록 시각 함께 저장. [스킵 목록] 토글 패널에서 어떤 파일이었는지 사후 확인 가능.</li>
+  <li>옛 v0.4.32 스킵 목록 (shortId 만) 자동 마이그레이션.</li>
+</ul>
+
+<h3>v0.4.32 (2026-05-10)</h3>
+<ul>
+  <li><strong>retention 영구 루프 회피</strong> — bulk push → workflow 가 retention 으로 즉시 삭제 → 다음 스캔이 같은 카드를 신규로 재인식 → 무한 다운로드 사고의 구조적 해결.</li>
+  <li><strong>옛 카드 자동 스킵 (default 730일)</strong> — GitHub 연결 페이지에 일수 입력란. 노트북 생성일이 N일 이전인 카드는 일괄 다운로드에서 처음부터 스킵.</li>
+  <li><strong>저장소 사용량 박스</strong> — 진행 모니터 + 에피소드 목록 양쪽에 사용량 / 한도 / % 진행바 (75% 노랑, 90% 빨강).</li>
+  <li><strong>스킵 목록 관리</strong> — chrome.storage.sync 영구 보관 (다기기 공유). 에피소드 row 에 [스킵] 액션 + [스킵 목록] 토글로 개별 해제 / 전체 해제.</li>
+</ul>
+
+<h3>v0.4.31 (2026-05-10)</h3>
+<ul>
+  <li><strong>artifact-labels race fix</strong> — 스캔 시 NotebookLM 의 <code>&lt;span id="artifact-labels-{UUID}"&gt;</code> 가 늦게 렌더되어 dedup 키가 비어 같은 카드를 매번 신규로 잡던 사고. content.js scan 핸들러가 dedup 키 채워질 때까지 최대 3초 폴.</li>
+  <li><strong>workflow push retry</strong> — 익스텐션 ghPut 와 workflow git push 가 race 날 때 origin/main 으로 reset + 재빌드 + push 재시도 (최대 3회 backoff).</li>
+  <li><strong>4-segment titleKey fallback</strong> — artifactId 가 race 로 빈 채 들어와도 (date, titleSlug, ext) 로 dedup 회복.</li>
+</ul>
+
+<h3>v0.4.30 (2026-05-10)</h3>
+<ul>
+  <li><strong>Chrome Sync 다기기 동기화</strong> — GitHub 설정 (PAT 포함) + UI 언어가 <code>chrome.storage.sync</code> 로 이동. 같은 Google 계정의 다른 Chrome 과 자동 공유.</li>
+  <li><strong>선택해서 받기 (cross-notebook 카드 picker)</strong> — [선택해서 받기 ▾] 클릭 시 노트북별 트리 펼침, 카드별 체크박스로 일부만 다운로드.</li>
+  <li><strong>dedup 갭 fix</strong> — 옛 v0.4.0 미만 시절 3-segment 파일도 (date, title, ext) 매칭으로 함께 인식. cover.title race fix.</li>
+</ul>
+
+<h3>v0.4.27 (2026-05-08)</h3>
+<ul>
+  <li>패키징 fix · skip 표시 UI · 옵션 페이지 repo 힌트.</li>
+</ul>
+
+<h3>v0.4.21 ~ v0.4.26 (2026-05-04 ~ 05-07)</h3>
+<ul>
+  <li><strong>옵션 페이지 i18n (ko/en/de)</strong> + 사이드바 그룹 네비.</li>
+  <li><strong>bulk 완료 알림</strong> + 실패 카드 재시도 버튼.</li>
+  <li><strong>공유 ↗ 버튼</strong> (Web Share API / 클립보드 fallback) + 영구 노트북 URL 맵 + 컬럼 너비 조정.</li>
+  <li><strong>도움말 페이지 i18n</strong> (en/de 추가, 언어 스위처).</li>
+</ul>
+
+<h3>v0.4.11 ~ v0.4.20 (2026-04-30 ~ 05-03)</h3>
+<ul>
+  <li><strong>Client-side transcode (m4a → mp3 64k mono)</strong> — offscreen document + lamejs. 30분 m4a ~6초.</li>
+  <li><strong>에피소드 목록 관리 페이지</strong> — 정렬 / 그룹 / 이름 변경 / 삭제.</li>
+  <li><strong>대형 파일 fallback</strong> — Contents API ~37 MiB 초과 시 Git Data API blob (100 MiB 까지).</li>
+  <li>transcode 안정화 (offscreen lifetime, large file message channel).</li>
+</ul>
+
+<h3>v0.4.0 ~ v0.4.10 (2026-04-29 ~ 04-30)</h3>
+<ul>
+  <li><strong>Chrome Web Store 등록 준비</strong> — 아이콘 / 패키징 스크립트 / 스토어 listing 카피 / privacy policy.</li>
+  <li><strong>일괄 다운로드 (Option 1)</strong> + <strong>Cross-notebook sweep (Option 2 / v1 cron 동등)</strong>.</li>
+  <li><strong>관리 페이지 진행 모니터</strong> — 라이브 진행 상태 / 통계 / 실패 목록 / 최근 push 활동 로그.</li>
+  <li><strong>RSS 두 모드</strong> (GitHub Actions 위임 / 익스텐션 직접 생성) + <strong>retention</strong> (maxItems, maxAgeDays, maxTotalMB).</li>
+  <li><strong>UUID 기반 dedup</strong> — 4-segment 파일명 (date / 노트북 / shortId / 제목).</li>
+</ul>
+
+<h3>v0.3.x (2026-04-29)</h3>
+<ul>
+  <li>GitHub Contents API push — 다운로드 트리거와 병행해 SW 가 audio 재fetch + repo 에 PUT.</li>
+</ul>
+
+<h3>v0.2.x (2026-04-28)</h3>
+<ul>
+  <li>다운로드 트리거 — content script 가 ⋮ 메뉴 → "다운로드" 자동 클릭, background 가 파일명 rename.</li>
+</ul>
+
+<hr>
+
+<p style="font-size: 12px; color: #666;">
+구현 노트 / 디버깅 디테일:
+<a href="../../README.md" target="_blank">README.md</a> ·
+<a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a>
+</p>
+
+<p class="back">← <a href="help.html">도움말로 돌아가기</a></p>
+
+</body>
+</html>

@@ -88,6 +88,74 @@
     return Array.from(urls);
   }
 
+  // 노트북 카드의 walk-up 루트 — Material Design / Angular 패턴 후보 + 폴백.
+  // 너무 좁으면 (`a` 자체) hint 추출 불가, 너무 넓으면 (`body`) 다른 카드 정보가 섞임.
+  function findCardContainer(a) {
+    return a.closest('[role="article"]')
+      || a.closest('mat-card')
+      || a.closest('article')
+      || a.closest('project-button')
+      || a.closest('.project-button-content')
+      || a.parentElement?.parentElement
+      || a;
+  }
+
+  // 노트북 카드에서 "구조적 지문" 을 만든다 — 노트북에 변동 (새 음성개요 추가 / 이름 변경
+  // / 소스 추가) 이 있으면 hint 가 변경되도록 안정 시그널만 사용. 상대 시간 "5분 전" 같은
+  // 시간 흐름만으로 변하는 텍스트는 사용하지 않음.
+  //
+  // 우선순위:
+  //   1) <time datetime="ISO"> — 표준 절대 시간.
+  //   2) [title] 속성 안의 절대 날짜 문자열 (ISO / GMT / "+0200" 패턴).
+  //   3) [aria-label] 안의 숫자 패턴 — "5 audio overviews" 같은 카운트 시그널.
+  //
+  // 하나도 없으면 null 반환 → background 가 cache 사용 안 하고 풀 스캔 fallback.
+  // NotebookLM DOM 변경 시 graceful degrade (느려지지만 깨지진 않음).
+  function extractModifiedHint(card) {
+    if (!card) return null;
+    const parts = [];
+    for (const t of card.querySelectorAll("time[datetime]")) {
+      const v = t.getAttribute("datetime");
+      if (v) parts.push("t:" + v);
+    }
+    for (const el of card.querySelectorAll("[title]")) {
+      const title = (el.getAttribute("title") || "").trim();
+      // 절대 날짜 / 시간 패턴만 — UI 액션 힌트 ("Click to open") 등은 거름.
+      if (title && /\d{4}|GMT|UTC|\+\d{2}:?\d{2}/.test(title)) {
+        parts.push("T:" + title);
+      }
+    }
+    for (const el of card.querySelectorAll("[aria-label]")) {
+      const label = (el.getAttribute("aria-label") || "").trim();
+      // 숫자가 들어간 label 만. NotebookLM 이 카운트 / 시간 정보를 aria-label 로 노출 가능성.
+      if (label && /\d/.test(label) && label.length < 200) {
+        parts.push("a:" + label.replace(/\s+/g, " "));
+      }
+    }
+    if (parts.length === 0) return null;
+    return parts.sort().join("|");
+  }
+
+  // 홈 페이지의 노트북 카드들에서 URL + modifiedHint 추출. (a) per-notebook 캐시의 키.
+  // 캐시 재사용 판정: 직전 스캔의 동일 url 항목과 hint 가 같으면 그 노트북은 변동 없음 →
+  // 풀 스캔 스킵 + 옛 audios 그대로 사용. hint 가 null 이면 매번 풀 스캔 fallback (안전).
+  function getNotebookCards() {
+    const seenUrls = new Set();
+    const out = [];
+    for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
+      const href = a.getAttribute("href") || "";
+      if (!/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) continue;
+      let url;
+      try { url = new URL(href, location.origin).href; } catch { continue; }
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      const card = findCardContainer(a);
+      const modifiedHint = extractModifiedHint(card);
+      out.push({ url, modifiedHint });
+    }
+    return out;
+  }
+
   // home 페이지가 lazy render 인 경우 끝까지 스크롤해서 모든 카드를 DOM 에 올린다.
   async function scrollToLoadAll() {
     let lastHeight = -1;
@@ -175,10 +243,20 @@
     }
     if (msg?.type === "scan:list") {
       // home 페이지에서 노트북 URL 일괄 수집. lazy render 대비 끝까지 스크롤.
+      // 응답에 notebooks: [{url, modifiedHint}, ...] 도 같이 — (a) per-notebook 캐시 용.
+      // urls 키는 옛 API 호환 (혹시 다른 호출자가 있을 경우).
       (async () => {
         try {
           await scrollToLoadAll();
-          sendResponse({ ok: true, urls: getNotebookUrls() });
+          const notebooks = getNotebookCards();
+          // 진단 로그 — modifiedHint 가 몇 % 추출됐는지. 0% 면 selector 조정 필요.
+          const withHint = notebooks.filter((n) => n.modifiedHint).length;
+          console.log(`[scan:list] ${notebooks.length}개 노트북, modifiedHint 추출 ${withHint}개 (${notebooks.length > 0 ? Math.round(withHint * 100 / notebooks.length) : 0}%)`);
+          sendResponse({
+            ok: true,
+            notebooks,
+            urls: notebooks.map((n) => n.url),
+          });
         } catch (e) {
           sendResponse({ ok: false, error: e.message });
         }

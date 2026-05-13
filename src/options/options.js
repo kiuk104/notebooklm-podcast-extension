@@ -376,6 +376,11 @@ const taskRecentEl = document.getElementById("task-recent");
 const taskActionsEl = document.getElementById("task-actions");
 const taskClearBtn = document.getElementById("task-clear");
 const taskCancelBtn = document.getElementById("task-cancel");
+const cardProgressEl = document.getElementById("card-progress");
+const cardProgressTitleEl = document.getElementById("card-progress-title");
+const cardProgressStageEl = document.getElementById("cp-stage-label");
+const cardProgressBytesEl = document.getElementById("cp-bytes");
+const cardProgressFillEl = document.getElementById("card-progress-fill");
 
 function taskLabel(task) {
   if (task === "scan:all") return t("task.label.scan");
@@ -420,6 +425,40 @@ function formatTimeAgo(ms) {
   if (min < 60) return t("time.ago.min", { n: min });
   const hr = Math.floor(min / 60);
   return t("time.ago.hour", { n: hr });
+}
+
+// 현재 카드의 byte-stage 진행률. background 가 setTaskState({currentCardProgress})
+// 로 갱신하면 broadcast 되어 여기서 라이브 표시. 카드 push 끝나면 null 로 리셋되면서
+// 패널이 자동 hidden. running 상태가 아니면 표시 안 함 (예: 완료 후 stale 값).
+function renderCardProgress(progress, status) {
+  if (!progress || !progress.episodeTitle || status !== "running") {
+    cardProgressEl.style.display = "none";
+    return;
+  }
+  cardProgressEl.style.display = "block";
+  cardProgressTitleEl.textContent = progress.episodeTitle;
+  cardProgressTitleEl.title = progress.episodeTitle;
+  cardProgressStageEl.textContent = stageLabel(progress.stage);
+  if (progress.bytes && progress.totalBytes) {
+    const pct = Math.min(100, (progress.bytes / progress.totalBytes) * 100);
+    cardProgressFillEl.style.width = pct.toFixed(1) + "%";
+    cardProgressBytesEl.textContent = `${formatBytes(progress.bytes)} / ${formatBytes(progress.totalBytes)}`;
+  } else if (progress.bytes) {
+    // totalBytes 모름 (Content-Length 없는 응답) — fill 은 30% 임시.
+    cardProgressFillEl.style.width = "30%";
+    cardProgressBytesEl.textContent = formatBytes(progress.bytes);
+  } else {
+    cardProgressFillEl.style.width = "0%";
+    cardProgressBytesEl.textContent = "";
+  }
+}
+
+// 진행 stage → 표시 텍스트. i18n key 있으면 그쪽, 없으면 stage 그대로 노출.
+function stageLabel(stage) {
+  const key = `monitor.cardProgress.stage.${stage}`;
+  const translated = t(key);
+  // i18n 미정의면 t() 가 key 자체를 반환 — 그 경우 fallback 으로 stage raw.
+  return translated === key ? stage : translated;
 }
 
 function renderRecentPushes(recent) {
@@ -517,6 +556,7 @@ function renderTaskState(state) {
   }
 
   renderRecentPushes(state.recentPushes);
+  renderCardProgress(state.currentCardProgress, state.status);
 
   // 진행 중에는 [강제 중단] 만, 종료 후에는 [초기화] 만 노출.
   if (state.status === "running") {

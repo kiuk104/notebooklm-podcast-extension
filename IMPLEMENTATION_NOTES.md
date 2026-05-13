@@ -835,6 +835,180 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 ---
 
+## 17. 일괄 다운로드 안정화 — SW base64 제거 / offscreen popup / idle watchdog (2026-05-13, v0.4.37)
+
+### 배경
+
+사용자 리포트:
+
+1. "모든 노트북 스캔 + 다운로드 도중 popup/options UI 가 자주 freeze"
+2. "다운로드 중 다른 웹페이지 보고 있는데 갑자기 NotebookLM 윈도우가 앞으로 튀어나옴"
+
+두 증상 모두 v0.4.36 까지 미해결 — bulk:remote 의 SW 메인 스레드가 매 카드 1-2초씩 동기 작업으로 block 되고, bulk window 가 visible 화면에 떠 있는 게 원인.
+
+### 원인 — 세 갈래
+
+**(a) SW thread 가 매 카드마다 동기 base64 인코딩** — `arrayBufferToBase64(buf)` 가 `String.fromCharCode.apply` 를 5MB(mp3) ~ 40MB(m4a fallback) Uint8Array 에 chunk 별로 돌리고 `btoa(parts.join(""))`. 큰 카드에선 1-2초 동안 SW message loop 가 완전히 정지. 그 동안 popup ping / options 의 `task:state` 메시지가 응답 못 받아 "freeze" 로 보임. 거기에 더해 m4a 경로는 offscreen 이 b64 string 으로 SW 에 돌려준 걸 SW 가 *다시 ArrayBuffer 로 변환* (`base64ToArrayBuffer`) 한 뒤 *또 b64 로 변환* — 이중으로 낭비.
+
+**(b) bulk window 가 visible 좌표에 위치** — `chrome.windows.create({type:"popup", focused:false, width:800, height:600})` 만으론 Windows 에서 popup 이 종종 메인 윈도우 앞으로 튀어나옴 (chromium 의 `focused:false` 를 OS 가 honor 안 하는 거동). 사용자는 다른 웹페이지 작업 중인데 NotebookLM popup 이 떠서 시야 가림.
+
+**(c) Fixed 10분 timeout 이 stall 카드를 막아 다음 카드로 못 넘김** — `PUSH_RESULT_TIMEOUT = 600000`. NotebookLM 응답 / debugger click miss / 메뉴 미등장으로 한 카드가 stuck 되면 무조건 10분 대기. 사용자는 그 동안 "왜 안 움직이지" 로 인식.
+
+### 대응 — 세 단 패치 (v0.4.37)
+
+**1) `pushEpisode` 의 b64 변환을 offscreen 으로 완전 이관**
+
+offscreen 의 port 핸들러에 `mode: "fetch"` (transcode 없이 fetch+b64) 추가, transcode 경로 (`mode: "transcode"`) 와 한 함수로 통일. 두 경로 모두 `{ b64, size, sourceSize }` 형태로 SW 에 반환 — SW 는 그 b64 string 을 `ghPut` body 에 그대로 넣음. SW thread 의 `arrayBufferToBase64` / `base64ToArrayBuffer` 모두 제거.
+
+- 새 SW 헬퍼: [src/background.js](src/background.js) `fetchEncodeViaOffscreen(audioUrl, { transcode, onProgress })`
+- 옛 `transcodeViaOffscreen` 삭제
+- offscreen 측: [src/offscreen/transcode.js](src/offscreen/transcode.js) 의 port 핸들러가 두 mode 분기 + 진행률 비콘 emit (250ms throttle 로 fetch chunk 마다)
+
+**2) bulk window 오프스크린 좌표화**
+
+[src/background.js](src/background.js) `ensureBulkWindow()` 가 `chrome.windows.create({left:-32000, top:-32000, ...})` 로 생성 후 `chrome.windows.update` 로 한 번 더 nudge. Chrome 이 좌표 clamp 해도 두 단계 적용으로 거의 항상 화면 밖에 위치. `visibilityState` 는 윈도우 위치 무관하게 'visible' 유지되어 NotebookLM download 트리거는 정상 발사.
+
+> 한계: 일부 OS/플랫폼 (특정 macOS Spaces 설정 등) 은 negative coord 도 visible 영역으로 clamp 할 수 있음. 그 케이스엔 popup 이 좌상단에 뜨지만 `focused:false` 라 사용자 메인 윈도우 포커스는 그대로 — 시각만 거추장스러움.
+
+**3) Fixed timeout 을 idle-watchdog 로 교체 + UI 라이브 진행률**
+
+- `PUSH_IDLE_TIMEOUT = 90s` — 어떤 progress 비콘도 안 오면 stall 판정 → 다음 카드.
+- `PUSH_HARD_TIMEOUT = 15min` — 마지노선 (무한 progress emit 사고 대비).
+- offscreen fetch chunk + SW 의 ghGet/ghPut stage 가 모두 `emitCardProgress()` 로 비콘 발사. 활성 카드의 idle 타이머가 매번 reset 되어 정상 다운로드는 절대 timeout 안 됨.
+- 새 헬퍼: [src/background.js](src/background.js) `waitPushResultLocalWithWatchdog`, `emitCardProgress`.
+- `currentTaskState.currentCardProgress = { episodeTitle, stage, bytes, totalBytes }`. 옵션 페이지가 라이브 표시.
+- UI: [src/options/options.html](src/options/options.html) 에 `#card-progress` 패널 추가, [src/options/options.js](src/options/options.js) 의 `renderCardProgress()` 가 stage 라벨 + bytes/totalBytes 막대 표시. i18n 키 ko/en/de 모두 추가.
+
+### 학습
+
+- **SW thread 의 동기 work 는 모두 message loop blocker** — `String.fromCharCode.apply` / `btoa` / 큰 `Uint8Array` 순회 등은 사용자 입장에선 "UI freeze" 와 구별 불가. offscreen document 가 있다면 무거운 동기 작업은 거기서 끝내고 SW 는 결과 string/object 만 받는 게 정공법.
+- **`focused:false` 는 plamform-dependent** — Windows / 일부 Linux 환경에선 무시 가능. 안 보이게 하려면 좌표를 화면 밖으로 미는 게 더 robust.
+- **Fixed timeout 은 정상 케이스 / stall 케이스 둘 다 안 맞음** — 정상 카드는 5분이면 충분, stall 카드는 10분 끝까지 기다리는 게 무의미. idle-watchdog (= 활성 신호로 reset 되는 타이머) 가 두 케이스 모두 만족. 비용: progress 비콘을 발생시키는 위치를 빠짐없이 식별.
+- **dedup hint 의 b64 string 그대로 흘리기** — 옛 코드는 SW 가 ArrayBuffer 로 들고 다니다 마지막에 b64 로 변환했는데, ghPut 도 결국 b64 받음. ArrayBuffer 표현이 필요한 곳이 없으면 처음부터 b64 로 들고 다니는 게 한 라운드의 변환을 절약.
+
+### 검증 핸드오프
+
+- popup/options 의 freeze 가 사라졌는지: 큰 카드 (40MB m4a) 다운로드 중 `task:state` 메시지가 매 250ms 마다 갱신되는지 확인. 진행률 패널의 stage 라벨이 fetching → fetched → transcoding → transcoded → encoding → encoded → ghGet → uploading → uploaded 순으로 흐름.
+- 화면 밖 popup 검증: bulk 시작 후 새 popup window 가 보이지 않는지. `chrome://extensions/` 의 서비스 워커 로그에 `[bulkWindow] created … left=-32000` 표시.
+- idle stall 검증: NotebookLM 페이지에서 의도적으로 ⋮ 메뉴 차단 시 90s 후 다음 카드로 넘어가는지 (옛 코드에선 10분 대기). 정상 카드는 idle 안 걸리는지.
+
+### 다음 마일스톤 (v0.4.38+ 후보)
+
+- **dedup 사전 계산** — bulk 시작 시 `ghList(docs/episodes)` 한 번만 받고 카드 N 개 push 동안 캐시. 현재는 매 `pushEpisode` 안에서 list 재호출 → API 호출 N+1배.
+- **카드 단위 pipeline** — 다음 카드 클릭 + 이전 카드 push 병렬. throughput 2~3배 기대, 단 409 race 빈도 증가 — 이미 `ghPut` 의 4회 retry 가 견뎌야 함.
+- **content script 회복 경로** — `waitFor` 가 timeout 시 `Escape` 합성 후 재시도. NotebookLM UI 가 다른 모달을 떠 있게 두는 race 회복.
+- **bulk port 재사용으로 alarm 의존 제거** — 현재 30s alarm keepalive 는 SW 살리는 보조 수단인데, offscreen port 가 bulk 전체 동안 한 번만 열려있으면 SW 도 그 시간 동안 alive 보장 (Chrome 공식). port 한 번만 열고 카드별로 메시지 재사용하면 alarm 패턴 자체 불필요.
+
+---
+
+## 18. 일괄 스캔 가속 — 세션 캐시 + 노트북별 modifiedHint (2026-05-13, v0.4.38)
+
+### 배경
+
+`scan:all` 이 노트북 1개당 탭 open + 12s timeout 폴링 + close 의 sequential 흐름. 153개 노트북 보유 사용자 기준 10~15분 소요. 이 중 대부분의 노트북은 매 스캔 사이에 변동이 없음 — 매번 풀 스캔은 낭비.
+
+### 두 단 캐시
+
+**(c) Session-level 캐시 — `SCAN_CACHE_TTL_MS = 30분`**
+
+`runScanAll(opts)` 시작 시 `lastScanResult` 가 30분 이내면 풀 스캔 전체를 단락:
+- 옛 결과 그대로 `emitEvent("scan:all:done", { cacheUsed: true })`.
+- task state 도 `completed` 로 즉시 전환 — popup/options 의 진행 모니터가 곧바로 결과 표시.
+- `autoDownloadNew` 흐름은 그대로 동작 (캐시된 notebooks 로 `buildNewSelections`).
+
+사용자 시나리오: autoDownload 받은 직후 [모든 노트북 스캔] 또 누름 / popup 닫고 다시 열어서 같은 결과 한 번 더 확인. 30분 안이면 0초 마무리.
+
+**우회**: popup [모든 노트북 스캔] Shift+click → `scan:all` 메시지에 `force:true` 동봉 → 캐시 무시. 또는 옵션 페이지의 [지우기] 버튼 (`scan:result:clear`).
+
+**(a) 노트북별 캐시 — `PER_NOTEBOOK_TTL_MS = 4시간`**
+
+`runScanAll` 의 풀 스캔 분기 안에서, 홈 페이지에서 받은 각 노트북 entry 가 `prevScan` 의 같은 url 항목과 매치되고:
+- `modifiedHint` 가 직전과 같고,
+- `scannedAt` 이 4시간 이내,
+- `audios` 배열이 캐시에 있으면,
+→ 그 노트북의 탭은 열지 않고 옛 audios 그대로 `notebooks[]` 에 push.
+
+`modifiedHint` 는 content.js 의 `extractModifiedHint(card)` 가 홈 페이지 카드 안의 안정 시그널만 모아 만든 "구조적 지문":
+
+1. `<time datetime="ISO">` 의 datetime 속성.
+2. `[title]` 속성 중 절대 날짜 패턴 (`/\d{4}|GMT|UTC|\+\d{2}:?\d{2}/` 매칭).
+3. `[aria-label]` 중 숫자 포함 값 (e.g. "5 audio overviews", "Created Apr 30").
+
+상대 시간 ("5분 전" / "1 hour ago") 같이 시간 흐름만으로 바뀌는 텍스트는 사용 안 함 — false invalidation 방지.
+
+### Graceful degrade
+
+NotebookLM 홈 페이지 DOM 이 위 셀렉터를 노출 안 하면 `extractModifiedHint` 가 `null` 반환 → 캐시 매치 자체가 동작 안 함 → 매 노트북 풀 스캔 (이전 동작과 동일, 속도만 손해). 깨지진 않음.
+
+진단 로그: content.js 의 `[scan:list] N개 노트북, modifiedHint 추출 M개 (P%)`. P 가 0% 면 selector 조정 필요한 신호.
+
+### Force 경로
+
+`runScanAll({ force: true })` 호출하면 (c)/(a) 양쪽 캐시 모두 우회. popup Shift+click 또는 옵션 페이지의 [지우기] (캐시 데이터를 비움) 가 트리거.
+
+### 변경 위치
+
+- [src/content.js](src/content.js): `findCardContainer`, `extractModifiedHint`, `getNotebookCards`. `scan:list` 응답에 `notebooks: [{url, modifiedHint}, ...]` 추가 (옛 `urls` 키도 호환).
+- [src/background.js](src/background.js): `SCAN_CACHE_TTL_MS`, `PER_NOTEBOOK_TTL_MS`. `runScanAll(opts)` 의 (c) 단락 + 루프 안 (a) 매치. `scanHomePageForNotebookUrls` 가 entries 배열 반환. lastScanResult 의 notebook 마다 `modifiedHint` + `scannedAt` 필드 저장.
+- [src/popup/popup.js](src/popup/popup.js): scan-all 클릭 핸들러의 Shift 감지 → `force` flag. `renderAggregate(notebooks, {cacheUsed, cacheAgeMs})` 가 캐시 재사용 안내 status 표시. tooltip 추가.
+- [src/i18n.js](src/i18n.js): `popup.scanAllForceStart`, `popup.scanAllTooltip`, `popup.scanAllCacheUsed` (ko/en/de).
+
+### 학습
+
+- **두 단 캐시는 의미가 다른 차원** — (c) 는 "사용자의 반복 클릭 흐름" 을, (a) 는 "노트북 단위 변동성" 을 추적. TTL 도 다른 시간 스케일 (30분 vs 4시간). 한 단으로 합치려고 하면 어느 쪽이든 trade-off 가 어색해짐.
+- **safe fallback 이 deployment 비용을 0 으로** — modifiedHint 가 null 이어도 hash mismatch 가 아니라 "cache key not present" 라 매치 자체가 동작 안 함. NotebookLM 이 DOM 을 바꿔도 슬로우 모드로 떨어지지 깨지진 않음. 그래서 셀렉터 검증 없이 ship 가능.
+- **상대시간을 hint 에서 배제** — "5분 전" / "1 hour ago" 는 invalidation 의 false signal. invalidation 의 신뢰성이 cache hit 률보다 더 중요한 사용자 가치 (놓친 새 음성개요는 영구 손실 vs. 캐시 미스는 단순 속도 손해).
+- **진단 로그가 selector 회귀 안전망** — `[scan:list]` 로그의 hint 추출률 % 가 0 이면 사용자가 SW console 열어 확인 가능 — 침묵 실패 회피.
+
+### 다음 마일스톤 (v0.4.39+ 후보)
+
+- **per-notebook cache 의 hit 률 텔레메트리** — `cacheHits / total` 비율을 옵션 페이지에 표시 ("지난 스캔: 캐시 ?%"). 0% 면 사용자에게 selector 검증 안내.
+- **modifiedHint TTL 자동 튜닝** — 사용자 패턴 (스캔 빈도) 학습 후 적응적 TTL.
+- **homeEntries 순서 정렬로 cache miss 우선 처리** — 캐시 miss 노트북 먼저 풀 스캔 → 진행률 막대가 더 빨리 차오르는 시각적 효과.
+
+---
+
+## 19. 스킵 필터의 race 우회 버그 (2026-05-13, v0.4.39)
+
+### 증상
+
+사용자가 한 기기 (예: 노트북) 에서 음성개요를 스킵 등록 → 다른 기기 (예: 데스크탑) 에서 `scan:all` + auto-download 가 그 카드를 다시 받으려고 시도 → 실패로 처리. `chrome.storage.sync` 가 스킵 목록을 기기 간에 동기화하고 있는데도 발생.
+
+### 원인
+
+[src/background.js](src/background.js) `buildNewSelections` 의 스킵 필터:
+
+```js
+const sid = (audio.artifactId || "").slice(0, 8);
+if (sid && skippedShortIds.has(sid)) return;
+```
+
+`audio.artifactId` 가 빈 문자열일 때 — NotebookLM 의 `artifact-labels` DOM 이 카드 첫 렌더 직후엔 비어 있는 lazy render race (§1 의 PLACEHOLDER 와 같은 family) — `sid` 가 빈 채로 들어와 `if (sid && …)` 의 첫 가드가 false → 스킵 체크 자체를 우회 → 카드가 selections 에 들어감 → 다운로드 시도.
+
+이 race 는 dedup 쪽 (`isAudioPushed`) 에선 이미 (date, titleSlug) 폴백으로 해결되어 있는데 (§1, `titleFilenameMatches` 패턴), 스킵 쪽은 같은 폴백을 안 가져옴 — 같은 race 함정에 두 번째로 떨어진 것.
+
+### 대응
+
+스킵 필터에도 dedup 와 동일한 2차 키 도입:
+
+1. `loadSkippedIndex()` 가 `{ shortIds: Set, titleKeys: Set<"${date}|${titleSlug}"> }` 두 인덱스를 같이 반환.
+2. `isAudioSkipped(audio, coverDateAttr, skipIndex)` 가 shortId 1차 → (date, titleSlug) 2차 순으로 매칭.
+3. `buildNewSelections` 와 `scan:result:pushed` 핸들러 양쪽 모두 새 함수 사용.
+
+`addSkippedEntry` 는 이미 `{ shortId, filename, title, date, notebookTitle }` 메타를 같이 저장하고 있었음 (옵션 페이지 [스킵] 버튼이 row 메타를 같이 보냄). title 은 호출자별로 spaces 도 dashes 도 가능 → 인덱싱 시 `slugify(entry.title)` 로 canonicalize.
+
+### 학습
+
+- **같은 race 패턴은 모든 필터에 동시 적용 — chain-of-defense 가 일관되어야** §1 fix 가 dedup 만 보호하고 스킵을 안 보호한 게 이번 사고. lazy render race 는 한 군데 막아도 다른 군데로 새면 무의미. selections 에 영향을 주는 모든 필터 (push / skip / tooOld) 를 동일 폴백 set 으로 짜는 디자인 원칙.
+- **메타가 이미 저장돼 있어도 인덱싱 안 하면 무용지물** — `addSkippedEntry` 가 `date` / `title` 을 저장하기 시작한 v0.4.33 이후로 폴백 매칭이 가능했는데도 1년 늦게 발견됨. 새 메타 필드를 추가할 땐 그 메타가 어디서 활용될지 동시에 식별.
+- **다기기 시나리오의 silent failure** — 한 기기에서만 사용하면 race 빈도 낮아서 알아차리기 어려움. 두 기기 동시 사용자가 보고. 다기기 동기화 추가 (v0.4.30) 가 곧 다기기 회귀 테스트 필요성도 만든 셈.
+
+### 진단 핸드오프
+
+`buildNewSelections` 호출 직후 selections 안에 스킵 entry 와 같은 `episodeTitle` 있는지 확인. 있으면 그 audio 의 `artifactId` 가 빈 문자열인지 확인 (race 의 핵심 시그널). audio.title 에 `slugify` 적용한 값이 스킵 entry 의 `slugify(title)` 과 일치하는지 확인.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```

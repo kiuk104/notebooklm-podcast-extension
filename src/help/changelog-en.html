@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NotebookLM Podcast Sync — Changelog</title>
+<style>
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 24px 80px; color: #222; line-height: 1.6; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  p, li { font-size: 13px; }
+  p.sub { color: #666; margin-top: 0; font-size: 13px; }
+  code { background: #f4f4f5; padding: 1px 6px; border-radius: 3px; font-size: 12px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  ol li, ul li { margin: 4px 0; }
+  a { color: #2563eb; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+  .lang-switch { font-size: 12px; color: #6b7280; margin: 0 0 8px; }
+  .lang-switch a { color: #2563eb; text-decoration: none; margin-right: 10px; }
+  .lang-switch a.current { color: #111; font-weight: 600; text-decoration: underline; }
+  .back { font-size: 12.5px; margin: 0 0 16px; }
+</style>
+</head>
+<body>
+
+<p class="lang-switch">
+  <a href="changelog.html">한국어</a>
+  <a href="changelog-en.html" class="current">English</a>
+  <a href="changelog-de.html">Deutsch</a>
+</p>
+
+<p class="back">← <a href="help-en.html">Back to Help</a></p>
+
+<h1>Detailed changelog</h1>
+<p class="sub">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. Below are user-visible changes only, newest first.</p>
+
+<h3>v0.4.40 (2026-05-13) — Help-page reorganization</h3>
+<ul>
+  <li><strong>Help §12 compressed to theme-grouped summary</strong>; per-version detail moved to this page. Lets users skim the big picture on the help page and jump here only when they need version-level detail.</li>
+</ul>
+
+<h3>v0.4.39 (2026-05-13) — Cross-device skip leak fix</h3>
+<ul>
+  <li><strong>Skipped cards being re-downloaded on a different device</strong> — fix for a race where a card's <code>artifact-labels</code> DOM hadn't rendered yet, leaving the shortId empty so the skip filter was bypassed. Added a <code>(date, titleSlug)</code> fallback match so the race case is now blocked correctly. The "Skipped" badge on the option-page tree is now consistent too.</li>
+</ul>
+
+<h3>v0.4.38 (2026-05-13) — Faster all-notebook scan</h3>
+<ul>
+  <li><strong>Auto-reuse the last scan result</strong> — clicking [Scan all notebooks] again within 30 minutes returns instantly without re-scanning. Cuts the wait to near-zero when you re-confirm after an auto-download. Shift+click for a forced full scan.</li>
+  <li><strong>Per-notebook change detection cache</strong> — extracts absolute timestamps / count signals from the home-page notebook cards to build a "structural fingerprint". Notebooks scanned within 4 hours are skipped (no tab opened) if their fingerprint is unchanged. Adding a new audio overview etc. changes the fingerprint and triggers a full scan automatically.</li>
+  <li><strong>Graceful degrade</strong> — if NotebookLM's DOM does not expose those signals, every notebook is scanned in full (same as before). The extraction rate is visible in the SW console as <code>[scan:list]</code>.</li>
+</ul>
+
+<h3>v0.4.37 (2026-05-13) — Bulk download stability</h3>
+<ul>
+  <li><strong>UI freeze fixed</strong> — popup / options page no longer pauses 1-2 seconds per large card (40MB m4a). Synchronous base64 encoding moved fully into the offscreen document, off the service worker thread.</li>
+  <li><strong>Bulk popup window hidden</strong> — the NotebookLM popup no longer pops in front of whatever you're browsing. Now created at off-screen coordinates (-32000, -32000). Download behavior unchanged.</li>
+  <li><strong>Live per-card progress</strong> — the progress monitor shows the current card's stage (download / transcode / upload) and byte progress bar. Previously only start/end events were visible.</li>
+  <li><strong>Fast recovery from stalled cards</strong> — a stuck card now moves on after 90 s of zero progress, instead of the old fixed 10-minute timeout. Normal cards stay alive because each fetch chunk emits an activity signal.</li>
+</ul>
+
+<h3>v0.4.36 (2026-05-12)</h3>
+<ul>
+  <li><strong>Auto-remove local download after a successful GitHub push</strong> (default ON) — the m4a/mp4 in your Chrome Downloads folder is cleaned up after push. Since GitHub now holds the mp3, the local copy is redundant disk use. Failed pushes are kept (retry-able). Toggleable in the GitHub settings page.</li>
+</ul>
+
+<h3>v0.4.35 (2026-05-12)</h3>
+<ul>
+  <li><strong>Edit retention cap from the metadata page</strong> — <code>retention.maxTotalMB</code> in <code>docs/podcast.json</code> can now be changed from the extension UI. Default 2000. Usage panel refreshes immediately on save.</li>
+</ul>
+
+<h3>v0.4.34 (2026-05-11)</h3>
+<ul>
+  <li><strong>[Clean up over-limit] button</strong> — in the usage panel (Progress Monitor + Episodes List), the extension itself deletes the oldest files past the retention cap and registers them in the permanent skip list. Same result as the workflow's retention cut, but also writes to the skip list so the next scan won't re-flag them as new.</li>
+  <li><strong>Bulk [Skip] action</strong> — episodes toolbar gets a blue [Bulk skip] next to [Bulk delete]. Select multiple via checkboxes and delete + register them in one go.</li>
+</ul>
+
+<h3>v0.4.33 (2026-05-10)</h3>
+<ul>
+  <li><strong>[Skip] now = delete + permanent block</strong> — [Delete] only removes the file (may be re-downloaded on next scan); [Skip] deletes and registers in the permanent skip list (frees space + future-proof block).</li>
+  <li><strong>Skip list keeps metadata</strong> — filename / title / notebook name / date / registered-at saved with each entry. The [Skip list] toggle panel shows what each entry was.</li>
+  <li>Older v0.4.32 skip entries (shortId only) are auto-migrated.</li>
+</ul>
+
+<h3>v0.4.32 (2026-05-10)</h3>
+<ul>
+  <li><strong>Permanent re-download loop avoided</strong> — fixes the structural issue where bulk push → workflow cuts via retention → next scan re-flags the same card as new → infinite download.</li>
+  <li><strong>Auto-skip old cards (default 730 days)</strong> — input in the GitHub settings page. Notebook cards older than N days are skipped from bulk downloads from the start.</li>
+  <li><strong>Storage usage panel</strong> — Progress Monitor + Episodes List both show usage / cap / % bar (75% yellow, 90% red).</li>
+  <li><strong>Skip-list management</strong> — persisted in chrome.storage.sync (multi-device). Episode rows get a [Skip] action; [Skip list] toggle lets you unset individual entries or clear all.</li>
+</ul>
+
+<h3>v0.4.31 (2026-05-10)</h3>
+<ul>
+  <li><strong>artifact-labels race fix</strong> — scans no longer return before NotebookLM's <code>&lt;span id="artifact-labels-{UUID}"&gt;</code> renders. content.js scan handler polls up to 3 seconds for dedup keys to populate.</li>
+  <li><strong>workflow push retry</strong> — when the extension's ghPut races with the workflow's git push, the workflow now resets to origin/main, rebuilds, and retries up to 3× with backoff.</li>
+  <li><strong>4-segment titleKey fallback</strong> — dedup recovers via (date, titleSlug, ext) even when artifactId is empty due to the race.</li>
+</ul>
+
+<h3>v0.4.30 (2026-05-10)</h3>
+<ul>
+  <li><strong>Multi-device sync via Chrome Sync</strong> — GitHub settings (PAT included) + UI language move to <code>chrome.storage.sync</code>. Automatically shared with the same extension on other Chromes signed into the same Google account.</li>
+  <li><strong>Picker mode (cross-notebook card picker)</strong> — [Pick cards ▾] opens per-notebook tree; checkboxes per card for partial downloads.</li>
+  <li><strong>Dedup gap fixes</strong> — older 3-segment files (pre-v0.4.0) now also matched by (date, title, ext). cover.title race fixed.</li>
+</ul>
+
+<h3>v0.4.27 (2026-05-08)</h3>
+<ul>
+  <li>Packaging fix · skip-kind UI · repo hint in the options page.</li>
+</ul>
+
+<h3>v0.4.21 – v0.4.26 (2026-05-04 — 05-07)</h3>
+<ul>
+  <li><strong>Options page i18n (ko/en/de)</strong> + sidebar grouped navigation.</li>
+  <li><strong>Bulk completion notifications</strong> + retry-failed-cards button.</li>
+  <li><strong>Share ↗ button</strong> (Web Share API / clipboard fallback) + persistent notebook URL map + resizable columns.</li>
+  <li><strong>Help page i18n</strong> (en/de added with a language switcher).</li>
+</ul>
+
+<h3>v0.4.11 – v0.4.20 (2026-04-30 — 05-03)</h3>
+<ul>
+  <li><strong>Client-side transcode (m4a → mp3 64k mono)</strong> — offscreen document + lamejs. ~6s for a 30-minute m4a.</li>
+  <li><strong>Episodes management page</strong> — sort / group / rename / delete.</li>
+  <li><strong>Large-file fallback</strong> — when Contents API ~37 MiB is exceeded, falls back to Git Data API blob (up to 100 MiB).</li>
+  <li>Transcode stability (offscreen lifetime, large file message channel).</li>
+</ul>
+
+<h3>v0.4.0 – v0.4.10 (2026-04-29 — 04-30)</h3>
+<ul>
+  <li><strong>Chrome Web Store readiness</strong> — icons / packaging script / store listing copy / privacy policy.</li>
+  <li><strong>Bulk download (Option 1)</strong> + <strong>cross-notebook sweep (Option 2 / v1 cron equivalent)</strong>.</li>
+  <li><strong>Progress Monitor</strong> — live state / stats / failed list / recent push activity log.</li>
+  <li><strong>Two RSS modes</strong> (GitHub Actions delegated / extension-direct) + <strong>retention</strong> (maxItems, maxAgeDays, maxTotalMB).</li>
+  <li><strong>UUID-based dedup</strong> — 4-segment filenames (date / notebook / shortId / title).</li>
+</ul>
+
+<h3>v0.3.x (2026-04-29)</h3>
+<ul>
+  <li>GitHub Contents API push — in parallel with the download trigger, the SW re-fetches the audio and PUTs it to the repo.</li>
+</ul>
+
+<h3>v0.2.x (2026-04-28)</h3>
+<ul>
+  <li>Download trigger — content script auto-clicks ⋮ menu → "Download"; background renames the file.</li>
+</ul>
+
+<hr>
+
+<p style="font-size: 12px; color: #666;">
+For deeper implementation / debugging notes:
+<a href="../../README.md" target="_blank">README.md</a> ·
+<a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a>
+</p>
+
+<p class="back">← <a href="help-en.html">Back to Help</a></p>
+
+</body>
+</html>

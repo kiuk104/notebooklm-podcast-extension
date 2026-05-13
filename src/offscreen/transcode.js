@@ -43,26 +43,87 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "transcode") return;
   port.onMessage.addListener(async (msg) => {
     const t0 = Date.now();
-    if (msg?.type !== "transcode") return;
+    // "transcode": m4a/mp4 → mp3 64k mono. "fetch": 그냥 fetch + b64 (mp3 같은 통과 케이스).
+    // 두 모드를 한 핸들러로 묶어 SW 측 b64 변환을 완전히 제거. SW 는 b64 string 만 받아 ghPut 으로 직행.
+    if (msg?.type !== "transcode" && msg?.type !== "fetch") return;
+    const doTranscode = msg.type === "transcode";
     _activeTranscodes++;
     ensureSilentAudio();
+    // 진행률 비콘 — SW 의 watchdog 가 idle 감지에 사용 + 옵션 페이지 라이브 표시.
+    const emit = (stage, bytes, totalBytes) => {
+      try {
+        port.postMessage({
+          progress: true,
+          stage,
+          bytes: bytes || 0,
+          totalBytes: totalBytes || null,
+          elapsedMs: Date.now() - t0,
+        });
+      } catch {}
+    };
     try {
+      emit("fetch-start", 0, null);
       const r = await fetch(msg.audioUrl, { credentials: "include" });
       if (!r.ok) throw new Error(`fetch ${r.status} ${r.statusText}`);
-      const arrBuf = await r.arrayBuffer();
-      const mp3 = await transcodeM4aToMp3(
-        arrBuf,
-        msg.bitrate || 64,
-        msg.mono !== false,
-      );
-      const mp3B64 = arrayBufferToBase64(mp3);
+      const totalHeader = parseInt(r.headers.get("content-length") || "0", 10) || null;
+      // 스트림 읽기 — chunk 마다 progress 이벤트. body.getReader 미지원 환경엔 arrayBuffer 폴백.
+      let arrBuf;
+      const reader = r.body?.getReader?.();
+      if (reader) {
+        const chunks = [];
+        let received = 0;
+        let lastEmit = 0;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.byteLength;
+          // 너무 잦은 emit 은 메시지 채널 부담 — 250ms 또는 1MB 마다.
+          const now = Date.now();
+          if (now - lastEmit > 250) {
+            emit("fetching", received, totalHeader);
+            lastEmit = now;
+          }
+        }
+        emit("fetching", received, totalHeader);
+        const merged = new Uint8Array(received);
+        let off = 0;
+        for (const c of chunks) { merged.set(c, off); off += c.byteLength; }
+        arrBuf = merged.buffer;
+      } else {
+        arrBuf = await r.arrayBuffer();
+        emit("fetching", arrBuf.byteLength, arrBuf.byteLength);
+      }
+      const sourceSize = arrBuf.byteLength;
+      emit("fetched", sourceSize, sourceSize);
+
+      let payload;
+      if (doTranscode) {
+        emit("transcoding", 0, null);
+        payload = await transcodeM4aToMp3(
+          arrBuf,
+          msg.bitrate || 64,
+          msg.mono !== false,
+        );
+        emit("transcoded", payload.byteLength, payload.byteLength);
+      } else {
+        payload = arrBuf;
+      }
+      emit("encoding", 0, payload.byteLength);
+      const b64 = arrayBufferToBase64(payload);
+      emit("encoded", b64.length, payload.byteLength);
       // postMessage 는 disconnect 된 port 에 보내면 throw — settled 플래그 없이도 try
       // 안에서 알아서 처리.
       try {
         port.postMessage({
-          ok: true, mp3B64,
-          sourceSize: arrBuf.byteLength,
-          mp3Size: mp3.byteLength,
+          ok: true,
+          b64,
+          size: payload.byteLength,
+          sourceSize,
+          transcoded: doTranscode,
+          // 옛 호환: 일부 경로가 mp3B64 키를 보던 시기 코드 — 새 b64 키와 동일 값.
+          mp3B64: doTranscode ? b64 : undefined,
+          mp3Size: doTranscode ? payload.byteLength : undefined,
           elapsedMs: Date.now() - t0,
         });
       } catch {}

@@ -226,6 +226,14 @@
         <div class="task-message" id="task-message"></div>
         <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
         <div class="task-stats" id="task-stats"></div>
+        <div class="card-progress" id="card-progress" style="display:none; font-size:11px; color:#555; margin-top:6px; padding:6px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px;">
+          <div class="card-progress-title" id="card-progress-title" style="font-weight:600; color:#1e293b; margin-bottom:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+          <div class="card-progress-stage" id="card-progress-stage" style="display:flex; gap:6px; align-items:center;">
+            <span class="cp-stage-label" id="cp-stage-label"></span>
+            <span class="cp-bytes" id="cp-bytes" style="color:#64748b;"></span>
+          </div>
+          <div class="progress-track" style="margin-top:4px; height:4px;"><div class="progress-fill" id="card-progress-fill" style="width:0%; background:#0ea5e9;"></div></div>
+        </div>
         <div class="task-errors" id="task-errors" style="display:none"></div>
         <div class="task-recent-head" id="task-recent-head" style="display:none">
           <span data-i18n="monitor.recent.head">최근 GitHub push 활동</span>

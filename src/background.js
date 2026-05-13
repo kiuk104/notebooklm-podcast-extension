@@ -157,7 +157,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, started: true });
     inProgressTask = "scan:all";
     cancelRequested = false;
-    runScanAll()
+    // msg.force=true 면 캐시 우회 (강제 풀 스캔). popup [모든 노트북 스캔] shift-click /
+    // 옵션 페이지 [↻ 재스캔] 이 이 플래그를 set. default false — 30분 이내 캐시 자동 재사용.
+    runScanAll({ force: !!msg.force })
       .catch(async (e) => {
         console.error("[scan:all]", e);
         await setTaskState({
@@ -317,21 +319,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           ? await loadPushedIndex(cfg.repo, cfg.token)
           : { shortIds: new Set(), legacyKeys: new Set(), titleKeys: new Set() };
         const skipDays = await loadBulkSkipOlderDays();
-        const skippedShortIds = await loadSkippedShortIdSet();
+        const skipIndex = await loadSkippedIndex();
         const enriched = last.notebooks.map((nb) => {
           const tooOld = isNotebookTooOld(nb.cover?.dateAttr || "", skipDays);
+          const coverDateAttr = nb.cover?.dateAttr || "";
           return {
             ...nb,
             isTooOld: tooOld,
-            audios: (nb.audios || []).map((a) => {
-              const sid = (a.artifactId || "").slice(0, 8);
-              return {
-                ...a,
-                isPushed: isAudioPushed(a, nb.cover?.dateAttr || "", pushedIndex),
-                isTooOld: tooOld,
-                isSkipped: !!(sid && skippedShortIds.has(sid)),
-              };
-            }),
+            audios: (nb.audios || []).map((a) => ({
+              ...a,
+              isPushed: isAudioPushed(a, coverDateAttr, pushedIndex),
+              isTooOld: tooOld,
+              // (date, titleSlug) 폴백 포함 — empty artifactId race 에서도 정확히 표시.
+              isSkipped: isAudioSkipped(a, coverDateAttr, skipIndex),
+            })),
           };
         });
         sendResponse({
@@ -340,7 +341,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           scannedAt: last.scannedAt || 0,
           pushedShortIds: Array.from(pushedIndex.shortIds),
           skipOlderDays: skipDays,
-          skippedShortIds: Array.from(skippedShortIds), // Set → array
+          skippedShortIds: Array.from(skipIndex.shortIds), // Set → array (옛 popup 호환)
         });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
@@ -737,7 +738,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   // 노트북 rename 도 견딘다.
   const dedupHints = { shortId, date, titleSlug, ext };
   const downloadId = item.id;
-  pushEpisode(item.url, filename, dedupHints).then((result) => {
+  pushEpisode(item.url, filename, dedupHints, meta.episodeTitle).then((result) => {
     notifyPush({ ok: true, episodeTitle: meta.episodeTitle, filename, downloadId, ...result });
     // push 성공 시 로컬 다운로드 자동 삭제 (옵션 ON 일 때).
     // ok=true 면 GitHub 에 파일 있음 → 로컬은 잉여. skipped=true (dedup hit) 도
@@ -801,6 +802,11 @@ function notifyPush(detail) {
   for (const fn of pushResultLocalListeners) {
     try { fn(detail); } catch {}
   }
+  // 카드 종료 — 진행률 패널을 비워 UI 가 다음 카드 진행률에 자리를 내준다.
+  // setTaskState 가 broadcast 도 같이 해줘서 옵션 페이지가 라이브 반영.
+  if (currentTaskState.currentCardProgress?.episodeTitle === detail.episodeTitle) {
+    setTaskState({ currentCardProgress: null });
+  }
   // 옵션 페이지의 진행 모니터에 라이브 push 활동 로그로 표시 — 마지막 30 건.
   // 단일 [받기] / 일괄 받기 / 자동 다운로드 어느 경로든 모두 여기로 모임.
   appendRecentPush(detail).catch(() => {});
@@ -846,6 +852,73 @@ function waitPushResultLocal(episodeTitle, timeoutMs) {
   });
 }
 
+// Idle-watchdog 기반 대기. 카드가 활성 (progress 비콘이 들어오면) 동안엔 timeout 이
+// 계속 reset → "정상 다운로드 중인데 fixed 10분 timeout 으로 끊김" 사고 회피.
+// idleMs 동안 어떤 progress 도 안 오면 "stall" 로 판정. hardMs 는 마지노선 (무한
+// 진행률 emit 으로 영영 안 끝나는 사고도 막아둠).
+const pushProgressBeacons = new Set();
+function waitPushResultLocalWithWatchdog(episodeTitle, idleMs, hardMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    let idleTimer = null;
+    const armIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve({ timeout: true, reason: "idle", idleMs });
+      }, idleMs);
+    };
+    const handler = (detail) => {
+      if (done) return;
+      if (detail.episodeTitle !== episodeTitle) return;
+      done = true;
+      cleanup();
+      resolve(detail);
+    };
+    const beacon = (title) => {
+      if (done) return;
+      if (title !== episodeTitle) return;
+      armIdle();
+    };
+    const cleanup = () => {
+      pushResultLocalListeners.delete(handler);
+      pushProgressBeacons.delete(beacon);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (hardTimer) clearTimeout(hardTimer);
+    };
+    pushResultLocalListeners.add(handler);
+    pushProgressBeacons.add(beacon);
+    const hardTimer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve({ timeout: true, reason: "hard", hardMs });
+    }, hardMs);
+    armIdle();
+  });
+}
+
+// 카드 단위 byte/stage 진행률. pushEpisode 안의 reportProgress() → 여기.
+// (a) currentTaskState.currentCardProgress 갱신해 옵션 페이지 라이브 표시
+// (b) watchdog 비콘 fire — 활성 카드의 idle 타이머 reset.
+function emitCardProgress(episodeTitle, progress) {
+  const detail = {
+    episodeTitle,
+    stage: progress.stage || "",
+    bytes: progress.bytes || 0,
+    totalBytes: progress.totalBytes || null,
+    updatedAt: Date.now(),
+  };
+  // setTaskState 는 매번 storage 쓰기 + broadcast 라 byte-by-byte chunk 모두 통과시키면
+  // 부담. offscreen 측은 이미 250ms throttle 이라 여긴 그대로 통과.
+  setTaskState({ currentCardProgress: detail });
+  for (const fn of pushProgressBeacons) {
+    try { fn(episodeTitle); } catch {}
+  }
+}
+
 // ---------- cross-notebook scan + bulk download (Option 2) ----------
 //
 // 사용자가 NotebookLM 홈 (`/`) 의 모든 노트북을 한 번에 sweep 하려는 흐름. 팝업
@@ -858,11 +931,14 @@ function waitPushResultLocal(episodeTitle, timeoutMs) {
 const TAB_OPEN_TIMEOUT = 15000;
 const CONTENT_PING_TIMEOUT = 8000;
 const NOTEBOOK_CARDS_TIMEOUT = 12000;
-// 단일 카드의 SW fetch + base64 + ghPut/ghPutLargeFile (Git Data API 7-call) +
-// rebuildFeed 까지 합산. 긴 m4a (40분짜리 ~75 MB) 가 기준선이라 100~200초가
-// 정상 범위. 마진 포함 600초 (10분). 실측: 사용자 bulk 에서 첫 2 카드가 195초
-// 부근에서 180초 timeout 에 걸렸음 → 600 이면 안전.
-const PUSH_RESULT_TIMEOUT = 600000;
+// v0.4.37 부터 fixed timeout 대신 idle-watchdog 방식. offscreen fetch/encode 의 byte
+// chunk 비콘 + SW ghGet/ghPut stage 비콘이 활성 카드의 idle 타이머를 reset 한다.
+// PUSH_IDLE_TIMEOUT 동안 *어떤 progress 도* 안 오면 stall 로 판정 → 다음 카드.
+// 정상 다운로드 (40분짜리 ~75MB, 100-200초 소요) 는 fetch chunk 가 250ms 마다
+// 들어오므로 idle 에 안 걸림. PUSH_HARD_TIMEOUT 은 무한 progress emit 사고
+// (예: lamejs 가 무한 루프) 대비 마지노선.
+const PUSH_IDLE_TIMEOUT = 90000;     // 90s 동안 progress 0건 → stall
+const PUSH_HARD_TIMEOUT = 900000;    // 15분 — 단일 카드 절대 최대치
 
 let inProgressTask = null;
 const ownedTabs = new Set(); // SW 가 연 탭 id — 정리용.
@@ -945,6 +1021,10 @@ const INITIAL_TASK_STATE = {
   errorCount: 0,
   errors: [],           // [{ url|episodeTitle, message }]
   recentPushes: [],     // 최근 N 건의 push 결과 — 옵션 페이지에 라이브 활동 로그로 노출.
+  // 현재 카드의 byte-단위 진행률. offscreen fetch/encode chunk + ghPut stage 가
+  // emitCardProgress() 로 갱신. stage: fetch-start | fetching | fetched | transcoding
+  //  | transcoded | encoding | encoded | ghGet | uploading | uploaded.
+  currentCardProgress: null,
   startedAt: null,
   endedAt: null,
   lastHeartbeatAt: null, // setTaskState 마다 갱신 — SW 재시작 시 stale running 감지용.
@@ -1204,9 +1284,38 @@ async function loadSkippedEntries() {
     : x).filter((e) => e && e.shortId);
 }
 
-async function loadSkippedShortIdSet() {
+// 스킵 목록을 두 키로 인덱싱 — shortId (1차) + (date, titleSlug) (2차, race 폴백).
+// shortId 만 보면 `audio.artifactId` 가 lazy render 로 빈 채 들어오는 race 에서 스킵
+// 카드가 다시 신규로 잡혀 다운로드 시도 → 실패 → "실패 N개 보존" 으로 누적. 사용자가
+// 스킵한 카드를 다른 기기에서 또 받으려고 하는 사고.
+//
+// entry.title 은 호출자별로 spaces 또는 dashes 가 섞임 (옵션 페이지 [삭제] 는 displayed
+// title 그대로 = spaces, storage:cleanup 은 filename 에서 추출 = dashes). slugify 로
+// canonicalize 해서 audio.title 의 슬러그와 직접 비교.
+async function loadSkippedIndex() {
   const list = await loadSkippedEntries();
-  return new Set(list.map((e) => e.shortId));
+  const shortIds = new Set();
+  const titleKeys = new Set();
+  for (const e of list) {
+    if (e.shortId) shortIds.add(e.shortId);
+    if (e.date && e.title) {
+      titleKeys.add(`${e.date}|${slugify(e.title)}`);
+    }
+  }
+  return { shortIds, titleKeys };
+}
+
+// 카드 하나가 스킵 목록에 들어 있는지 — 두 경로:
+//   (1) shortId (artifactId 첫 8자) 일치.
+//   (2) artifactId 가 빈 race 케이스 폴백: cover-subtitle-date + slugify(title) 일치.
+// isAudioPushed 와 같은 패턴 — push dedup 도 이미 두 경로를 쓴다.
+function isAudioSkipped(audio, coverDateAttr, skipIndex) {
+  const sid = (audio.artifactId || "").slice(0, 8);
+  if (sid && skipIndex.shortIds.has(sid)) return true;
+  const date = extractDateStrict(coverDateAttr);
+  const titleSlug = audio.title ? slugify(audio.title) : "";
+  if (date && titleSlug && skipIndex.titleKeys.has(`${date}|${titleSlug}`)) return true;
+  return false;
 }
 
 async function saveSkippedEntries(entries) {
@@ -1277,7 +1386,7 @@ function isAudioPushed(audio, coverDateAttr, pushedIndex) {
 async function buildNewSelections(notebooks, repo, token) {
   const pushedIndex = await loadPushedIndex(repo, token);
   const skipDays = await loadBulkSkipOlderDays();
-  const skippedShortIds = await loadSkippedShortIdSet();
+  const skipIndex = await loadSkippedIndex();
   const selections = [];
   for (const nb of notebooks) {
     const coverDateAttr = nb.cover?.dateAttr || "";
@@ -1287,9 +1396,9 @@ async function buildNewSelections(notebooks, repo, token) {
     (nb.audios || []).forEach((audio, idx) => {
       if (audio.isPlaceholder) return;
       if (isAudioPushed(audio, coverDateAttr, pushedIndex)) return;
-      // 사용자가 에피소드 목록에서 명시 삭제한 카드는 영구 스킵.
-      const sid = (audio.artifactId || "").slice(0, 8);
-      if (sid && skippedShortIds.has(sid)) return;
+      // 사용자가 에피소드 목록에서 명시 삭제한 카드는 영구 스킵 — shortId (1차) +
+      // (date, titleSlug) (2차, race 폴백) 두 경로로 매칭.
+      if (isAudioSkipped(audio, coverDateAttr, skipIndex)) return;
       selections.push({
         notebookUrl: nb.url,
         cardIndex: idx,
@@ -1360,7 +1469,16 @@ async function withTabRetry(fn, label, maxAttempts = 5) {
 // 안의 tab 은 active 상태* 를 유지하면서 메인 윈도우 focus 는 그대로. 페이지 측
 // `document.visibilityState` 가 'visible' 로 보이고, NotebookLM 이 download 트리거
 // 를 정상 발사. 작업 끝나면 윈도우 close — 사용자 메인 작업 흐름 방해 최소화.
+//
+// 추가로 v0.4.37 부턴 윈도우 좌표를 화면 밖 (-32000, -32000) 으로 보내 사용자에게
+// 시각적으로 안 보이게 한다. Windows 에서 `focused:false` 만으론 popup 이 종종 메인
+// 윈도우 앞으로 튀어나오는 chromium 거동을 회피. visibilityState='visible' 은 윈도우
+// 위치와 무관하게 살아있어 download 트리거는 정상.
 let bulkWindowId = null;
+// 화면 밖 좌표. Chrome 이 좌표 sanitize 로 clamp 할 수도 있어 두 단계 적용:
+// (1) windows.create 시 멀리 보내고 (2) update 로 재차 nudge. 두 번 다 안 받아주는
+// OS/플랫폼 (가끔 macOS Spaces) 에선 화면 좌상단에 뜨지만 focused:false 라 포커스는 그대로.
+const BULK_WINDOW_OFFSCREEN = { left: -32000, top: -32000, width: 800, height: 600 };
 
 async function ensureBulkWindow() {
   if (bulkWindowId !== null) {
@@ -1373,7 +1491,7 @@ async function ensureBulkWindow() {
       bulkWindowId = null;
     }
   }
-  console.log(`[bulkWindow] creating new popup window`);
+  console.log(`[bulkWindow] creating new popup window (off-screen)`);
   // focused:false — chrome.debugger.Input.dispatchMouseEvent 가 trusted input 을
   // 주입하므로 window focus 자체는 download 트리거에 불필요. 사용자 메인 윈도우
   // focus 그대로 두는 게 덜 거추장.
@@ -1382,13 +1500,22 @@ async function ensureBulkWindow() {
       url: "about:blank",
       type: "popup",
       focused: false,
-      width: 800, height: 600,
+      ...BULK_WINDOW_OFFSCREEN,
     }),
     "windows.create",
   );
   bulkWindowId = win.id;
   console.log(`[bulkWindow] created id=${win.id} state=${win.state} focused=${win.focused} ` +
     `top=${win.top} left=${win.left} w=${win.width} h=${win.height} tabs=${win.tabs?.length}`);
+  // create 가 좌표 clamp 했을 가능성에 대비해 update 로 한 번 더 밀어낸다.
+  if (win.left > -1000 || win.top > -1000) {
+    try {
+      await chrome.windows.update(bulkWindowId, BULK_WINDOW_OFFSCREEN);
+      console.log(`[bulkWindow] nudged off-screen via update`);
+    } catch (e) {
+      console.warn(`[bulkWindow] update 실패 (창은 visible 상태로 남음): ${e.message}`);
+    }
+  }
   // about:blank 첫 탭은 placeholder. 첫 openManagedTab 호출이 진짜 NotebookLM URL
   // 로 새 탭을 만들면서 placeholder 는 살아있어도 무해 (closeBulkWindow 가 결국 정리).
   return bulkWindowId;
@@ -1512,18 +1639,27 @@ async function closeOffscreenDocument() {
 // chrome.runtime.sendMessage 는 SW idle timer (30s) 와 race — 큰 카드 (40MB+)
 // transcode 가 30+초 걸리면 SW 가 await 중 죽고 "channel closed" 로 reject.
 // Port 는 *연결이 살아있는 동안 SW 도 살아있음* (Chrome 공식 보장) — 30+초
-// transcode 도 안전. 메시지는 URL 만 보내고 offscreen 이 fetch + transcode.
-async function transcodeViaOffscreen(audioUrl, bitrate = 64, mono = true) {
+// transcode 도 안전. 메시지는 URL 만 보내고 offscreen 이 fetch + (option) transcode + b64.
+// b64 변환을 offscreen 안에서 끝내 SW thread 의 동기 String.fromCharCode 루프를 제거
+// — 큰 카드 (40MB) 에서 popup/options UI 가 1-2초씩 freeze 되던 현상 해소.
+async function fetchEncodeViaOffscreen(audioUrl, opts = {}) {
+  // opts: { transcode: bool, bitrate, mono, onProgress({stage, bytes, totalBytes, elapsedMs}) }
+  // 반환: { b64, size, sourceSize } — b64 는 ghPut body 에 그대로 들어갈 수 있는 string.
   await ensureOffscreenDocument();
   return new Promise((resolve, reject) => {
     const port = chrome.runtime.connect({ name: "transcode" });
     let settled = false;
     port.onMessage.addListener((msg) => {
       if (settled) return;
+      // progress 비콘 — settled 안 되고 onProgress 만 호출 + 계속 대기.
+      if (msg?.progress) {
+        try { opts.onProgress?.(msg); } catch {}
+        return;
+      }
       settled = true;
       try { port.disconnect(); } catch {}
-      if (msg?.ok) resolve(base64ToArrayBuffer(msg.mp3B64));
-      else reject(new Error(msg?.error || "transcode 실패"));
+      if (msg?.ok) resolve({ b64: msg.b64, size: msg.size, sourceSize: msg.sourceSize });
+      else reject(new Error(msg?.error || "fetch+encode 실패"));
     });
     port.onDisconnect.addListener(() => {
       if (settled) return;
@@ -1531,15 +1667,13 @@ async function transcodeViaOffscreen(audioUrl, bitrate = 64, mono = true) {
       const err = chrome.runtime.lastError?.message || "transcode 채널 비정상 종료";
       reject(new Error(err));
     });
-    port.postMessage({ type: "transcode", audioUrl, bitrate, mono });
+    port.postMessage({
+      type: opts.transcode ? "transcode" : "fetch",
+      audioUrl,
+      bitrate: opts.bitrate || 64,
+      mono: opts.mono !== false,
+    });
   });
-}
-
-function base64ToArrayBuffer(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
 }
 
 // chrome.debugger 의 Input.dispatchMouseEvent 로 진짜 user input 을 주입.
@@ -1569,10 +1703,16 @@ async function cleanupOwnedTabs() {
 }
 
 async function scanHomePageForNotebookUrls() {
+  // 반환: [{url, modifiedHint}, ...] — modifiedHint 는 content.js 가 카드 DOM 의
+  // 안정 시그널 (time[datetime] / [title] 절대 시간 / [aria-label] 숫자 패턴) 로 생성한
+  // "구조적 지문". 노트북 변경 시 hint 도 변경 → per-notebook 캐시 무효화 키.
   const tabId = await openManagedTab("https://notebooklm.google.com/");
   try {
     const r = await chrome.tabs.sendMessage(tabId, { type: "scan:list" });
-    return r?.urls || [];
+    if (Array.isArray(r?.notebooks) && r.notebooks.length > 0) return r.notebooks;
+    // 옛 응답 호환 (urls 만 반환하는 옛 content.js 시점). hint 없음 → 캐시 안 탐.
+    if (Array.isArray(r?.urls)) return r.urls.map((url) => ({ url, modifiedHint: null }));
+    return [];
   } finally {
     await closeManagedTab(tabId);
   }
@@ -1609,7 +1749,66 @@ async function scanOneNotebook(url) {
   }
 }
 
-async function runScanAll() {
+// (c) 직전 scan:all 결과의 session-level 캐시 TTL. 이 안에 들어오면 풀 스캔 안 하고
+// 캐시 그대로 재사용 (popup 재오픈 / auto-download 후 사용자가 반복 클릭 흐름).
+// 더 짧으면 cache hit 률 낮고, 더 길면 사용자가 NotebookLM 에서 새 음성개요 만들었는데
+// 캐시가 안 깨져 놓치는 위험. 30분이 양쪽 trade-off 의 sweet spot.
+const SCAN_CACHE_TTL_MS = 30 * 60 * 1000;
+
+// (a) 노트북 단위 캐시 TTL. 같은 url 의 modifiedHint 가 변하지 않았고 이 시간 안에
+// 한 번 스캔된 적 있으면 탭 열기 자체를 스킵. (c) 가 만료된 뒤에도 노트북별로는 더 길게
+// 유효 — 사용자가 어제 받은 노트북은 오늘 다시 안 열어도 됨. modifiedHint 가 정확히
+// 동작하면 4h 무관하게 새 음성개요 추가 시 hint 변경 → 자동 풀 스캔. hint 추출 실패
+// (selector 못 찾음) 면 hint=null 이라 캐시 자체 동작 안 함 → 매번 풀 스캔 (안전).
+const PER_NOTEBOOK_TTL_MS = 4 * 60 * 60 * 1000;
+
+async function runScanAll(opts = {}) {
+  // (c) Recent-scan auto-reuse — TTL 안의 캐시가 있으면 풀 스캔 단락. 사용자가
+  // [모든 노트북 스캔] 을 짧은 간격으로 여러 번 누르는 시나리오 (예: autoDownload 직후
+  // 결과 확인) 의 체감 시간을 거의 0 으로. force:true 면 우회.
+  if (!opts.force) {
+    const cached = await loadLastScanResult();
+    if (cached?.notebooks?.length && cached.scannedAt) {
+      const ageMs = Date.now() - cached.scannedAt;
+      if (ageMs < SCAN_CACHE_TTL_MS) {
+        const cardCount = cached.notebooks.reduce(
+          (s, nb) => s + (nb.audios?.length || 0), 0,
+        );
+        const ageMin = Math.round(ageMs / 60000);
+        const ageLabel = ageMin < 1
+          ? `${Math.round(ageMs / 1000)}초 전`
+          : `${ageMin}분 전`;
+        console.log(`[scan:all] cache hit (${ageLabel}) — ${cached.notebooks.length}개 노트북 재사용`);
+        await setTaskState({
+          ...INITIAL_TASK_STATE,
+          task: "scan:all", status: "completed", phase: "done",
+          total: cached.notebooks.length, done: cached.notebooks.length,
+          notebookCount: cached.notebooks.length, cardCount,
+          message: `직전 스캔 결과 재사용 (${ageLabel}, 노트북 ${cached.notebooks.length}개, 카드 ${cardCount}개)`,
+          startedAt: Date.now(), endedAt: Date.now(),
+        });
+        emitEvent("scan:all:done", {
+          ok: true, notebooks: cached.notebooks,
+          cacheUsed: true, cacheAgeMs: ageMs,
+        });
+        // 캐시 단락 후에도 auto-download 는 정상 동작 — 사용자 흐름 유지.
+        try {
+          const cfg = await cfgGet(["autoDownloadNew", "token", "repo"]);
+          if (cfg.autoDownloadNew && cfg.token && cfg.repo) {
+            const selections = await buildNewSelections(cached.notebooks, cfg.repo, cfg.token);
+            if (selections.length > 0) {
+              console.log(`[scan:all] cache hit + auto-download: ${selections.length} 카드 시작`);
+              await runBulkRemote(selections);
+            }
+          }
+        } catch (e) {
+          console.error("[scan:all] cache hit auto-download 실패:", e);
+        }
+        return { notebooks: cached.notebooks, cacheUsed: true };
+      }
+    }
+  }
+
   await startKeepalive();
   await setTaskState({
     ...INITIAL_TASK_STATE,
@@ -1619,9 +1818,22 @@ async function runScanAll() {
   });
   emitEvent("scan:all:progress", { phase: "list", message: "노트북 목록 수집 중…" });
 
-  const urls = await scanHomePageForNotebookUrls();
-  await setTaskState({ phase: "list:done", total: urls.length, message: `노트북 ${urls.length}개 발견. 스캔 시작…` });
-  emitEvent("scan:all:progress", { phase: "list:done", total: urls.length });
+  const homeEntries = await scanHomePageForNotebookUrls();
+  await setTaskState({ phase: "list:done", total: homeEntries.length, message: `노트북 ${homeEntries.length}개 발견. 스캔 시작…` });
+  emitEvent("scan:all:progress", { phase: "list:done", total: homeEntries.length });
+
+  // (a) per-notebook 캐시 준비 — 직전 lastScanResult 의 notebooks 를 URL 키로 인덱싱.
+  // 같은 URL + 같은 modifiedHint + PER_NOTEBOOK_TTL_MS 이내면 풀 스캔 스킵 + 옛 audios
+  // 그대로 사용. force:true 면 우회. hint 가 null 인 노트북은 매번 풀 스캔 (안전 fallback).
+  const prevScan = await loadLastScanResult();
+  const cachedByUrl = new Map();
+  if (prevScan?.notebooks && !opts.force) {
+    for (const nb of prevScan.notebooks) {
+      if (nb.url) cachedByUrl.set(nb.url, nb);
+    }
+  }
+  const nowMs = Date.now();
+  let cacheHits = 0;
 
   const notebooks = [];
   let cardCount = 0;
@@ -1629,32 +1841,69 @@ async function runScanAll() {
   // 일정 횟수 넘으면 abort 해서 사용자에게 명확한 안내.
   const MAX_CONSEC_TAB_ERRORS = 5;
   let consecTabErrors = 0;
-  for (let i = 0; i < urls.length; i++) {
+  for (let i = 0; i < homeEntries.length; i++) {
     if (cancelRequested) {
       await setTaskState({
         status: "failed", phase: "cancelled",
-        message: `사용자 중단 — 노트북 ${i}/${urls.length} 까지 완료`,
+        message: `사용자 중단 — 노트북 ${i}/${homeEntries.length} 까지 완료`,
         endedAt: Date.now(),
       });
       return { notebooks };
     }
+    const entry = homeEntries[i];
+    const prev = cachedByUrl.get(entry.url);
+    const canReuse = !opts.force
+      && prev
+      && entry.modifiedHint != null
+      && prev.modifiedHint === entry.modifiedHint
+      && typeof prev.scannedAt === "number"
+      && (nowMs - prev.scannedAt) < PER_NOTEBOOK_TTL_MS
+      && Array.isArray(prev.audios);
+    if (canReuse) {
+      notebooks.push({
+        url: entry.url,
+        cover: prev.cover || { title: "", dateAttr: "" },
+        audios: prev.audios,
+        modifiedHint: entry.modifiedHint,
+        scannedAt: prev.scannedAt,
+        cacheReused: true,
+      });
+      cardCount += (prev.audios || []).length;
+      cacheHits++;
+      await setTaskState({
+        phase: "scan", done: i + 1,
+        message: `노트북 ${i + 1}/${homeEntries.length} 캐시 재사용`,
+      });
+      // breather 도 줄임 — 탭 안 여니까 transient lock 위험 없음.
+      continue;
+    }
     await setTaskState({
       phase: "scan", done: i,
-      message: `노트북 ${i + 1}/${urls.length} 스캔 중…`,
+      message: `노트북 ${i + 1}/${homeEntries.length} 스캔 중…`,
     });
     emitEvent("scan:all:progress", {
-      phase: "scan", done: i, total: urls.length,
-      message: `노트북 ${i + 1}/${urls.length} 스캔 중…`,
+      phase: "scan", done: i, total: homeEntries.length,
+      message: `노트북 ${i + 1}/${homeEntries.length} 스캔 중…`,
     });
     try {
-      const r = await scanOneNotebook(urls[i]);
-      notebooks.push(r);
+      const r = await scanOneNotebook(entry.url);
+      // 캐시 키 (modifiedHint, scannedAt) 함께 저장 — 다음 scan:all 에서 재사용 가능하게.
+      notebooks.push({
+        ...r,
+        modifiedHint: entry.modifiedHint || null,
+        scannedAt: nowMs,
+      });
       cardCount += (r.audios || []).length;
       consecTabErrors = 0;
     } catch (e) {
-      console.warn(`[scan:all] ${urls[i]} 실패:`, e.message);
-      notebooks.push({ url: urls[i], cover: { title: "" }, audios: [], error: e.message });
-      await pushTaskError({ url: urls[i], message: e.message });
+      console.warn(`[scan:all] ${entry.url} 실패:`, e.message);
+      notebooks.push({
+        url: entry.url, cover: { title: "" }, audios: [],
+        modifiedHint: entry.modifiedHint || null,
+        scannedAt: nowMs,
+        error: e.message,
+      });
+      await pushTaskError({ url: entry.url, message: e.message });
       if (TRANSIENT_TAB_ERROR_RE.test(e.message)) {
         consecTabErrors++;
         if (consecTabErrors >= MAX_CONSEC_TAB_ERRORS) {
@@ -1672,6 +1921,10 @@ async function runScanAll() {
     await sleep(200);
   }
 
+  if (cacheHits > 0) {
+    console.log(`[scan:all] per-notebook cache: ${cacheHits}/${homeEntries.length} 재사용 (탭 ${cacheHits}회 안 열어 시간 절약)`);
+  }
+
   await persistLastScanResult(notebooks);
   // 영구 슬러그→URL 맵에 누적 — lastScanResult 가 session storage 라 브라우저 재시작
   // 시 사라져도 [편집 ↗] 바로가기는 살아남도록. cover.title 이 비어 있으면 slugify 가
@@ -1681,14 +1934,15 @@ async function runScanAll() {
       .filter((nb) => nb.cover?.title && nb.url)
       .map((nb) => ({ slug: slugify(nb.cover.title), url: nb.url })),
   );
+  const cacheNote = cacheHits > 0 ? ` (캐시 재사용 ${cacheHits}개)` : "";
   await setTaskState({
     status: "completed", phase: "done",
-    done: urls.length,
-    notebookCount: urls.length, cardCount,
-    message: `스캔 완료 — 노트북 ${urls.length}개, 카드 ${cardCount}개`,
+    done: homeEntries.length,
+    notebookCount: homeEntries.length, cardCount,
+    message: `스캔 완료 — 노트북 ${homeEntries.length}개, 카드 ${cardCount}개${cacheNote}`,
     endedAt: Date.now(),
   });
-  emitEvent("scan:all:done", { ok: true, notebooks });
+  emitEvent("scan:all:done", { ok: true, notebooks, cacheHits });
 
   // 옵션의 autoDownloadNew 가 켜져 있으면 신규 카드들을 같은 SW 안에서 이어서
   // 다운로드. 직접 runBulkRemote 호출 — message 라우팅 우회. inProgressTask 는
@@ -1835,12 +2089,17 @@ async function runBulkRemote(selections) {
             done++;
             continue;
           }
-          const result = await waitPushResultLocal(item.episodeTitle, PUSH_RESULT_TIMEOUT);
+          const result = await waitPushResultLocalWithWatchdog(
+            item.episodeTitle, PUSH_IDLE_TIMEOUT, PUSH_HARD_TIMEOUT,
+          );
           if (result.timeout) {
+            const reasonMsg = result.reason === "idle"
+              ? `진행률 ${Math.round(PUSH_IDLE_TIMEOUT / 1000)}s 동안 정지 (stall)`
+              : `최대 ${Math.round(PUSH_HARD_TIMEOUT / 1000)}s 한도 초과`;
             emitEvent("bulk:remote:result", {
-              episodeTitle: item.episodeTitle, ok: false, error: "push 응답 타임아웃",
+              episodeTitle: item.episodeTitle, ok: false, error: `push 타임아웃 (${reasonMsg})`,
             });
-            await pushTaskError({ episodeTitle: item.episodeTitle, message: "push 응답 타임아웃" });
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: `push 타임아웃 (${reasonMsg})` });
             failedSelections.push(item);
           } else if (result.ok || result.skipped) {
             success++;
@@ -1879,13 +2138,20 @@ async function runBulkRemote(selections) {
   return { ok: true, done };
 }
 
-async function pushEpisode(audioUrl, filename, dedupHints) {
+async function pushEpisode(audioUrl, filename, dedupHints, episodeTitle) {
   const cfg = await cfgGet([
     "token", "repo", "rssMode", "committerName", "committerEmail",
   ]);
   if (!cfg.token || !cfg.repo) {
     return { skipped: true, skipKind: "no-config", reason: "GitHub 설정 없음" };
   }
+  // 카드 단위 byte 진행률 이벤트 — offscreen 의 fetch/encode chunk 에서 비콘이 들어오고
+  // SW 의 ghGet/ghPut stage 도 같은 채널로 흘려보냄. setTaskState 에 currentCardProgress
+  // 를 한 군데로 모아 옵션 페이지가 라이브 표시, runBulkRemote 의 watchdog 가 idle 감지.
+  const reportProgress = (stage, bytes, totalBytes) => {
+    if (!episodeTitle) return;
+    emitCardProgress(episodeTitle, { stage, bytes: bytes || 0, totalBytes: totalBytes || null });
+  };
 
   // episodes 폴더 list 후 세 경로로 dedup:
   //  (a) shortId 가 있으면 `__${shortId}__` 부분 문자열 매칭 — 새 4-segment 포맷.
@@ -1932,13 +2198,11 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
 
   const urlHost = (() => { try { return new URL(audioUrl).host; } catch { return "(invalid)"; } })();
 
-  // m4a/mp4 (NotebookLM 기본 256k stereo) 는 offscreen 이 직접 fetch + transcode
-  // 한 mp3 buffer 를 받아온다. SW 가 fetch 후 b64 string 을 offscreen 으로 보내던
-  // 이전 방식은 큰 카드 (30MB+) 에서 chrome.runtime 메시지 채널을 자주 끊어버림.
-  // 이 경로는 SW↔offscreen 사이 메시지를 작게 (URL 200 byte + mp3 b64 ~5MB 응답)
-  // 유지해서 채널 안정성 확보. v1 의 src/audio_tools.py:transcode_to_mp3 와 동등한
-  // 결과 (64k mono mp3, ~5MB / 30분).
-  let buf;
+  // m4a/mp4 (NotebookLM 기본 256k stereo) 는 offscreen 이 직접 fetch + transcode +
+  // base64 인코딩까지 끝낸 string 을 돌려준다. SW thread 는 b64 변환 동기 루프를
+  // 안 돌아 — 큰 카드 (40MB) 에서 1~2초씩 message 채널이 freeze 되던 현상 해소.
+  // mp3 등 transcode 불필요 케이스도 같은 경로로 (mode: "fetch") 통과시켜 SW b64 제거.
+  let b64;
   let size;
   const filenameExt = (filename.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
   const isAac = filenameExt === "m4a" || filenameExt === "mp4";
@@ -1946,43 +2210,38 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   if (isAac) {
     try {
       stageLog(`fetch+transcode (offscreen) m4a→mp3 64k mono...`);
-      buf = await transcodeViaOffscreen(audioUrl, 64, true);
-      size = buf.byteLength;
+      ({ b64, size } = await fetchEncodeViaOffscreen(audioUrl, {
+        transcode: true, bitrate: 64, mono: true,
+        onProgress: (p) => reportProgress(p.stage, p.bytes, p.totalBytes),
+      }));
       filename = filename.replace(/\.(m4a|mp4)$/i, ".mp3");
       stageFilename = filename;
-      stageLog(`transcoded → ${(size / 1024 / 1024).toFixed(1)}MB`);
+      stageLog(`transcoded+b64 → ${(size / 1024 / 1024).toFixed(1)}MB`);
       // dedup hint 의 ext 도 mp3 으로 동기 — legacy 매칭이 일관되도록.
       if (dedupHints) dedupHints.ext = ".mp3";
     } catch (e) {
-      console.warn(`[push] offscreen transcode 실패, SW 가 원본 m4a 직접 fetch: ${e.message}`);
-      // Fallback: SW 가 fetch 후 그대로 push. 큰 m4a 면 ghPut 가 GitHub blob 한계
-      // 에러로 떨어질 수 있음.
-      console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
-      const r = await fetch(audioUrl, { credentials: "include" });
-      if (!r.ok) {
-        throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost}`);
-      }
-      buf = await r.arrayBuffer();
-      size = buf.byteLength;
-      stageLog(`fallback fetched ${(size / 1024 / 1024).toFixed(1)}MB (m4a 그대로)`);
+      console.warn(`[push] offscreen transcode 실패, fallback fetch (offscreen, transcode 없이): ${e.message}`);
+      // Fallback: offscreen 으로 raw m4a 만 fetch + b64 하고 그대로 push. SW b64 회피.
+      // 큰 m4a 는 ghPut 가 GitHub blob 한계 에러로 떨어질 수 있음 — 이건 sizing 문제라 회피 불가.
+      ({ b64, size } = await fetchEncodeViaOffscreen(audioUrl, {
+        transcode: false,
+        onProgress: (p) => reportProgress(p.stage, p.bytes, p.totalBytes),
+      }));
+      stageLog(`fallback fetched+b64 ${(size / 1024 / 1024).toFixed(1)}MB (m4a 그대로) host=${urlHost}`);
     }
   } else {
-    // mp3 / 기타 — SW 가 fetch + push (transcode 불필요).
-    console.log(`[push] SW fetch host=${urlHost} url=${audioUrl.slice(0, 200)}`);
-    const r = await fetch(audioUrl, { credentials: "include" });
-    if (!r.ok) {
-      throw new Error(`SW fetch 실패: ${r.status} ${r.statusText} host=${urlHost} final=${r.url.slice(0, 80)}… redirected=${r.redirected}`);
-    }
-    buf = await r.arrayBuffer();
-    size = buf.byteLength;
-    stageLog(`fetched ${(size / 1024 / 1024).toFixed(1)}MB`);
+    // mp3 / 기타 — offscreen 이 fetch + b64. SW thread 는 b64 안 돈다.
+    ({ b64, size } = await fetchEncodeViaOffscreen(audioUrl, {
+      transcode: false,
+      onProgress: (p) => reportProgress(p.stage, p.bytes, p.totalBytes),
+    }));
+    stageLog(`fetched+b64 ${(size / 1024 / 1024).toFixed(1)}MB host=${urlHost}`);
   }
 
   const path = `docs/episodes/${filename}`;
-  const b64 = arrayBufferToBase64(buf);
-  stageLog(`base64 encoded`);
 
   // 정확 path 에 같은 크기 파일이 있으면 skip (list 실패 시 fallback 경로 + 이중 안전망).
+  reportProgress("ghGet", 0, null);
   const existing = await ghGet(cfg.repo, path, cfg.token);
   stageLog(`ghGet existing=${existing ? existing.size : 'none'}`);
   let pushResult;
@@ -1990,9 +2249,11 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
     console.log(`[push] ${filename} 이미 존재 (같은 크기), skip`);
     pushResult = { skipped: true, skipKind: "dedup", reason: "이미 존재" };
   } else {
+    reportProgress("uploading", 0, size);
     await ghPut(cfg.repo, path, b64,
       `Add episode ${filename}`, existing?.sha, cfg.token, committer);
     stageLog(`pushed ${(size / 1024 / 1024).toFixed(1)}MB`);
+    reportProgress("uploaded", size, size);
     pushResult = { ok: true, size, filename };
   }
 
@@ -2013,16 +2274,6 @@ async function pushEpisode(audioUrl, filename, dedupHints) {
   }
   stageLog(`done`);
   return pushResult;
-}
-
-function arrayBufferToBase64(buf) {
-  const bytes = new Uint8Array(buf);
-  const CHUNK = 0x8000;
-  const parts = [];
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
-  }
-  return btoa(parts.join(""));
 }
 
 function ghContentsUrl(repo, path) {

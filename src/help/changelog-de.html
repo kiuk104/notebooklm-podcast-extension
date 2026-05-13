@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>NotebookLM Podcast Sync — Versionsverlauf</title>
+<style>
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 24px 80px; color: #222; line-height: 1.6; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  p, li { font-size: 13px; }
+  p.sub { color: #666; margin-top: 0; font-size: 13px; }
+  code { background: #f4f4f5; padding: 1px 6px; border-radius: 3px; font-size: 12px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  ol li, ul li { margin: 4px 0; }
+  a { color: #2563eb; }
+  hr { border: 0; border-top: 1px solid #e5e7eb; margin: 28px 0; }
+  .lang-switch { font-size: 12px; color: #6b7280; margin: 0 0 8px; }
+  .lang-switch a { color: #2563eb; text-decoration: none; margin-right: 10px; }
+  .lang-switch a.current { color: #111; font-weight: 600; text-decoration: underline; }
+  .back { font-size: 12.5px; margin: 0 0 16px; }
+</style>
+</head>
+<body>
+
+<p class="lang-switch">
+  <a href="changelog.html">한국어</a>
+  <a href="changelog-en.html">English</a>
+  <a href="changelog-de.html" class="current">Deutsch</a>
+</p>
+
+<p class="back">← <a href="help-de.html">Zurück zur Hilfe</a></p>
+
+<h1>Versionsverlauf (Detail)</h1>
+<p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
+
+<h3>v0.4.40 (2026-05-13) — Umorganisation der Hilfeseite</h3>
+<ul>
+  <li><strong>Hilfe-§12 zur themenorientierten Zusammenfassung verdichtet</strong>; Details pro Version auf diese Seite ausgelagert. So überblickt man auf der Hilfeseite die großen Themen schnell und springt nur bei Bedarf hierher.</li>
+</ul>
+
+<h3>v0.4.39 (2026-05-13) — Geräteübergreifender Skip-Leak behoben</h3>
+<ul>
+  <li><strong>Übersprungene Karten wurden auf einem anderen Gerät erneut heruntergeladen</strong> — Fix für eine Race-Bedingung, bei der das <code>artifact-labels</code>-DOM einer Karte noch nicht gerendert war, sodass die shortId leer blieb und der Skip-Filter umgangen wurde. <code>(date, titleSlug)</code>-Fallback-Matching hinzugefügt, sodass auch dieser Race-Fall jetzt korrekt blockiert wird. Das "Übersprungen"-Badge in der Optionsseiten-Baumansicht ist nun ebenfalls konsistent.</li>
+</ul>
+
+<h3>v0.4.38 (2026-05-13) — Schnellerer Notebook-Scan</h3>
+<ul>
+  <li><strong>Letztes Scan-Ergebnis automatisch wiederverwenden</strong> — Erneutes Klicken auf [Alle Notebooks scannen] innerhalb von 30 Minuten liefert sofort ohne erneuten Scan. Reduziert die Wartezeit nach einem Auto-Download auf nahe Null. Umschalt+Klick erzwingt einen vollständigen Scan.</li>
+  <li><strong>Notebook-spezifische Änderungs-Erkennung</strong> — Aus den Home-Page-Notebook-Karten werden absolute Zeitstempel und Zähler-Signale als "strukturelle Fingerabdrücke" extrahiert. Innerhalb von 4 Stunden gescannte Notebooks werden übersprungen (kein Tab geöffnet), wenn sich der Fingerabdruck nicht geändert hat. Neues Audio-Overview ändert ihn und löst automatisch einen vollständigen Scan aus.</li>
+  <li><strong>Graceful Degrade</strong> — wenn NotebookLMs DOM diese Signale nicht zeigt, wird jedes Notebook vollständig gescannt (wie bisher). Die Extraktionsrate ist in der SW-Konsole als <code>[scan:list]</code> sichtbar.</li>
+</ul>
+
+<h3>v0.4.37 (2026-05-13) — Stabilität des Bulk-Downloads</h3>
+<ul>
+  <li><strong>UI-Freeze behoben</strong> — Popup / Optionsseite pausieren nicht mehr 1-2 Sekunden pro großer Karte (40MB m4a). Synchrones base64-Encoding vollständig in das Offscreen-Dokument verlagert, weg vom Service-Worker-Thread.</li>
+  <li><strong>Bulk-Popup-Fenster ausgeblendet</strong> — Das NotebookLM-Popup taucht nicht mehr vor anderen Browser-Fenstern auf. Wird nun an Off-Screen-Koordinaten (-32000, -32000) erzeugt. Download-Verhalten unverändert.</li>
+  <li><strong>Live-Fortschritt pro Karte</strong> — Der Fortschrittsmonitor zeigt jetzt für die aktuelle Karte Stage (Download / Transcode / Upload) und Byte-Fortschrittsbalken. Vorher nur Start/Ende-Ereignisse.</li>
+  <li><strong>Schnellere Erholung bei festhängenden Karten</strong> — Eine blockierte Karte wird nach 90 s ohne Fortschritt übersprungen, statt des alten 10-Minuten-Timeouts. Normale Karten bleiben aktiv, da jeder Fetch-Chunk ein Aktivitätssignal sendet.</li>
+</ul>
+
+<h3>v0.4.36 (2026-05-12)</h3>
+<ul>
+  <li><strong>Lokalen Download nach erfolgreichem GitHub-Push automatisch löschen</strong> (Standard EIN) — Chrome-Downloads-Ordner wird nach erfolgreichem Push aufgeräumt. Da die mp3 nun in GitHub liegt, ist die lokale Kopie redundant. Fehlgeschlagene Pushes bleiben erhalten (retry-fähig). Im GitHub-Einstellungspanel umschaltbar.</li>
+</ul>
+
+<h3>v0.4.35 (2026-05-12)</h3>
+<ul>
+  <li><strong>Retention-Grenze über die Metadatenseite editierbar</strong> — <code>retention.maxTotalMB</code> in <code>docs/podcast.json</code> direkt aus der Extension-UI änderbar. Standard 2000. Auslastungs-Panel wird beim Speichern sofort aktualisiert.</li>
+</ul>
+
+<h3>v0.4.34 (2026-05-11)</h3>
+<ul>
+  <li><strong>[Über Limit aufräumen]-Button</strong> — im Auslastungs-Panel (Fortschrittsmonitor + Episodenliste) löscht die Extension selbst die ältesten Dateien über der Retention-Grenze und registriert sie in der dauerhaften Skip-Liste.</li>
+  <li><strong>Bulk-[Skip]-Aktion</strong> — neben [Bulk-Löschen] in der Episodenliste. Mehrere via Checkboxen auswählen und in einem Schritt löschen + registrieren.</li>
+</ul>
+
+<h3>v0.4.33 (2026-05-10)</h3>
+<ul>
+  <li><strong>[Skip] = jetzt Löschen + dauerhafte Sperre</strong> — [Löschen] entfernt nur die Datei (kann beim nächsten Scan wieder geladen werden); [Skip] löscht und trägt in die Skip-Liste ein.</li>
+  <li><strong>Skip-Liste mit Metadaten</strong> — Dateiname / Titel / Notebook / Datum / Registrierungszeitpunkt pro Eintrag gespeichert. Im [Skip-Liste]-Panel sichtbar.</li>
+</ul>
+
+<h3>v0.4.32 (2026-05-10)</h3>
+<ul>
+  <li><strong>Endlose Wiederherunterladungsschleife behoben</strong> — strukturelle Lösung für: Bulk-Push → Workflow schneidet via Retention → nächster Scan markiert dieselbe Karte wieder als neu → endloser Download.</li>
+  <li><strong>Alte Karten automatisch überspringen (Standard 730 Tage)</strong> — Eingabefeld in den GitHub-Einstellungen.</li>
+  <li><strong>Auslastungs-Panel</strong> — Fortschrittsmonitor + Episodenliste zeigen Auslastung / Limit / %-Balken (75% gelb, 90% rot).</li>
+  <li><strong>Skip-Listen-Verwaltung</strong> — in chrome.storage.sync gespeichert (mehrgerätesynchron). [Skip]-Aktion pro Zeile; [Skip-Liste] zum einzelnen Aufheben oder Alle-Löschen.</li>
+</ul>
+
+<h3>v0.4.31 (2026-05-10)</h3>
+<ul>
+  <li><strong>artifact-labels-Race-Fix</strong> — Scans warten nun bis die Dedup-Schlüssel im DOM gerendert sind (bis zu 3 Sekunden Polling).</li>
+  <li><strong>Workflow Push-Retry</strong> — bei Race zwischen ghPut der Extension und Workflow-Push: reset auf origin/main, rebuild, retry (max. 3× mit Backoff).</li>
+  <li><strong>4-Segment titleKey-Fallback</strong> — Dedup funktioniert via (date, titleSlug, ext) auch bei leerem artifactId.</li>
+</ul>
+
+<h3>v0.4.30 (2026-05-10)</h3>
+<ul>
+  <li><strong>Mehrgerätesynchronisation via Chrome Sync</strong> — GitHub-Einstellungen (inkl. PAT) + UI-Sprache in <code>chrome.storage.sync</code>.</li>
+  <li><strong>Karten-Picker (notebookübergreifend)</strong> — [Karten auswählen ▾] öffnet einen Baum pro Notebook; Checkboxen pro Karte.</li>
+  <li><strong>Dedup-Lücken</strong> behoben — ältere 3-Segment-Dateien (vor v0.4.0) jetzt auch via (date, title, ext) erkannt. cover.title-Race behoben.</li>
+</ul>
+
+<h3>v0.4.0 – v0.4.27 (2026-04-29 — 05-08)</h3>
+<ul>
+  <li><strong>Bulk-Download</strong> + <strong>notebookübergreifender Sweep (v1-Cron-Äquivalent)</strong>.</li>
+  <li><strong>Fortschrittsmonitor</strong>, <strong>zwei RSS-Modi</strong> (GitHub Actions / Extension-direkt), <strong>Retention</strong> (maxItems, maxAgeDays, maxTotalMB).</li>
+  <li><strong>Client-Transcode</strong> (m4a → mp3) via Offscreen + lamejs.</li>
+  <li><strong>Episoden-Verwaltungsseite</strong>, <strong>UUID-basiertes Dedup</strong>, <strong>i18n</strong> (ko/en/de), <strong>Chrome Web Store-Vorbereitung</strong>.</li>
+</ul>
+
+<h3>v0.2.x – v0.3.x (2026-04-28 — 04-29)</h3>
+<ul>
+  <li>Download-Trigger + GitHub Contents API Push.</li>
+</ul>
+
+<hr>
+
+<p style="font-size: 12px; color: #666;">
+Tiefere Implementierungs- / Debug-Notizen:
+<a href="../../README.md" target="_blank">README.md</a> ·
+<a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a>
+</p>
+
+<p class="back">← <a href="help-de.html">Zurück zur Hilfe</a></p>
+
+</body>
+</html>

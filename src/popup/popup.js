@@ -350,7 +350,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       scanAllBtn.disabled = false;
       return;
     }
-    renderAggregate(msg.notebooks);
+    renderAggregate(msg.notebooks, { cacheUsed: !!msg.cacheUsed, cacheAgeMs: msg.cacheAgeMs });
     return;
   }
 
@@ -463,14 +463,18 @@ scanBtn.addEventListener("click", async () => {
 
 // ----- 스캔: 모든 노트북 (cross-notebook) -----
 
-scanAllBtn.addEventListener("click", async () => {
+// Shift-click 시 캐시 우회 강제 풀 스캔. 일반 클릭은 background 가 30분 이내 캐시면
+// 자동 재사용 (체감 0초 마무리). 사용자가 NotebookLM 에서 새 음성개요 만든 직후엔
+// shift-click 으로 풀 스캔. 또는 옵션 페이지 [지우기] 버튼으로 캐시 폐기.
+scanAllBtn.addEventListener("click", async (e) => {
   scanBtn.disabled = true;
   scanAllBtn.disabled = true;
   clearList();
   coverEl.style.display = "none";
   viewMode = "all";
-  setStatus(t("popup.scanAllStart"), "");
-  const ack = await chrome.runtime.sendMessage({ type: "scan:all" });
+  const force = e.shiftKey;
+  setStatus(force ? t("popup.scanAllForceStart") : t("popup.scanAllStart"), "");
+  const ack = await chrome.runtime.sendMessage({ type: "scan:all", force });
   if (!ack?.ok) {
     setStatus(t("popup.startFail", { error: ack?.error || "?" }), "error");
     scanBtn.disabled = false;
@@ -478,8 +482,10 @@ scanAllBtn.addEventListener("click", async () => {
   }
   // progress / done 은 onMessage 핸들러에서 처리.
 });
+// 사용자 발견 가능성을 높이려 tooltip 추가. data-i18n title 은 i18n.js 갱신 후 자동 반영.
+scanAllBtn.title = t("popup.scanAllTooltip");
 
-async function renderAggregate(notebooks) {
+async function renderAggregate(notebooks, opts = {}) {
   clearList();
   viewMode = "all";
 
@@ -527,6 +533,16 @@ async function renderAggregate(notebooks) {
   if (totalAlready > 0) parts.push(t("popup.alreadyN", { n: totalAlready }));
   if (totalEligible > 0) parts.push(t("popup.newN", { n: totalEligible }));
   if (totalCards === 0) parts.push(t("popup.noOverviews"));
+  // 캐시 재사용 안내. 직전 스캔이 30분 이내라 background 가 풀 스캔 안 한 케이스 —
+  // shift-click 으로 강제 풀 스캔 가능함을 사용자에게 알림.
+  if (opts.cacheUsed) {
+    const ms = opts.cacheAgeMs || 0;
+    const ageMin = Math.round(ms / 60000);
+    const ageStr = ageMin < 1
+      ? t("popup.scanAgo.sec", { n: Math.round(ms / 1000) })
+      : t("popup.scanAgo.min", { n: ageMin });
+    parts.push(t("popup.scanAllCacheUsed", { age: ageStr }));
+  }
   setStatus(parts.join(" · "), totalCards > 0 ? "success" : "");
 
   refreshBulkBar();
@@ -547,7 +563,9 @@ async function renderAggregate(notebooks) {
     if (!r?.result?.notebooks?.length) return;
     const ageMs = Date.now() - (r.result.scannedAt || 0);
     if (ageMs > 30 * 60 * 1000) return; // 30분 넘으면 stale 로 보고 무시.
-    await renderAggregate(r.result.notebooks);
+    // 자동 복원은 캐시-재사용 시그널 안 줌 — 사용자가 scan 을 트리거한 게 아니라 그냥
+    // popup 다시 열었을 뿐. cacheUsed:false 로 둬서 평소 통계만 보여줌.
+    await renderAggregate(r.result.notebooks, { cacheUsed: false });
     const ageMin = Math.round(ageMs / 60000);
     const ageStr = ageMin < 1
       ? t("popup.scanAgo.sec", { n: Math.round(ageMs / 1000) })
