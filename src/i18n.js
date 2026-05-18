@@ -16,6 +16,7 @@ const I18N_TRANSLATIONS = {
     "sidebar.nav.meta": "팟캐스트 메타",
     "sidebar.nav.episodes": "에피소드 목록",
     "sidebar.help": "❓ 도움말",
+    "sidebar.feedback": "🐛 오류 제보 / 개선 제안",
     "sidebar.lang.label": "언어",
 
     // ---- 진행 모니터 ----
@@ -224,6 +225,7 @@ const I18N_TRANSLATIONS = {
     "popup.cardDl": "받기",
     "popup.openOptions": "⚙ 관리",
     "popup.openHelp": "❓ 도움말",
+    "popup.openFeedback": "🐛 오류 제보 / 개선 제안",
     "popup.untitled": "(제목 없음)",
     "popup.placeholder.cbTip": "제목 확정 대기 중",
     "popup.placeholder.btnTip": "제목이 확정되면 활성화됩니다",
@@ -284,6 +286,7 @@ const I18N_TRANSLATIONS = {
     "sidebar.nav.meta": "Podcast meta",
     "sidebar.nav.episodes": "Episodes",
     "sidebar.help": "❓ Help",
+    "sidebar.feedback": "🐛 Report issue / suggestion",
     "sidebar.lang.label": "Language",
 
     "page.monitor.title": "Progress monitor",
@@ -486,6 +489,7 @@ const I18N_TRANSLATIONS = {
     "popup.cardDl": "Download",
     "popup.openOptions": "⚙ Admin",
     "popup.openHelp": "❓ Help",
+    "popup.openFeedback": "🐛 Report issue / suggestion",
     "popup.untitled": "(untitled)",
     "popup.placeholder.cbTip": "Waiting for title to resolve",
     "popup.placeholder.btnTip": "Enabled once the title is set",
@@ -546,6 +550,7 @@ const I18N_TRANSLATIONS = {
     "sidebar.nav.meta": "Podcast-Meta",
     "sidebar.nav.episodes": "Episoden",
     "sidebar.help": "❓ Hilfe",
+    "sidebar.feedback": "🐛 Fehler melden / Vorschlag",
     "sidebar.lang.label": "Sprache",
 
     "page.monitor.title": "Fortschritt",
@@ -750,6 +755,7 @@ const I18N_TRANSLATIONS = {
     "popup.cardDl": "Herunterladen",
     "popup.openOptions": "⚙ Verwaltung",
     "popup.openHelp": "❓ Hilfe",
+    "popup.openFeedback": "🐛 Fehler melden / Vorschlag",
     "popup.untitled": "(ohne Titel)",
     "popup.placeholder.cbTip": "Warte auf endgültigen Titel",
     "popup.placeholder.btnTip": "Wird aktiv, sobald der Titel feststeht",

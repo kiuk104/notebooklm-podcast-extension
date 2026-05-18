@@ -589,3 +589,8 @@ document.getElementById("open-help").addEventListener("click", (e) => {
   const file = lang === "en" ? "help-en.html" : lang === "de" ? "help-de.html" : "help.html";
   chrome.tabs.create({ url: chrome.runtime.getURL(`src/help/${file}`) });
 });
+
+document.getElementById("open-feedback").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: "https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" });
+});
