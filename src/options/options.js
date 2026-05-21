@@ -784,6 +784,7 @@ const pickMasterEl = document.getElementById("pick-master");
 const pickShowPushedEl = document.getElementById("pick-show-pushed");
 const pickSummaryEl = document.getElementById("pick-summary");
 const pickDownloadBtn = document.getElementById("pick-download");
+const pickSkipBtn = document.getElementById("pick-skip");
 const pickCancelBtn = document.getElementById("pick-cancel");
 const pickStatusEl = document.getElementById("pick-status");
 
@@ -903,6 +904,10 @@ function renderPickTree() {
       cardCb.dataset.cardIndex = String(idx);
       cardCb.dataset.artifactId = audio.artifactId || "";
       cardCb.dataset.episodeTitle = audio.title || "";
+      // 스킵 처리 시 storage 에 메타도 같이 저장 — 옵션 페이지 스킵 패널에서
+      // 어떤 파일이었는지 표시되도록.
+      cardCb.dataset.coverDateAttr = nb.cover?.dateAttr || "";
+      cardCb.dataset.notebookTitle = nb.cover?.title || "";
       cardCb.dataset.kind = isPushed ? "pushed" : isPlaceholder ? "placeholder" : "new";
       // default: 신규만 체크. placeholder 는 disabled (background 가 어차피 거절).
       cardCb.disabled = isPlaceholder;
@@ -1012,6 +1017,24 @@ function collectPickedSelections() {
   return out;
 }
 
+// [선택한 N개 스킵] 용 메타. addSkippedEntry 에 필요한 모든 필드를 미리 모아둠.
+// artifactId 가 비어 있으면 shortId 도 못 만들어 스킵 등록 불가 — 그런 entry 는 제외.
+function collectPickedSkipMeta() {
+  const out = [];
+  pickTreeEl.querySelectorAll(".pick-card-cb:not(:disabled)").forEach((cb) => {
+    if (!cb.checked) return;
+    const artifactId = cb.dataset.artifactId || "";
+    if (!artifactId) return; // shortId 추출 불가 → 스킵 등록 불가
+    out.push({
+      artifactId,
+      title: cb.dataset.episodeTitle || "",
+      coverDateAttr: cb.dataset.coverDateAttr || "",
+      notebookTitle: cb.dataset.notebookTitle || "",
+    });
+  });
+  return out;
+}
+
 function refreshPickSummary() {
   const sels = collectPickedSelections();
   pickSummaryEl.textContent = t("pick.summary", { n: sels.length });
@@ -1019,6 +1042,14 @@ function refreshPickSummary() {
   pickDownloadBtn.textContent = sels.length === 0
     ? t("pick.download")
     : t("pick.downloadN", { n: sels.length });
+  // 스킵 버튼도 같은 카운트 사용. artifactId 없는 카드는 collectPickedSkipMeta 가
+  // 제외하므로 표시되는 N 과 실제 등록되는 수가 다를 수 있지만 흔치 않음.
+  if (pickSkipBtn) {
+    pickSkipBtn.disabled = sels.length === 0;
+    pickSkipBtn.textContent = sels.length === 0
+      ? t("pick.skip")
+      : t("pick.skipN", { n: sels.length });
+  }
   // master 상태 업데이트.
   const allCards = pickTreeEl.querySelectorAll(".pick-card-cb:not(:disabled)");
   if (allCards.length === 0) {
@@ -1051,6 +1082,46 @@ if (pickDownloadBtn) {
     pickEl.style.display = "none";
     lastScanPickToggleBtn.textContent = t("monitor.lastScan.pick");
     show(t("pick.startedN", { n: r.count || selections.length }), "success");
+  });
+}
+
+if (pickSkipBtn) {
+  pickSkipBtn.addEventListener("click", async () => {
+    const items = collectPickedSkipMeta();
+    if (items.length === 0) return;
+    if (!confirm(t("pick.skipConfirm", { n: items.length }))) return;
+    pickSkipBtn.disabled = true;
+    pickStatusEl.textContent = t("pick.skipStarting");
+    const r = await chrome.runtime.sendMessage({
+      type: "bulk:skip:selected",
+      payload: { items },
+    });
+    if (!r?.ok) {
+      pickStatusEl.textContent = `Skip failed: ${r?.error || "?"}`;
+      pickSkipBtn.disabled = false;
+      return;
+    }
+    // 등록 성공 — 트리에서 방금 스킵된 카드는 다시 보이지 않게 fresh 데이터로 재렌더.
+    // scan:result:pushed 가 isSkipped 도 enrich 해서 반환하지만 pick 트리는 현재
+    // isSkipped 를 따로 안 보므로 그냥 같은 데이터를 다시 받는다 — pushedSet 만 갱신.
+    pickStatusEl.textContent = t("pick.skipDoneN", { n: r.added || items.length });
+    try {
+      const rr = await chrome.runtime.sendMessage({ type: "scan:result:pushed" });
+      if (rr?.ok) {
+        pickState = {
+          notebooks: rr.notebooks || [],
+          scannedAt: rr.scannedAt || 0,
+        };
+        // 방금 스킵된 카드를 안 보이도록 audios 에서 필터 (isSkipped flag 활용).
+        pickState.notebooks = pickState.notebooks.map((nb) => ({
+          ...nb,
+          audios: (nb.audios || []).filter((a) => !a.isSkipped),
+        }));
+        renderPickTree();
+      }
+    } catch {}
+    pickSkipBtn.disabled = false;
+    show(t("pick.skipDoneN", { n: r.added || items.length }), "success");
   });
 }
 
@@ -1314,11 +1385,13 @@ metaImageUploadEl.addEventListener("change", async (e) => {
 });
 
 // 옵션 페이지 첫 오픈 + token/repo 가 이미 저장된 상태면 자동 로드.
+// 에피소드 목록은 기본값으로 피드 순서로 보기 모드로 시작.
 (async () => {
   const stored = await cfgGet(["token", "repo"]);
   if (stored.token && stored.repo && REPO_RE.test(stored.repo)) {
     loadPodcastMeta();
-    loadEpisodeList();
+    await loadEpisodeList();
+    enterFeedOrderViewMode();
   }
 })();
 
@@ -1368,12 +1441,23 @@ const epTableWrapEl = document.getElementById("ep-table-wrap");
 const epTbody = document.getElementById("ep-tbody");
 const epEmptyEl = document.getElementById("ep-empty");
 const epCheckAll = document.getElementById("ep-check-all");
+const epReorderToggleBtn = document.getElementById("ep-reorder-toggle");
+const epFeedOrderViewBtn = document.getElementById("ep-feed-order-view");
+const epReorderBar = document.getElementById("ep-reorder-bar");
+const epReorderApplyBtn = document.getElementById("ep-reorder-apply");
+const epReorderCancelBtn = document.getElementById("ep-reorder-cancel");
+const epReorderResetBtn = document.getElementById("ep-reorder-reset");
 
 let epItems = [];                    // 서버에서 받은 원본 (정렬 대상)
 let epSortKey = "date";              // date / notebook / title / format / size
 let epSortDir = "desc";              // asc / desc
 let epGroupOn = false;
 let epNotebookUrlMap = new Map();    // notebookSlug → notebookUrl (직전 스캔 결과 기반)
+let epReorderMode = false;           // 순서 편집 모드 활성 여부
+let epCustomOrder = [];              // 편집 중인 filename 순서 배열
+let epDragSrc = null;                // 드래그 중인 row 의 filename
+let epFeedOrderViewMode = false;     // 피드 순서로 보기 모드 활성 여부
+let epFeedOrder = [];                // podcast.json 의 episodeOrder (filename 배열)
 
 // background.js 의 slugify 와 동일 — 파일명의 노트북-슬러그를 lastScanResult 의
 // 노트북 cover.title 과 매칭하기 위해 클라이언트에서도 같은 변환 필요. SLUG_MAX=40.
@@ -1512,14 +1596,34 @@ function epSortedItems() {
   );
 }
 
+// 피드 순서로 정렬 — epFeedOrder(filename 배열) 기준.
+// episodeOrder 에 없는 파일은 날짜 내림차순으로 뒤에 붙음.
+function epFeedOrderedItems() {
+  if (epFeedOrder.length === 0) return epSortedItems();
+  const orderMap = new Map(epFeedOrder.map((fn, i) => [fn, i]));
+  return epItems.slice().sort((a, b) => {
+    const ia = orderMap.has(a.filename) ? orderMap.get(a.filename) : Infinity;
+    const ib = orderMap.has(b.filename) ? orderMap.get(b.filename) : Infinity;
+    if (ia !== ib) return ia - ib;
+    // 둘 다 없는 경우: 날짜 내림차순 → 파일명 내림차순
+    return b.date.localeCompare(a.date) || b.filename.localeCompare(a.filename);
+  });
+}
+
 function renderEpisodeTable() {
-  // 정렬 화살표 표시.
+  // 정렬 화살표 표시 (편집/피드순 모드에선 무의미하지만 상태는 유지).
   document.querySelectorAll("#ep-table th.sortable").forEach((th) => {
     th.classList.remove("sort-asc", "sort-desc");
-    if (th.dataset.key === epSortKey) th.classList.add(epSortDir === "asc" ? "sort-asc" : "sort-desc");
+    if (!epReorderMode && !epFeedOrderViewMode && th.dataset.key === epSortKey)
+      th.classList.add(epSortDir === "asc" ? "sort-asc" : "sort-desc");
   });
 
-  const items = epSortedItems();
+  if (epReorderMode) {
+    renderEpisodeTableReorder();
+    return;
+  }
+
+  const items = epFeedOrderViewMode ? epFeedOrderedItems() : epSortedItems();
   const editLabel = t("episodes.action.edit");
   const shareLabel = t("episodes.action.share");
   const shareTooltip = t("episodes.shareTooltip");
@@ -1539,8 +1643,6 @@ function renderEpisodeTable() {
     const editAttrs = nbUrl
       ? `data-nb-url="${escapeHtml(nbUrl)}" title="${escapeHtml(tooltipReady)}"`
       : `disabled title="${escapeHtml(tooltipNoUrl)}"`;
-    // shortId 추출 — 4-segment 파일명 (date__nb__shortId__title.ext) 패턴. 옛
-    // 3-segment 파일은 null → [스킵] 비활성 (스킵 등록할 식별자 없음).
     const sidMatch = /__([0-9a-f]{8})__/.exec(it.filename);
     const sid = sidMatch ? sidMatch[1] : "";
     const skipAttrs = sid
@@ -1566,6 +1668,37 @@ function renderEpisodeTable() {
   refreshBatchUI();
 }
 
+// 순서 편집 모드 전용 렌더러.
+// epCustomOrder 배열 순서로 행을 그리고, 드래그 핸들(☰)과 ▲▼ 버튼을 표시.
+// 체크박스 열 대신 드래그 핸들 열을 사용하므로 colspan=7 그대로 유지.
+function renderEpisodeTableReorder() {
+  const itemMap = new Map(epItems.map((it) => [it.filename, it]));
+  const html = epCustomOrder.map((fn, idx) => {
+    const it = itemMap.get(fn);
+    if (!it) return "";
+    const fmtClass = `format-tag ${escapeHtml(it.format)}`;
+    const isFirst = idx === 0;
+    const isLast = idx === epCustomOrder.length - 1;
+    return `
+      <tr class="ep-row" draggable="true"
+          data-filename="${escapeHtml(fn)}" data-sha="${escapeHtml(it.sha)}" data-sid="">
+        <td class="col-drag" title="드래그하여 순서 변경">☰</td>
+        <td title="${escapeHtml(it.date)}">${escapeHtml(it.date)}</td>
+        <td class="notebook" title="${escapeHtml(it.notebook)}">${escapeHtml(it.notebook)}</td>
+        <td class="title" title="${escapeHtml(fn)}">${escapeHtml(it.title)}</td>
+        <td><span class="${fmtClass}">${escapeHtml(it.format)}</span></td>
+        <td class="num">${escapeHtml(epFmtSize(it.size))}</td>
+        <td class="col-actions">
+          <button type="button" class="ep-move ep-move-up" data-fn="${escapeHtml(fn)}"
+            ${isFirst ? "disabled" : ""} title="위로">▲</button>
+          <button type="button" class="ep-move ep-move-down" data-fn="${escapeHtml(fn)}"
+            ${isLast ? "disabled" : ""} title="아래로">▼</button>
+        </td>
+      </tr>`;
+  }).join("");
+  epTbody.innerHTML = html;
+}
+
 function refreshBatchUI() {
   const checked = epTbody.querySelectorAll(".ep-check:checked").length;
   const total = epTbody.querySelectorAll(".ep-check").length;
@@ -1578,6 +1711,186 @@ function refreshBatchUI() {
 }
 
 epReloadBtn.addEventListener("click", () => loadEpisodeList());
+
+// ---------- 순서 편집 모드 ----------
+
+function enterReorderMode() {
+  // 피드 순서로 보기 모드가 켜져 있으면 먼저 끄고 편집 모드로 전환.
+  if (epFeedOrderViewMode) {
+    epFeedOrderViewMode = false;
+    epFeedOrder = [];
+    epFeedOrderViewBtn.classList.remove("on");
+    document.getElementById("ep-table-wrap").classList.remove("ep-feed-view-active");
+    epShowStatus("");
+  }
+  epReorderMode = true;
+  // 현재 화면에 표시된 순서를 초기 편집 순서로 사용 (그룹 헤더 제외).
+  epCustomOrder = epSortedItems()
+    .filter((it) => !it.__groupHeader)
+    .map((it) => it.filename);
+  epReorderToggleBtn.classList.add("on");
+  epReorderBar.classList.add("visible");
+  epGroupToggleBtn.disabled = true;
+  epResetSortBtn.disabled = true;
+  document.getElementById("ep-table-wrap").classList.add("ep-reorder-active");
+  renderEpisodeTable();
+}
+
+function exitReorderMode() {
+  epReorderMode = false;
+  epCustomOrder = [];
+  epDragSrc = null;
+  epReorderToggleBtn.classList.remove("on");
+  epReorderBar.classList.remove("visible");
+  epGroupToggleBtn.disabled = false;
+  epResetSortBtn.disabled = false;
+  document.getElementById("ep-table-wrap").classList.remove("ep-reorder-active");
+  renderEpisodeTable();
+}
+
+epReorderToggleBtn.addEventListener("click", () => {
+  if (epReorderMode) exitReorderMode();
+  else enterReorderMode();
+});
+
+// ---------- 피드 순서로 보기 ----------
+
+async function enterFeedOrderViewMode() {
+  // 피드 순서를 podcast.json 에서 읽어온 후 모드 진입.
+  epShowStatus(t("episodes.feedOrderViewLoading"));
+  epFeedOrderViewBtn.disabled = true;
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "podcast:json:get" });
+    epFeedOrder = Array.isArray(r?.data?.episodeOrder) ? r.data.episodeOrder : [];
+    if (epFeedOrder.length === 0) {
+      epShowStatus(t("episodes.feedOrderViewNone"));
+    } else {
+      epShowStatus("");
+    }
+  } catch (e) {
+    epShowStatus(t("episodes.feedOrderViewFail", { msg: e.message }), "error");
+    epFeedOrderViewBtn.disabled = false;
+    return;
+  }
+  epFeedOrderViewMode = true;
+  epFeedOrderViewBtn.classList.add("on");
+  epGroupToggleBtn.disabled = true;
+  epResetSortBtn.disabled = true;
+  document.getElementById("ep-table-wrap").classList.add("ep-feed-view-active");
+  epFeedOrderViewBtn.disabled = false;
+  renderEpisodeTable();
+}
+
+function exitFeedOrderViewMode() {
+  epFeedOrderViewMode = false;
+  epFeedOrder = [];
+  epFeedOrderViewBtn.classList.remove("on");
+  epGroupToggleBtn.disabled = false;
+  epResetSortBtn.disabled = false;
+  document.getElementById("ep-table-wrap").classList.remove("ep-feed-view-active");
+  epShowStatus("");
+  renderEpisodeTable();
+}
+
+epFeedOrderViewBtn.addEventListener("click", () => {
+  if (epFeedOrderViewMode) exitFeedOrderViewMode();
+  else enterFeedOrderViewMode();
+});
+
+epReorderCancelBtn.addEventListener("click", () => exitReorderMode());
+
+epReorderResetBtn.addEventListener("click", () => {
+  // 기본 순서(날짜 내림차순)로 초기화 — epCustomOrder를 날짜 기준으로 재정렬.
+  epCustomOrder = epItems.slice()
+    .sort((a, b) => b.dateRaw.localeCompare(a.dateRaw) || b.filename.localeCompare(a.filename))
+    .map((it) => it.filename);
+  renderEpisodeTable();
+});
+
+epReorderApplyBtn.addEventListener("click", async () => {
+  epReorderApplyBtn.disabled = true;
+  epReorderApplyBtn.textContent = t("episodes.reorderSaving");
+  try {
+    const r = await chrome.runtime.sendMessage({
+      type: "feed:order:save",
+      order: epCustomOrder,
+    });
+    if (!r?.ok) throw new Error(r?.error || "?");
+    epShowStatus(t("episodes.reorderSaved"), "success");
+    exitReorderMode();
+  } catch (e) {
+    epShowStatus(t("episodes.reorderFail", { msg: e.message }), "error");
+  } finally {
+    epReorderApplyBtn.disabled = false;
+    epReorderApplyBtn.textContent = t("episodes.reorderApply");
+  }
+});
+
+// ---- 드래그 앤 드롭 ----
+epTbody.addEventListener("dragstart", (e) => {
+  const row = e.target.closest(".ep-row[draggable='true']");
+  if (!row) return;
+  epDragSrc = row.dataset.filename;
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", epDragSrc); // Firefox 호환
+  row.classList.add("dragging");
+});
+
+epTbody.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  const row = e.target.closest(".ep-row[draggable='true']");
+  if (!row || row.dataset.filename === epDragSrc) return;
+  epTbody.querySelectorAll(".drag-over").forEach((r) => r.classList.remove("drag-over"));
+  row.classList.add("drag-over");
+});
+
+epTbody.addEventListener("dragleave", (e) => {
+  // tbody 밖으로 나가면 drag-over 제거 (tbody 자식 간 이동 시 오발 방지).
+  if (!epTbody.contains(e.relatedTarget)) {
+    epTbody.querySelectorAll(".drag-over").forEach((r) => r.classList.remove("drag-over"));
+  }
+});
+
+epTbody.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const targetRow = e.target.closest(".ep-row[draggable='true']");
+  if (!targetRow || !epDragSrc || targetRow.dataset.filename === epDragSrc) return;
+  const srcIdx = epCustomOrder.indexOf(epDragSrc);
+  const tgtIdx = epCustomOrder.indexOf(targetRow.dataset.filename);
+  if (srcIdx === -1 || tgtIdx === -1) return;
+  epCustomOrder.splice(srcIdx, 1);
+  epCustomOrder.splice(tgtIdx, 0, epDragSrc);
+  epDragSrc = null;
+  renderEpisodeTable();
+});
+
+epTbody.addEventListener("dragend", () => {
+  epTbody.querySelectorAll(".dragging, .drag-over").forEach((r) => {
+    r.classList.remove("dragging", "drag-over");
+  });
+  epDragSrc = null;
+});
+
+// ---- ▲▼ 이동 버튼 ----
+epTbody.addEventListener("click", (e) => {
+  if (!epReorderMode) return;
+  const btn = e.target.closest(".ep-move-up, .ep-move-down");
+  if (!btn) return;
+  const fn = btn.dataset.fn;
+  const idx = epCustomOrder.indexOf(fn);
+  if (idx === -1) return;
+  if (btn.classList.contains("ep-move-up") && idx > 0) {
+    [epCustomOrder[idx - 1], epCustomOrder[idx]] = [epCustomOrder[idx], epCustomOrder[idx - 1]];
+    renderEpisodeTable();
+    // 이동 후 같은 행의 ▲ 버튼에 포커스 유지.
+    epTbody.querySelector(`.ep-move-up[data-fn="${CSS.escape(fn)}"]`)?.focus();
+  } else if (btn.classList.contains("ep-move-down") && idx < epCustomOrder.length - 1) {
+    [epCustomOrder[idx], epCustomOrder[idx + 1]] = [epCustomOrder[idx + 1], epCustomOrder[idx]];
+    renderEpisodeTable();
+    epTbody.querySelector(`.ep-move-down[data-fn="${CSS.escape(fn)}"]`)?.focus();
+  }
+});
 
 document.querySelectorAll("#ep-table th.sortable").forEach((th) => {
   th.addEventListener("click", (e) => {

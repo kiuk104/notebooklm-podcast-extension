@@ -141,7 +141,7 @@
 
 <p><strong>Download-Phase</strong> (eigenes Popup-Fenster):</p>
 <ol>
-  <li>Die Erweiterung öffnet ein kleines Popup-Fenster über <code>chrome.windows.create({type:"popup", focused:false})</code> (Hauptfenster behält den Fokus). NotebookLMs Download-Trigger verlangt sowohl <code>visibilityState='visible'</code> als auch eine echte User-Geste — ein Background-Tab im <code>active:false</code>-Zustand löst keinen Download aus.</li>
+  <li>Die Erweiterung öffnet ein kleines Popup-Fenster über <code>chrome.windows.create({type:"popup", focused:false})</code>. Ab v0.4.42 wird es am linken Bildschirmrand positioniert (<code>left:-399, top:0</code>) — größtenteils außerhalb des Bildschirms, erfüllt aber Chromes „≥50 % der Fensterfläche müssen sichtbar sein"-Regel und behält <code>visibilityState='visible'</code>. <code>focused:false</code> stellt sicher, dass das Hauptfenster den Fokus behält. NotebookLMs Download-Trigger verlangt sowohl <code>visibilityState='visible'</code> als auch eine echte User-Geste — ein Background-Tab im <code>active:false</code>-Zustand löst keinen Download aus.</li>
   <li>Innerhalb dieses Popups öffnet die Erweiterung jedes Notebook nacheinander und klickt das ⋮ → "Herunterladen"-Menü mittels <code>chrome.debugger</code> + <code>Input.dispatchMouseEvent</code> — auf C++-Browserebene wird ein <em>echter Nutzer-Klick</em> synthetisiert, sodass NotebookLM <code>isTrusted=true</code> sieht.</li>
   <li>Pro Karte: NotebookLM startet das Audio-Streaming → der SW holt dieselbe URL erneut → ist es <code>m4a/mp4</code>, transcodiert das Offscreen-Dokument zu mp3 (64k Mono) → Push zu GitHub.</li>
   <li>Das Popup-Fenster schließt sich automatisch, sobald alle Karten fertig sind.</li>
@@ -297,6 +297,23 @@
 <div class="tip">
   <strong>Geräteübergreifende Synchronisation:</strong> Die Skip-Liste (<code>skippedShortIds</code>) liegt in <code>chrome.storage.sync</code> und synchronisiert sich automatisch über alle Geräte / Browser mit derselben Google-Anmeldung. Skip auf einem Gerät → der nächste Sweep auf allen anderen Geräten überspringt die Karte ebenfalls. (storage.sync-Limit ~100 KB ≈ 400 Einträge; bei Überlauf werden die ältesten verworfen.)
 </div>
+
+<h3>6-6. Feed-Reihenfolge bearbeiten</h3>
+<p>Die im RSS-Feed angezeigte Episodenreihenfolge kann frei geändert werden. Standard ist neueste zuerst nach Dateinamen-Datum, aber nach dem Speichern einer eigenen Reihenfolge werden die Episoden in der Podcast-App in dieser Reihenfolge angezeigt.</p>
+<ol>
+  <li>Auf <strong>[Feed-Reihenfolge bearbeiten]</strong> in der Episoden-Toolbar klicken → Bearbeitungsmodus wird aktiviert.</li>
+  <li>Zeilen per <strong>☰-Handle</strong> ziehen oder <strong>▲ / ▼-Buttons</strong> verwenden, um die Reihenfolge anzupassen.</li>
+  <li><strong>[Auf Feed anwenden]</strong> klicken → die aktuelle Reihenfolge wird als <code>episodeOrder</code>-Array in <code>docs/podcast.json</code> deines Repos gespeichert. Im Erweiterungs-direkten RSS-Modus wird <code>feed.xml</code> sofort neu gebaut.</li>
+  <li><strong>[Standardreihenfolge wiederherstellen]</strong> entfernt die benutzerdefinierte Reihenfolge und kehrt zu neueste-zuerst zurück.</li>
+  <li><strong>[Abbrechen]</strong> beendet den Bearbeitungsmodus ohne zu speichern.</li>
+</ol>
+
+<div class="tip">
+  Im Bearbeitungsmodus ist das Klicken auf Spaltenüberschriften deaktiviert (verhindert versehentliches Umsortieren vor dem Speichern). Nach dem Anwenden schließt sich der Bearbeitungsmodus automatisch und die Tabelle wird aktualisiert. Bei GitHub-Actions-RSS-Modus (4-1) löst das Speichern den Workflow aus, der den Feed neu baut.
+</div>
+
+<h3 id="ep-order-view">6-7. Nach Feed-Reihenfolge anzeigen</h3>
+<p>Um die Episodenliste in der aktuell gespeicherten Feed-Reihenfolge zu sehen, den Toggle <strong>[Nach Feed-Reihenfolge anzeigen]</strong> in der Episoden-Toolbar aktivieren — ist eine benutzerdefinierte Reihenfolge gespeichert, wird diese angezeigt, andernfalls neueste zuerst. Deaktivieren kehrt zur vorherigen Sortierung zurück.</p>
 
 <h2 id="retention">7. Aufbewahrungsrichtlinie (Rolling Window)</h2>
 
@@ -455,6 +472,17 @@
 <h2 id="changelog">12. Versionsverlauf (Zusammenfassung)</h2>
 
 <p style="font-size: 12px; color: #666;">Nur die großen Themen. Details pro Version siehe <a href="changelog-de.html"><strong>Vollständiger Verlauf ↗</strong></a>. Vollständige Commit-Historie auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>.</p>
+
+<h3>Toggle „Nach Feed-Reihenfolge anzeigen" <span style="font-weight:normal; color:#666;">(v0.4.43, 2026-05-20)</span></h3>
+<ul>
+  <li>Toggle „Nach Feed-Reihenfolge anzeigen" — liest <code>episodeOrder</code> aus <code>podcast.json</code> auf GitHub und zeigt die Episodenliste in der aktuellen gespeicherten Feed-Reihenfolge.</li>
+</ul>
+
+<h3>Download-Fenster-Fix + Feed-Reihenfolge bearbeiten <span style="font-weight:normal; color:#666;">(v0.4.42, 2026-05-20)</span></h3>
+<ul>
+  <li>Koordinaten des Bulk-Download-Popup-Fensters korrigiert — Chromes Mai-2026-Update erfordert, dass ≥50 % der Fensterfläche im sichtbaren Bildschirm liegen. Die bisherigen <code>left:-32000</code>-Koordinaten wurden mit einem Fehler abgewiesen, wodurch alle Bündel-Downloads mit „Tab konnte nicht geöffnet werden" scheiterten. Auf <code>left:-399, top:0</code> geändert (sichtbare Breite 401 px = 50,1 %). Download-Verhalten und Fokus-Handhabung unverändert.</li>
+  <li>Episoden-RSS-Reihenfolge direkt bearbeiten — neuer <strong>[Feed-Reihenfolge bearbeiten]</strong>-Button in der Episodenliste. Drag&amp;Drop (☰-Handle) und ▲▼-Buttons zum Umsortieren. [Auf Feed anwenden] speichert die Reihenfolge in <code>podcast.json</code>'s <code>episodeOrder</code> und baut feed.xml neu.</li>
+</ul>
 
 <h3>Bulk-Stabilität + Geschwindigkeit <span style="font-weight:normal; color:#666;">(v0.4.37 – v0.4.39, 2026-05-13)</span></h3>
 <ul>

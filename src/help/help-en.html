@@ -141,7 +141,7 @@
 
 <p><strong>Download stage</strong> (uses a dedicated popup window):</p>
 <ol>
-  <li>The extension opens a small popup window via <code>chrome.windows.create({type:"popup", focused:false})</code> (your main window keeps focus). NotebookLM's download trigger requires both <code>visibilityState='visible'</code> and a real user input gesture — a background tab in <code>active:false</code> state will not fire downloads.</li>
+  <li>The extension opens a small popup window via <code>chrome.windows.create({type:"popup", focused:false})</code>. Since v0.4.42, the window is created at the left screen edge (<code>left:-399, top:0</code>) — mostly off-screen but satisfying Chrome's "≥50% of window area must be within the visible screen" rule while keeping <code>visibilityState='visible'</code>. <code>focused:false</code> ensures the main window keeps focus. NotebookLM's download trigger requires both <code>visibilityState='visible'</code> and a real user input gesture — a background tab in <code>active:false</code> state will not fire downloads.</li>
   <li>Inside that popup, the extension opens each notebook tab in turn and clicks the ⋮ → "Download" menu using <code>chrome.debugger</code>'s <code>Input.dispatchMouseEvent</code> — synthesizing a <em>genuine user click</em> at the C++ browser level so NotebookLM sees <code>isTrusted=true</code>.</li>
   <li>For each card: NotebookLM starts streaming the audio → the SW re-fetches the same URL → if it's <code>m4a/mp4</code>, the offscreen document transcodes to mp3 (64k mono) → push to GitHub.</li>
   <li>The popup window closes automatically once all cards are done.</li>
@@ -297,6 +297,23 @@
 <div class="tip">
   <strong>Multi-device sync:</strong> The skip list (<code>skippedShortIds</code>) is stored in <code>chrome.storage.sync</code> and auto-syncs to every device / browser signed in with the same Google account. Skip a card on one device → the next sweep on every other device automatically skips it too. (storage.sync limit is ~100KB ≈ 400 entries; the oldest are trimmed if exceeded.)
 </div>
+
+<h3>6-6. Feed order editing</h3>
+<p>You can freely rearrange the episode order shown in your RSS feed. The default is newest-first by filename date, but once you save a custom order it overrides that in your podcast app.</p>
+<ol>
+  <li>Click <strong>[Edit feed order]</strong> in the episodes toolbar → enters edit mode.</li>
+  <li>Drag rows by the <strong>☰ handle</strong> or use the <strong>▲ / ▼ buttons</strong> to reorder.</li>
+  <li>Click <strong>[Apply to feed]</strong> → the current order is saved to the <code>episodeOrder</code> array in your repo's <code>docs/podcast.json</code>. In extension-direct RSS mode, <code>feed.xml</code> is rebuilt immediately.</li>
+  <li><strong>[Reset to default order]</strong> removes the custom order and reverts to newest-first by date.</li>
+  <li><strong>[Cancel]</strong> exits edit mode without saving.</li>
+</ol>
+
+<div class="tip">
+  Column sorting is disabled while in edit mode to prevent accidental reordering before you save. After applying, edit mode closes automatically and the table refreshes. If you're using GitHub Actions RSS mode (4-1), saving triggers the workflow to rebuild the feed.
+</div>
+
+<h3 id="ep-order-view">6-7. View by feed order</h3>
+<p>To see the episode list in its current saved feed order, toggle <strong>[View by feed order]</strong> in the episodes toolbar — if a custom order is saved it shows that, otherwise falls back to newest-first. Turning the toggle off returns to the previous sort.</p>
 
 <h2 id="retention">7. Retention policy (rolling window)</h2>
 
@@ -455,6 +472,17 @@
 <h2 id="changelog">12. Changelog (summary)</h2>
 
 <p style="font-size: 12px; color: #666;">Major themes only. For per-version details, see the <a href="changelog-en.html"><strong>full changelog ↗</strong></a>. Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>.</p>
+
+<h3>View by feed order toggle <span style="font-weight:normal; color:#666;">(v0.4.43, 2026-05-20)</span></h3>
+<ul>
+  <li>"View by feed order" toggle — reads <code>episodeOrder</code> from <code>podcast.json</code> on GitHub and shows the episode list in the current saved feed order.</li>
+</ul>
+
+<h3>Download window fix + feed order editing <span style="font-weight:normal; color:#666;">(v0.4.42, 2026-05-20)</span></h3>
+<ul>
+  <li>Bulk-download popup window coordinates fixed — Chrome's May 2026 update requires ≥50% of the window area to be within the visible screen; the previous <code>left:-32000</code> coordinate was rejected, causing all bulk downloads to fail with "tab open error". Changed to <code>left:-399, top:0</code> (visible width 401px = 50.1%). Download behavior and focus handling unchanged.</li>
+  <li>Episode RSS feed order editing — new <strong>[Edit feed order]</strong> button in the episodes list. Drag &amp; drop (☰ handle) and ▲▼ buttons to reorder. [Apply to feed] saves the order to <code>podcast.json</code>'s <code>episodeOrder</code> array and rebuilds feed.xml.</li>
+</ul>
 
 <h3>Bulk-operation stability + speed <span style="font-weight:normal; color:#666;">(v0.4.37 – v0.4.39, 2026-05-13)</span></h3>
 <ul>

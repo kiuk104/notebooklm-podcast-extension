@@ -227,7 +227,9 @@ async function downloadOneSingle(tabId, index, artifactId) {
   if (checkbox) checkbox.disabled = false;
 }
 
-function awaitPushResult(episodeTitle, timeoutMs = 180_000) {
+// background.js 의 PUSH_HARD_TIMEOUT (900_000ms, 15분) 과 일치 — 큰 파일 (40MB+) push 가
+// 3분 넘어도 popup 이 먼저 포기해 결과가 표시되지 않던 버그 수정.
+function awaitPushResult(episodeTitle, timeoutMs = 900_000) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (msg) => {

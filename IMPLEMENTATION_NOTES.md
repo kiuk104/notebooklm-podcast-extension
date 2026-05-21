@@ -104,6 +104,48 @@ v0.4.32 의 세 갈래 fix:
 
 향후 NotebookLM 이 DOM 구조를 바꿔 artifact-labels 가 영영 안 뜨면 다시 v1 처럼 (date, title) 기반 dedup 으로 운영 — fallback 인덱스가 그 안전망 역할도 겸한다.
 
+#### v0.4.42 버그 수정 및 최적화 (2026-05-20)
+
+10가지 버그/최적화 일괄 적용.
+
+**버그 수정 4건**
+
+1. **scan 폴링 — 음성개요 0개 노트북 3초 대기 (content.js)**
+   - 원인: `scan` 핸들러의 ready 조건 `real.length > 0 && real.every(...)` 에서 음성개요가 없으면 `real.length === 0` 이라 항상 false → 3초 budget 을 전부 소진.
+   - 수정: `real.length === 0 || real.every(a => a.artifactId)` — 음성개요가 없으면 dateAttr 가 채워지는 즉시 반환. scan:all 에서 빈 노트북이 많을수록 효과 큼.
+
+2. **awaitPushResult 타임아웃 불일치 (popup.js)**
+   - 원인: popup 의 `awaitPushResult` default timeout 이 180s (3분) 인데 background 의 `PUSH_HARD_TIMEOUT` 은 900s (15분). 큰 파일 (40MB+ m4a) push 가 3분 넘으면 popup 이 먼저 포기 — UI 는 응답 없음 상태로 멈추고 결과 배지가 표시되지 않음.
+   - 수정: popup timeout 을 900s 로 background 와 일치.
+
+3. **saveSkippedEntries sync quota 초과 처리 (background.js)**
+   - 원인: `entries.length > 100` 조건으로 trim 여부를 결정했는데, entry 1건 ≈ 250byte 이고 chrome.storage.sync item 한도는 8KB. 32건만 넘어도 초과 가능 → 100건 이하면 그냥 throw 해서 저장 실패.
+   - 수정: 건수 무관, quota 초과 시 항상 20% (가장 옛것) 잘라내고 재시도.
+
+4. **notifyBulkComplete 알림 텍스트 항상 영어 (background.js)**
+   - 원인: 알림 문자열이 하드코딩 영어 — 한국어/독어 설정 무시.
+   - 수정: `cfgGet(["uiLang"])` 으로 현재 언어 읽어 한·영·독 분기. 함수를 async 로 변경, 호출부 `await` 추가.
+
+**최적화 6건**
+
+5. **setTaskState storage.session.set 쓰로틀 (background.js)**
+   - offscreen 의 250ms 진행 비콘이 `emitCardProgress → setTaskState({ currentCardProgress })` 를 경유해 매번 `storage.session.set` 을 트리거. 메모리 갱신 + runtime broadcast 는 즉시 유지하면서, `currentCardProgress` 만 변경하는 호출의 storage write 를 500ms debounce. 상태 전환 (status/phase/done 등) 은 즉시 persist 그대로.
+
+6. **ghList in-memory TTL 캐시 (background.js)**
+   - `list:pushed`, `buildNewSelections`, `storage:usage`, `storage:cleanup`, `pushEpisode` 가 각각 독립적으로 `ghList("docs/episodes")` 를 호출 — 같은 SW 안에서 수십ms 안에 GitHub API 를 여러 번 hit. 30초 TTL 인메모리 캐시 추가. push 성공 후 `invalidateGhListCache` 로 즉시 무효화 — dedup 정확성 유지.
+
+7. **FILENAME_RE 중복 정의 해소 (feed.js + background.js)**
+   - `feed.js` 와 `background.js` 가 각각 독립적으로 `FILENAME_RE` 를 정의하되, feed.js 에는 `i` 플래그 없고 background.js 에는 있어 불일치. feed.js 에 `i` 플래그 추가 + `export`, background.js 에서 import 해 로컬 재정의 제거.
+
+8. **AudioContext 재사용 (transcode.js)**
+   - 트랜스코딩마다 `new AudioContext()` + `close()` 반복. bulk 81건이면 81번 생성/폐기. 모듈 레벨 `_sharedAudioCtx` 로 offscreen document 수명 동안 하나만 유지. `state === "closed"` 이면 재생성.
+
+9. **waitForAudioCards 이중 폴링 구조 문서화**
+   - background.js `waitForAudioCards` 가 700ms 간격으로 `sendMessageWithTimeout(scan, 5000)` 을 반복하고, content.js `scan` 핸들러도 내부적으로 100ms × 3000ms 폴링. 최악 8초. content.js fix #1 (빈 노트북 즉시 반환) 로 대다수 케이스에서 content.js 쪽 지연이 크게 줄었으므로 background 폴링 간격은 현행 유지 (추후 개선 여지 있음).
+
+10. **list:pushed 이중 API 호출 (popup.js)**
+    - popup 오픈 시 캐시 복원 → `renderAggregate` 가 `list:pushed` 를 호출하고, 이후 `scan:all:done` 이 다시 `renderAggregate` 를 호출해 두 번 fetch. background.js ghList 캐시 (#6) 가 두 번째 호출을 캐시 hit 으로 처리하므로 popup 레벨 별도 캐시 없이 해결됨.
+
 ---
 
 ## 2. audio URL 재fetch 의 인증/CORS 체인
@@ -868,7 +910,7 @@ offscreen 의 port 핸들러에 `mode: "fetch"` (transcode 없이 fetch+b64) 추
 
 [src/background.js](src/background.js) `ensureBulkWindow()` 가 `chrome.windows.create({left:-32000, top:-32000, ...})` 로 생성 후 `chrome.windows.update` 로 한 번 더 nudge. Chrome 이 좌표 clamp 해도 두 단계 적용으로 거의 항상 화면 밖에 위치. `visibilityState` 는 윈도우 위치 무관하게 'visible' 유지되어 NotebookLM download 트리거는 정상 발사.
 
-> 한계: 일부 OS/플랫폼 (특정 macOS Spaces 설정 등) 은 negative coord 도 visible 영역으로 clamp 할 수 있음. 그 케이스엔 popup 이 좌상단에 뜨지만 `focused:false` 라 사용자 메인 윈도우 포커스는 그대로 — 시각만 거추장스러움.
+> ⚠ **후속 Chrome 업데이트로 이 접근 폐기** — §20 참고. v0.4.42 에서 `left: -399, top: 0` (50% 규칙을 딱 맞추는 가장자리 좌표) 로 교체됨.
 
 **3) Fixed timeout 을 idle-watchdog 로 교체 + UI 라이브 진행률**
 
@@ -882,7 +924,7 @@ offscreen 의 port 핸들러에 `mode: "fetch"` (transcode 없이 fetch+b64) 추
 ### 학습
 
 - **SW thread 의 동기 work 는 모두 message loop blocker** — `String.fromCharCode.apply` / `btoa` / 큰 `Uint8Array` 순회 등은 사용자 입장에선 "UI freeze" 와 구별 불가. offscreen document 가 있다면 무거운 동기 작업은 거기서 끝내고 SW 는 결과 string/object 만 받는 게 정공법.
-- **`focused:false` 는 plamform-dependent** — Windows / 일부 Linux 환경에선 무시 가능. 안 보이게 하려면 좌표를 화면 밖으로 미는 게 더 robust.
+- **`focused:false` 는 platform-dependent** — Windows / 일부 Linux 환경에선 무시 가능. 안 보이게 하려면 좌표를 화면 밖으로 미는 게 더 robust. 단 §20 처럼 Chrome 의 bounds 규칙이 강화되면 좌표 전략도 재검토 필요.
 - **Fixed timeout 은 정상 케이스 / stall 케이스 둘 다 안 맞음** — 정상 카드는 5분이면 충분, stall 카드는 10분 끝까지 기다리는 게 무의미. idle-watchdog (= 활성 신호로 reset 되는 타이머) 가 두 케이스 모두 만족. 비용: progress 비콘을 발생시키는 위치를 빠짐없이 식별.
 - **dedup hint 의 b64 string 그대로 흘리기** — 옛 코드는 SW 가 ArrayBuffer 로 들고 다니다 마지막에 b64 로 변환했는데, ghPut 도 결국 b64 받음. ArrayBuffer 표현이 필요한 곳이 없으면 처음부터 b64 로 들고 다니는 게 한 라운드의 변환을 절약.
 
@@ -1006,6 +1048,154 @@ if (sid && skippedShortIds.has(sid)) return;
 ### 진단 핸드오프
 
 `buildNewSelections` 호출 직후 selections 안에 스킵 entry 와 같은 `episodeTitle` 있는지 확인. 있으면 그 audio 의 `artifactId` 가 빈 문자열인지 확인 (race 의 핵심 시그널). audio.title 에 `slugify` 적용한 값이 스킵 entry 의 `slugify(title)` 과 일치하는지 확인.
+
+---
+
+## 20. Chrome `windows.create` bounds 규칙 강화 — 오프스크린 좌표 전략 붕괴 (2026-05-20, v0.4.42)
+
+### 증상
+
+일괄 다운로드 시 모든 항목이 "탭 열기 실패: Invalid value for bounds. Bounds must be at least 50% within visible screen space." 오류로 실패. 성공 0건 / 실패 N건.
+
+### 원인
+
+Chrome 이 `chrome.windows.create` (및 `windows.update`) 의 `left`/`top` 좌표를 검증하는 규칙을 강화했다. **창 면적의 50% 이상이 화면 안에 있어야 한다**는 조건이 추가되어, 이전에 사용하던 `left: -32000, top: -32000` 이 에러를 throw. 이전 Chrome 버전에서는 좌표를 silent clamp(좌상단으로 이동) 하거나 그냥 통과시켰는데, 업데이트 후에는 명시적 에러로 차단됨.
+
+### 시도 1 — `state: "minimized"` (실패)
+
+```js
+// v0.4.42a — 실패한 시도
+chrome.windows.create({ url: "about:blank", type: "popup", focused: false, state: "minimized" })
+```
+
+bounds 검사는 통과하지만 두 가지 이유로 폐기:
+
+1. **화면 전환 발생**: minimized 창에 `chrome.tabs.create({ active: true })` 를 하면 Chrome 이 창을 자동 복원(un-minimize)해서 사용자 화면 위로 튀어오름.
+2. **`visibilityState = 'hidden'`**: minimized 창의 탭은 페이지 Visibility API 상 `'hidden'` — NotebookLM 의 download 트리거가 불안정해짐 (§9 / §10 이 요구하는 'visible' 조건 미충족).
+
+### 시도 2 — 가장자리 좌표 (v0.4.42b, 채택)
+
+```js
+// v0.4.42b — 현재 구현
+const BULK_WINDOW_OPTS = { left: -399, top: 0, width: 800, height: 600 };
+chrome.windows.create({ url: "about:blank", type: "popup", focused: false, ...BULK_WINDOW_OPTS })
+```
+
+`left: -399` 이면 창의 오른쪽 401px (800의 50.1%) 가 화면 안에 위치 — 50% 규칙을 딱 초과해서 통과. 나머지 399px 은 화면 왼쪽 바깥에 숨겨짐. `focused: false` 로 메인 윈도우 포커스 비침 없음. 창이 이미 open 상태라 탭 추가시 화면 전환 없음.
+
+**50% 면적 계산 근거**:
+- 창 전체 면적: 800 × 600 = 480,000 px²
+- 화면 내 가시 면적: 401 × 600 = 240,600 px² (50.125%) ✓
+
+### 학습
+
+- **`windows.create` 의 bounds 검사는 버전마다 강화될 수 있다** — 하드코딩된 음수 좌표는 취약한 전략. Chrome 정책이 언제든 바뀔 수 있다는 전제로 fallback 을 함께 설계해야 함.
+- **`state: "minimized"` 는 bounds 우회용으로 사용 불가** — minimized 창에 `tabs.create(active:true)` 를 넣으면 Chrome 이 자동 복원한다. 그리고 minimized 상태에서는 `visibilityState='hidden'` 이라 download 트리거가 작동하지 않음.
+- **`focused: false` + 유효 좌표 조합이 정공법** — 창이 열려 있어야 'visible', `focused: false` 여야 포커스 비침 없음. 이 두 조건을 모두 만족하면서 bounds 규칙도 통과하는 좌표를 유지해야 한다.
+- **50% 규칙의 여유 마진 확보 권장** — `left: -399` 는 401/800 = 50.125% 로 매우 빡빡함. 만약 Chrome 이 "over 50%" 를 "strictly greater than" 이 아닌 "at least 401px" 같은 다른 단위로 검사하는 방식으로 변경될 경우 경계 케이스가 실패할 수 있음. 여유를 두려면 `left: -350` (450/800 = 56.25%) 정도가 안전.
+- **사용자에게 보이는 부분 최소화 vs. 안정성 트레이드오프** — 가장자리 좌표는 창 일부가 화면에 보이지만 `focused: false` 덕분에 사용자 작업 흐름을 끊지 않음. 완전 숨김을 고집하다 download 트리거까지 깨지는 쪽보다 낫다.
+- **좌표 전략 변경 시 §9/§10 의 전제 조건 재검증 필수** — `visibilityState='visible'` + `isTrusted=true` 의 두 조건이 유지되는지 항상 확인할 것.
+
+### 향후 고려 사항
+
+현재 `left: -399` 는 스크린 너비를 모름 — 스크린이 400px 미만인 극단적 케이스에서는 실패할 수 있음 (대부분의 데스크탑은 1024px 이상). 더 robust 하게 하려면:
+
+```js
+// 현재 포커스된 윈도우 위치에서 스크린 너비를 추론해 동적 계산 (미구현)
+const cur = await chrome.windows.getLastFocused();
+const screenW = cur.left + cur.width; // 추정값
+const safeLeft = Math.max(-Math.floor(800 * 0.49), -399);
+```
+
+혹은 추후 Chrome 이 `chrome.system.display.getInfo()` 없이도 디스플레이 경계를 알 방법을 제공한다면 그쪽으로 이관.
+
+---
+
+## 21. Bulk popup 의 화면 전환 회귀 — 단일 탭 재사용 (2026-05-21, v0.4.45)
+
+### 증상
+
+§20 의 가장자리 좌표 (`left:-399, focused:false`) 가 적용된 v0.4.42 에서 초기 테스트는 화면 전환 없이 정상. 이후 Chrome 의 추가 거동 변화로 일괄 다운로드 중 **매 노트북마다** popup 창이 잠깐 사용자 화면 앞으로 튀어 올랐다 사라짐. 다운로드 자체는 성공 — UX 만 거추장스러움. 사용자 입장에선 "다운로드 시작할 때마다 화면 전환 반복" 으로 인지.
+
+### 원인 — 두 갈래
+
+(1) **`chrome.windows.create({focused:false})` 의 Windows honor 정책 약화**: §20 시점엔 `focused:false` 가 Windows 에서도 honor 돼 popup 이 메인 윈도우 뒤에 생성됐는데, 후속 Chrome 빌드에서 이 보장이 사라짐. popup 이 생성 시점에 OS foreground 로 올라옴.
+
+(2) **`chrome.tabs.create({active:true, windowId: popup})` 의 SetForegroundWindow 트리거**: 매 노트북마다 새 탭을 popup 안에 active 로 생성하는데, Windows OS 가 이 호출에서 popup 창을 raise 시킴. `chrome.windows.update({focused:true})` 로 메인 복원 시도해도 Windows 의 SetForegroundWindow 제한 정책 (다른 프로세스가 사용자 입력 없이 포커스 강탈 불가) 에 막혀 무시되거나 taskbar flash 만 발생.
+
+### 시도 — 즉시 refocus (실패, v0.4.44)
+
+```js
+// v0.4.44 시도
+const tab = await chrome.tabs.create({active:true, windowId});
+await refocusUserWindow();   // 즉시 메인 복원
+await waitForTabComplete(tab.id);
+await chrome.debugger.attach({tabId: tab.id}, "1.3");
+await refocusUserWindow();   // attach 후 또 복원
+// ... clickViaDebugger 후에도 매번 refocusUserWindow()
+```
+
+`chrome.windows.update({focused:true})` 자체가 Windows SetForegroundWindow 제한에 막혀 무시됨 — 복원 호출이 실행돼도 메인 윈도우가 실제로 foreground 로 올라오지 않음. 게다가 복원 호출 자체가 메인 윈도우에 focus 이벤트를 일으켜 사용자가 "전환" 으로 인지할 가능성도 있음. 폐기.
+
+### 해결책 — 단일 탭 재사용 (v0.4.45 채택)
+
+**근본 회피**: 매 노트북마다 `chrome.tabs.create` 를 호출하지 않는다. popup 안 단일 탭을 노트북 간에 `chrome.tabs.update(tabId, {url})` 로 navigate.
+
+```js
+// v0.4.45
+let bulkWindowId = null;
+let bulkTabId = null;
+let bulkDebuggerAttached = false;
+
+async function ensureBulkTab(url) {
+  // 윈도우/탭 stale 검사…
+  if (bulkTabId !== null) {
+    // 재사용 — chrome.tabs.update 로 navigate. tabs.create 호출 없음 → 윈도우 raise 없음.
+    await chrome.tabs.update(bulkTabId, { url });
+    return bulkTabId;
+  }
+  // 첫 호출 — windows.create 에 url 을 함께 넘겨서 popup + 첫 탭을 한 번에.
+  const win = await chrome.windows.create({
+    url, type: "popup", focused: false, ...BULK_WINDOW_OPTS,
+  });
+  bulkWindowId = win.id;
+  bulkTabId = win.tabs[0].id;
+  return bulkTabId;
+}
+```
+
+`openManagedTab` 의 bulk path 는 `ensureBulkTab` 만 호출, `chrome.tabs.create` 가 세션 전체에서 0번. 첫 노트북의 `windows.create` 1회만 raise 가능성 있음 (실측: 사용자 환경에서 화면 전환 안 보임).
+
+추가로 `closeManagedTab(tabId)` 의 분기:
+```js
+if (tabId === bulkTabId) return;   // bulk 탭은 노트북 간 재사용 — 매번 닫지 않음
+```
+
+세션 끝의 `cleanupOwnedTabs` → `closeBulkWindow` 가 윈도우 닫으면서 탭도 같이 정리.
+
+### debugger.attach 도 세션당 1회로
+
+탭이 재사용되므로 `chrome.debugger.attach` 도 첫 노트북에서 1번만:
+```js
+if (inBulkWindow && !bulkDebuggerAttached) {
+  await chrome.debugger.attach({ tabId }, "1.3");
+  bulkDebuggerAttached = true;
+}
+```
+
+노란 "디버깅 중" 배너 부착 시점도 popup 을 raise 시킬 수 있는데 1회로 한정 — 첫 노트북 windows.create 와 같은 시점이라 사용자는 1회 이내로만 인지.
+
+### 학습
+
+- **Chrome 의 `focused:false` 보장은 시간이 갈수록 약해진다** — 좌표 + focused:false 조합은 더 이상 충분조건이 아님. tab 단위 API 의 OS foreground 트리거를 회피하는 구조가 필요.
+- **`chrome.tabs.create({active:true, windowId:popup})` 는 Windows 에서 popup 을 raise 시킨다** — 매번 새 탭을 만드는 패턴 자체가 화면 전환의 1차 원인. 같은 탭을 navigate 하는 패턴으로 우회.
+- **`chrome.windows.update({focused:true})` 로의 복원은 Windows SetForegroundWindow 제한에 막혀 신뢰 불가** — 복원 전략은 fallback 으로만 두고, 1차 방어는 raise 자체를 발생시키지 않는 구조여야 함.
+- **debugger.attach 의 부수효과 (디버그 배너 raise) 도 세션당 1회로 한정 가능** — 탭 재사용 패턴의 부산물. 의도하지 않은 이득.
+- **구조 변경 시 closeManagedTab 의 분기 누락 주의** — bulk 탭이 노트북 단위로 닫히지 않도록 caller 가 알아서 비분기 처리하기보다, closeManagedTab 안에서 bulk 탭 ID 와 일치하면 no-op 하는 게 안전.
+
+### 좌표 전략은 그대로 유지
+
+§20 의 `BULK_WINDOW_OPTS = { left:-399, top:0 }` 는 v0.4.45 에서도 그대로 — Chrome 의 50% 규칙 통과 + 사용자에게 보이는 부분 최소화 목적. 단지 raise 가 안 일어나면 화면 전환도 안 일어남.
 
 ---
 

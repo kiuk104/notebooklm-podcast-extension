@@ -151,16 +151,23 @@ function arrayBufferToBase64(buf) {
   return btoa(bin);
 }
 
+// AudioContext 는 bulk 81개 트랜스코딩에서 매번 생성/폐기하는 오버헤드를 줄이기 위해
+// offscreen document 수명 동안 하나만 유지. closed 상태이면 재생성.
+let _sharedAudioCtx = null;
+function getSharedAudioContext() {
+  if (!_sharedAudioCtx || _sharedAudioCtx.state === "closed") {
+    _sharedAudioCtx = new AudioContext();
+  }
+  return _sharedAudioCtx;
+}
+
 async function transcodeM4aToMp3(arrayBuffer, bitrateKbps, mono) {
   // 1. decode m4a/AAC → AudioBuffer (PCM Float32). Web Audio API 는 m4a 컨테이너
   // 의 AAC 코덱을 모든 modern Chrome 에서 디코드. 브라우저 native ffmpeg 사용.
-  const ctx = new AudioContext();
+  const ctx = getSharedAudioContext();
   let audioBuffer;
-  try {
-    audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
-  } finally {
-    try { await ctx.close(); } catch {}
-  }
+  // close() 하지 않고 재사용 — closed 가 되면 getSharedAudioContext() 가 새로 만든다.
+  audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
   const sampleRate = audioBuffer.sampleRate;
   const lengthFrames = audioBuffer.length;
 

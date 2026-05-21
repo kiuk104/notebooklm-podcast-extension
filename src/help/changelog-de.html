@@ -33,6 +33,33 @@
 <h1>Versionsverlauf (Detail)</h1>
 <p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
 
+<h3>v0.4.46 (2026-05-21) — Auswahl per Bündel überspringen</h3>
+<ul>
+  <li><strong>Im Baum „Letztes Scan-Ergebnis → Karten auswählen" der Verwaltungsseite gibt es jetzt einen [Auswahl überspringen]-Button</strong> — fügt alle angekreuzten Karten mit einem Klick dauerhaft zur Skip-Liste hinzu. Sie erscheinen in zukünftigen Scans nicht mehr als neu. Nützlich, wenn die Skip-Liste leer ist (Erweiterung aus einem anderen Pfad neu geladen) oder ein Stapel unerwünschter Karten auf einmal blockiert werden soll. Übersprungene Karten verschwinden unmittelbar nach der Registrierung aus dem Baum.</li>
+</ul>
+
+<h3>v0.4.45 (2026-05-21) — Bündel-Download-Fenster-Wechsel behoben</h3>
+<ul>
+  <li><strong>Das kurzzeitige Aufpoppen des Popup-Fensters vor jedem Notebook während des Bündel-Downloads wurde behoben</strong> — Chromes Verhalten unter Windows hat sich geändert, sodass <code>chrome.windows.create({focused:false})</code> nicht mehr respektiert wird, und jeder <code>chrome.tabs.create({active:true})</code> das Popup in den OS-Vordergrund hob. Umstrukturiert, um einen einzelnen Tab über alle Notebooks hinweg wiederzuverwenden und per <code>chrome.tabs.update</code> zu navigieren — <code>tabs.create</code> wird während einer Bündel-Sitzung nie aufgerufen. Bildschirmwechsel-Ereignisse fallen von N (eines pro Notebook) auf maximal 1 (nur die erste windows.create).</li>
+  <li><strong>debugger.attach erfolgt ebenfalls nur einmal pro Sitzung</strong> — das gelbe Debug-Banner erscheint nur noch einmalig.</li>
+</ul>
+
+<h3>v0.4.43 (2026-05-20) — Toggle „Nach Feed-Reihenfolge anzeigen"</h3>
+<ul>
+  <li><strong>Toggle „Nach Feed-Reihenfolge anzeigen"</strong> — zeigt die Episodenliste in der aktuellen gespeicherten Feed-Reihenfolge, ohne den Bearbeitungsmodus zu aktivieren. Beim Einschalten wird das <code>episodeOrder</code>-Array aus <code>podcast.json</code> auf GitHub gelesen und die Liste entsprechend sortiert (Dateien, die nicht im Array stehen, erscheinen am Ende, neueste zuerst). Gruppierungs-, Sortier- und Bearbeitungs-Buttons sind während der Ansicht deaktiviert.</li>
+</ul>
+
+<h3>v0.4.42 (2026-05-20) — Download-Fenster-Fix + Feed-Reihenfolge bearbeiten</h3>
+<ul>
+  <li><strong>Koordinaten des Bulk-Download-Popup-Fensters korrigiert</strong> — Chromes Mai-2026-Update erfordert, dass ≥50 % der Fensterfläche im sichtbaren Bereich liegen. Die bisherigen <code>left:-32000, top:-32000</code>-Koordinaten wurden mit einem Fehler abgewiesen, wodurch alle Bündel-Downloads mit „Tab konnte nicht geöffnet werden" scheiterten. Auf <code>left:-399, top:0, width:800, height:600</code> geändert (sichtbare Breite 401 px = 50,1 %). <code>focused:false</code> und <code>visibilityState='visible'</code> bleiben erhalten.</li>
+  <li><strong>Episoden-RSS-Feed-Reihenfolge bearbeiten</strong> — der Episoden-Bereich der Verwaltungsseite erhält einen <strong>[Feed-Reihenfolge bearbeiten]</strong>-Button. Zeilen per ☰-Handle oder ▲▼-Buttons umsortieren. [Auf Feed anwenden] speichert die Reihenfolge als <code>episodeOrder</code>-Array in <code>docs/podcast.json</code> und baut feed.xml sofort neu (Erweiterungs-direkter RSS-Modus). [Standardreihenfolge wiederherstellen] entfernt die Anpassung (zurück zu neueste-zuerst).</li>
+</ul>
+
+<h3>v0.4.41 (2026-05-20) — Hilfeseiten aktualisiert</h3>
+<ul>
+  <li>§6-6 (Feed-Reihenfolge bearbeiten) und §6-7 (Nach Feed-Reihenfolge anzeigen) zu allen Hilfeseiten hinzugefügt. §3-3-Beschreibung des Download-Fensters aktualisiert. v0.4.42-Zusammenfassung in §12 ergänzt.</li>
+</ul>
+
 <h3>v0.4.40 (2026-05-13) — Umorganisation der Hilfeseite</h3>
 <ul>
   <li><strong>Hilfe-§12 zur themenorientierten Zusammenfassung verdichtet</strong>; Details pro Version auf diese Seite ausgelagert. So überblickt man auf der Hilfeseite die großen Themen schnell und springt nur bei Bedarf hierher.</li>
@@ -53,7 +80,7 @@
 <h3>v0.4.37 (2026-05-13) — Stabilität des Bulk-Downloads</h3>
 <ul>
   <li><strong>UI-Freeze behoben</strong> — Popup / Optionsseite pausieren nicht mehr 1-2 Sekunden pro großer Karte (40MB m4a). Synchrones base64-Encoding vollständig in das Offscreen-Dokument verlagert, weg vom Service-Worker-Thread.</li>
-  <li><strong>Bulk-Popup-Fenster ausgeblendet</strong> — Das NotebookLM-Popup taucht nicht mehr vor anderen Browser-Fenstern auf. Wird nun an Off-Screen-Koordinaten (-32000, -32000) erzeugt. Download-Verhalten unverändert.</li>
+  <li><strong>Bulk-Popup-Fenster ausgeblendet</strong> — Das NotebookLM-Popup taucht nicht mehr vor anderen Browser-Fenstern auf. Ursprünglich an Off-Screen-Koordinaten (-32000, -32000) erzeugt; in v0.4.42 auf <code>left:-399, top:0</code> geändert wegen Chromes neuer 50-%-Sichtbarkeitsregel. Download-Verhalten unverändert.</li>
   <li><strong>Live-Fortschritt pro Karte</strong> — Der Fortschrittsmonitor zeigt jetzt für die aktuelle Karte Stage (Download / Transcode / Upload) und Byte-Fortschrittsbalken. Vorher nur Start/Ende-Ereignisse.</li>
   <li><strong>Schnellere Erholung bei festhängenden Karten</strong> — Eine blockierte Karte wird nach 90 s ohne Fortschritt übersprungen, statt des alten 10-Minuten-Timeouts. Normale Karten bleiben aktiv, da jeder Fetch-Chunk ein Aktivitätssignal sendet.</li>
 </ul>

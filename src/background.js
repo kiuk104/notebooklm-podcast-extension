@@ -9,7 +9,7 @@
 // 같은 audio URL 을 SW 에서 직접 fetch 해서 GitHub 로 PUT → rssMode 가 "extension"
 // 이면 동시에 docs/feed.xml 도 재빌드해서 PUT.
 
-import { rebuildFeed } from "./feed.js";
+import { rebuildFeed, FILENAME_RE } from "./feed.js";
 //
 // audio URL 은 lh3.googleusercontent.com signed URL. path 의 토큰만으론 인증
 // 부족해 CDN 이 accounts.google.com/ServiceLogin → lh3.google.com/rd-notebooklm
@@ -402,7 +402,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         const list = await ghList(cfg.repo, "docs/episodes", cfg.token);
-        const FILENAME_RE = /^(\d{8})__(.+?)__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$/i;
+        // FILENAME_RE 는 feed.js 에서 공유 import (중복 정의 제거).
         const items = [];
         for (const f of list) {
           const m = FILENAME_RE.exec(f.name);
@@ -423,6 +423,82 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // 최신순
         items.sort((a, b) => b.dateRaw.localeCompare(a.dateRaw) || b.filename.localeCompare(a.filename));
         sendResponse({ ok: true, items, totalSize: items.reduce((s, i) => s + i.size, 0) });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // async
+  }
+  if (msg?.type === "feed:order:save") {
+    // 옵션 페이지의 "피드 순서 편집 → 피드에 적용" 버튼.
+    // podcast.json 에 episodeOrder 배열을 저장하고, extension 모드면 즉시 feed 재빌드.
+    // episodeOrder: string[] (filename 배열, 표시하고 싶은 순서대로).
+    // [] 빈 배열을 넘기면 커스텀 순서 초기화 (날짜 내림차순 복귀).
+    (async () => {
+      try {
+        const cfg = await cfgGet(["token", "repo", "committerName", "committerEmail", "rssMode"]);
+        if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음 (token/repo)");
+        const committer = cfg.committerName
+          ? { name: cfg.committerName, email: cfg.committerEmail || "noreply@example.com" }
+          : null;
+        // podcast.json 읽기 → episodeOrder 업데이트 → PUT
+        const path = "docs/podcast.json";
+        const existing = await ghGet(cfg.repo, path, cfg.token);
+        let meta = {};
+        if (existing?.content) {
+          try {
+            const raw = existing.content.replace(/\s/g, "");
+            const text = new TextDecoder().decode(
+              Uint8Array.from(atob(raw), (c) => c.charCodeAt(0))
+            );
+            meta = JSON.parse(text);
+          } catch (e) {
+            console.warn("[feed:order:save] podcast.json parse 실패, 빈 객체로 진행:", e.message);
+          }
+        }
+        const order = Array.isArray(msg.order) ? msg.order : [];
+        if (order.length > 0) {
+          meta.episodeOrder = order;
+        } else {
+          delete meta.episodeOrder; // 빈 배열 → 커스텀 순서 제거 (날짜순 복귀)
+        }
+        const json = JSON.stringify(meta, null, 2);
+        const bytes = new TextEncoder().encode(json);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        const newB64 = btoa(bin);
+        await ghPut(cfg.repo, path, newB64,
+          order.length > 0 ? "update: episode order" : "update: reset episode order",
+          existing?.sha, cfg.token, committer);
+        // extension 모드면 즉시 피드도 재빌드
+        if (cfg.rssMode === "extension") {
+          const feed = await rebuildFeed({ repo: cfg.repo, token: cfg.token, committer });
+          sendResponse({ ok: true, feed });
+        } else {
+          sendResponse({ ok: true });
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // async
+  }
+  if (msg?.type === "podcast:json:get") {
+    // 옵션 페이지의 "피드 순서로 보기" — podcast.json 의 최신 내용을 읽어 반환.
+    // episodeOrder 배열이 있으면 해당 배열을 포함한 전체 JSON 오브젝트를 돌려줌.
+    (async () => {
+      try {
+        const cfg = await cfgGet(["token", "repo"]);
+        if (!cfg.token || !cfg.repo) throw new Error("GitHub 설정 없음");
+        const existing = await ghGet(cfg.repo, "docs/podcast.json", cfg.token);
+        if (!existing?.content) { sendResponse({ ok: true, data: {} }); return; }
+        const raw = existing.content.replace(/\s/g, "");
+        const text = new TextDecoder().decode(
+          Uint8Array.from(atob(raw), (c) => c.charCodeAt(0))
+        );
+        sendResponse({ ok: true, data: JSON.parse(text) });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
       }
@@ -624,6 +700,46 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           notebookTitle: msg.notebookTitle || "",
         });
         sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  if (msg?.type === "bulk:skip:selected") {
+    // 옵션 페이지의 [선택해서 받기] 트리에서 [선택 카드 스킵] 으로 한 번에 영구
+    // 스킵 등록. payload.items: [{ artifactId, title, coverDateAttr, notebookTitle }, ...]
+    // (notebookUrl / cardIndex 는 스킵에 불필요 — shortId 만 있으면 됨.)
+    //
+    // saveSkippedEntries 의 quota fallback 이 가장 옛것부터 컷하므로, N건을 한꺼번에
+    // 등록하다 quota 를 초과해도 trim 후 재시도 — 다만 entry 마다 loadSkippedEntries
+    // 가 호출되어 비효율이라 한 번에 모아서 save 하는 경로로 처리.
+    (async () => {
+      try {
+        const items = Array.isArray(msg.payload?.items) ? msg.payload.items : [];
+        if (items.length === 0) {
+          sendResponse({ ok: false, error: "선택된 카드가 없습니다" });
+          return;
+        }
+        const list = await loadSkippedEntries();
+        const byShortId = new Map(list.map((e) => [e.shortId, e]));
+        let added = 0;
+        for (const it of items) {
+          const sid = (it.artifactId || "").slice(0, 8).toLowerCase();
+          if (!/^[0-9a-f]{8}$/.test(sid)) continue;
+          const date = extractDateStrict(it.coverDateAttr || "");
+          byShortId.set(sid, {
+            shortId: sid,
+            filename: "",
+            title: it.title || "",
+            date,
+            notebookTitle: it.notebookTitle || "",
+            skippedAt: Date.now(),
+          });
+          added++;
+        }
+        await saveSkippedEntries(Array.from(byShortId.values()));
+        sendResponse({ ok: true, added });
       } catch (e) {
         sendResponse({ ok: false, error: e.message });
       }
@@ -1074,6 +1190,11 @@ let cancelRequested = false;
   } catch {}
 })();
 
+// currentCardProgress 업데이트 (offscreen 250ms 비콘) 가 매번 storage.session.set 을
+// 트리거하지 않도록 storage write 를 500ms debounce. 메모리 갱신 + broadcast 는 즉시.
+// 상태 전환 (status/phase 변경 등) 은 debounce 없이 즉시 persist — SW 재시작 복구 보장.
+let _stateFlushTimer = null;
+
 async function setTaskState(updates) {
   currentTaskState = {
     ...currentTaskState,
@@ -1084,11 +1205,29 @@ async function setTaskState(updates) {
   if (currentTaskState.errors && currentTaskState.errors.length > 20) {
     currentTaskState.errors = currentTaskState.errors.slice(-20);
   }
+  // broadcast 는 항상 즉시.
+  chrome.runtime.sendMessage({ type: "task:state", state: currentTaskState }).catch(() => {});
+
+  // currentCardProgress 만 변경하는 고빈도 호출은 storage write debounce.
+  // 그 외 (status/phase/done 등 상태 전환) 는 즉시 persist.
+  const keys = Object.keys(updates);
+  const isProgressOnly = keys.length === 1 && keys[0] === "currentCardProgress";
+  if (isProgressOnly) {
+    if (_stateFlushTimer) clearTimeout(_stateFlushTimer);
+    _stateFlushTimer = setTimeout(() => {
+      _stateFlushTimer = null;
+      chrome.storage.session.set({ currentTaskState }).catch(() =>
+        chrome.storage.local.set({ currentTaskState }).catch(() => {}),
+      );
+    }, 500);
+    return;
+  }
+  // 즉시 persist (pending debounce 가 있으면 먼저 취소 — 이 쓰기가 더 최신).
+  if (_stateFlushTimer) { clearTimeout(_stateFlushTimer); _stateFlushTimer = null; }
   try { await chrome.storage.session.set({ currentTaskState }); }
   catch {
     try { await chrome.storage.local.set({ currentTaskState }); } catch {}
   }
-  chrome.runtime.sendMessage({ type: "task:state", state: currentTaskState }).catch(() => {});
 }
 
 function pushTaskError(err) {
@@ -1177,17 +1316,42 @@ async function clearFailedSelections() {
   try { await chrome.storage.local.remove(["bulkFailedSelections"]); } catch {}
 }
 
-function notifyBulkComplete(success, total) {
-  // chrome.notifications 는 옵션 페이지가 닫혀 있어도 OS 알림으로 사용자에게 알림.
-  // bulk 가 수십 분 돌 때 사용자가 다른 일 보다 끝났는지 알 수 있게.
+// chrome.notifications 는 옵션 페이지가 닫혀 있어도 OS 알림으로 사용자에게 알림.
+// bulk 가 수십 분 돌 때 사용자가 다른 일 보다 끝났는지 알 수 있게.
+// uiLang 을 읽어 한·영·독 알림 텍스트를 분기 (이전엔 항상 영어였던 버그 수정).
+async function notifyBulkComplete(success, total) {
+  const fail = total - success;
+  let lang = "ko";
   try {
-    const fail = total - success;
-    const title = fail > 0
+    const cfg = await cfgGet(["uiLang"]);
+    if (cfg.uiLang) lang = cfg.uiLang;
+  } catch {}
+
+  let title, msg;
+  if (lang === "en") {
+    title = fail > 0
       ? `Podcast Sync — ${success} ok, ${fail} failed`
       : `Podcast Sync — ${success} pushed`;
-    const msg = fail > 0
+    msg = fail > 0
       ? `Open the admin page to retry the ${fail} failed cards.`
       : `All ${total} cards pushed to your repo.`;
+  } else if (lang === "de") {
+    title = fail > 0
+      ? `Podcast Sync — ${success} ok, ${fail} fehlgeschlagen`
+      : `Podcast Sync — ${success} hochgeladen`;
+    msg = fail > 0
+      ? `Adminseite öffnen, um ${fail} fehlgeschlagene Karten zu wiederholen.`
+      : `Alle ${total} Karten wurden ins Repo hochgeladen.`;
+  } else {
+    // 한국어 (default)
+    title = fail > 0
+      ? `Podcast Sync — ${success} 완료, ${fail} 실패`
+      : `Podcast Sync — ${success}개 푸시 완료`;
+    msg = fail > 0
+      ? `관리 페이지에서 실패한 ${fail}개를 재시도할 수 있습니다.`
+      : `총 ${total}개 카드를 모두 레포에 올렸습니다.`;
+  }
+  try {
     chrome.notifications.create({
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
@@ -1322,14 +1486,13 @@ async function saveSkippedEntries(entries) {
   try {
     await chrome.storage.sync.set({ skippedShortIds: entries });
   } catch (e) {
-    // quota 초과 — 가장 옛것 100건 잘라내고 재시도.
-    if (entries.length > 100) {
-      const trimmed = entries.slice(-(entries.length - 100));
-      console.warn(`[skip] sync quota 초과, ${entries.length - trimmed.length}건 cut`, e);
-      await chrome.storage.sync.set({ skippedShortIds: trimmed });
-    } else {
-      throw e;
-    }
+    // quota 초과 — 20% 잘라내고 재시도. entry 1건 ≈ 250byte, sync item 한도 8KB 이므로
+    // entries.length > 100 조건은 충분하지 않음 (소수 건도 quota 초과 가능). 건수 무관하게
+    // 항상 80% 로 줄인 뒤 재시도 (최소 1건은 보존).
+    const trimCount = Math.max(1, Math.ceil(entries.length * 0.2));
+    const trimmed = entries.slice(trimCount);
+    console.warn(`[skip] sync quota 초과, 가장 옛것 ${trimCount}건 컷 (${entries.length} → ${trimmed.length})`, e);
+    await chrome.storage.sync.set({ skippedShortIds: trimmed });
   }
 }
 
@@ -1470,62 +1633,107 @@ async function withTabRetry(fn, label, maxAttempts = 5) {
 // `document.visibilityState` 가 'visible' 로 보이고, NotebookLM 이 download 트리거
 // 를 정상 발사. 작업 끝나면 윈도우 close — 사용자 메인 작업 흐름 방해 최소화.
 //
-// 추가로 v0.4.37 부턴 윈도우 좌표를 화면 밖 (-32000, -32000) 으로 보내 사용자에게
-// 시각적으로 안 보이게 한다. Windows 에서 `focused:false` 만으론 popup 이 종종 메인
-// 윈도우 앞으로 튀어나오는 chromium 거동을 회피. visibilityState='visible' 은 윈도우
-// 위치와 무관하게 살아있어 download 트리거는 정상.
-let bulkWindowId = null;
-// 화면 밖 좌표. Chrome 이 좌표 sanitize 로 clamp 할 수도 있어 두 단계 적용:
-// (1) windows.create 시 멀리 보내고 (2) update 로 재차 nudge. 두 번 다 안 받아주는
-// OS/플랫폼 (가끔 macOS Spaces) 에선 화면 좌상단에 뜨지만 focused:false 라 포커스는 그대로.
-const BULK_WINDOW_OFFSCREEN = { left: -32000, top: -32000, width: 800, height: 600 };
+// v0.4.37 부턴 bulkWindow 를 사용자에게 방해 없이 처리.
+//
+// 핵심 조건:
+//   (A) popup window 안 tab 이 active=true 여야 visibilityState='visible' → download 트리거 정상.
+//   (B) focused:false 면 메인 윈도우 포커스를 빼앗지 않음 — tabs.create(active:true) 도
+//       그 창 안에서만 active 가 바뀔 뿐, 전역 focus 는 메인 윈도우 그대로.
+//
+// 좌표 변천:
+//   v0.4.37  (-32000, -32000) — 화면 완전 밖. Chrome 이 clamp 하거나 그냥 통과했음.
+//   v0.4.41  Chrome 업데이트 → "Bounds must be at least 50% within visible screen space"
+//            에러로 창 생성 자체 실패, 모든 다운로드 실패.
+//   v0.4.42a state:"minimized" 시도 → minimized 창에 tabs.create(active:true) 를 넣으면
+//            Chrome 이 창을 자동 복원(un-minimize) → 사용자 화면에 팝업이 튀어 오름.
+//            또한 minimized 창의 visibilityState='hidden' 이라 download 트리거도 불안정.
+//   v0.4.42b (현재) 화면 왼쪽 가장자리에 걸쳐 50% 조건만 충족하는 좌표 사용.
+//            Chrome bounds 검사 통과 + focused:false 로 포커스 비침 없음 + 화면 전환 없음.
+//            창 오른쪽 절반(400px) 이 화면 왼쪽 테두리 밖으로 숨겨짐 — 사용자에게 최소 노출.
+//
+// BULK_WINDOW_OPTS: left=-399 → 화면 안 visible 폭 401px (800의 50.1%) — 50% 규칙 통과.
+// 높이는 0부터 시작해 전부 on-screen. 실제 NotebookLM UI 렌더 영역은 화면 안쪽 401px.
+const BULK_WINDOW_OPTS = { left: -399, top: 0, width: 800, height: 600 };
 
-async function ensureBulkWindow() {
+let bulkWindowId = null;
+// bulk window 안에서 노트북 간 재사용되는 단일 탭의 ID. 매 노트북마다 chrome.tabs.create
+// 를 호출하면 Windows OS 가 SetForegroundWindow 로 popup 을 foreground 로 raise 시킴
+// (focused:false 가 honor 되지 않는 거동, v0.4.43 시점 Chrome 에서 확인). 대신 단일 탭을
+// chrome.tabs.update 로 navigate 만 하면 raise 트리거 자체가 없음.
+let bulkTabId = null;
+// debugger 는 탭 단위로 attach. 탭이 재사용되니 attach 도 세션당 1회.
+let bulkDebuggerAttached = false;
+
+// bulk window + 그 안의 단일 탭을 보장하고 `url` 로 navigate. 탭 ID 반환.
+//
+// 설계 의도 — 매 노트북마다 chrome.tabs.create 를 호출하지 않는다:
+//   v0.4.43 시점 Chrome 에선 chrome.windows.create({focused:false}) 가 Windows OS 에서
+//   honor 되지 않아 popup 이 foreground 로 raise 됨. tabs.create({active:true}) 도
+//   동일한 raise 를 트리거. chrome.windows.update({focused:true}) 로 복원해도 Windows
+//   SetForegroundWindow 제한 정책에 막혀 무시되거나 taskbar flash 만 발생.
+//
+// 회피: 노트북 1 에서 windows.create 가 popup + 첫 탭을 한 번에 만든다 (1회 raise 발생
+// 가능성 있음). 노트북 2+ 에서는 같은 탭을 chrome.tabs.update(tabId, {url}) 로 navigate
+// — tabs.create 호출이 없으니 raise 도 안 일어남. debugger.attach 도 1회만 → 디버그
+// 배너 raise 도 1회만. 화면 전환 빈도가 세션당 최대 1회로 감소.
+async function ensureBulkTab(url) {
   if (bulkWindowId !== null) {
-    try {
-      const w = await chrome.windows.get(bulkWindowId);
-      console.log(`[bulkWindow] reuse id=${bulkWindowId} state=${w.state} focused=${w.focused}`);
-      return bulkWindowId;
-    } catch (e) {
-      console.log(`[bulkWindow] stale id=${bulkWindowId}, recreating: ${e.message}`);
+    try { await chrome.windows.get(bulkWindowId); }
+    catch (e) {
+      console.log(`[bulkTab] window stale id=${bulkWindowId}: ${e.message}`);
       bulkWindowId = null;
+      bulkTabId = null;
+      bulkDebuggerAttached = false;
     }
   }
-  console.log(`[bulkWindow] creating new popup window (off-screen)`);
-  // focused:false — chrome.debugger.Input.dispatchMouseEvent 가 trusted input 을
-  // 주입하므로 window focus 자체는 download 트리거에 불필요. 사용자 메인 윈도우
-  // focus 그대로 두는 게 덜 거추장.
+  if (bulkTabId !== null) {
+    try { await chrome.tabs.get(bulkTabId); }
+    catch {
+      bulkTabId = null;
+      bulkDebuggerAttached = false;
+    }
+  }
+
+  if (bulkTabId !== null) {
+    console.log(`[bulkTab] reusing tab=${bulkTabId}, navigating to ${url.slice(0, 60)}…`);
+    await withTabRetry(() => chrome.tabs.update(bulkTabId, { url }), "tabs.update");
+    return bulkTabId;
+  }
+
+  // 첫 호출 — windows.create 에 url 을 함께 넘겨서 popup + 첫 탭을 한 번에. 분리된
+  // tabs.create 가 없어 raise 트리거가 발생할 여지가 가장 적은 형태.
+  console.log(`[bulkTab] creating bulk window with initial url=${url.slice(0, 60)}…`);
   const win = await withTabRetry(
     () => chrome.windows.create({
-      url: "about:blank",
+      url,
       type: "popup",
       focused: false,
-      ...BULK_WINDOW_OFFSCREEN,
+      ...BULK_WINDOW_OPTS,
     }),
     "windows.create",
   );
   bulkWindowId = win.id;
-  console.log(`[bulkWindow] created id=${win.id} state=${win.state} focused=${win.focused} ` +
-    `top=${win.top} left=${win.left} w=${win.width} h=${win.height} tabs=${win.tabs?.length}`);
-  // create 가 좌표 clamp 했을 가능성에 대비해 update 로 한 번 더 밀어낸다.
-  if (win.left > -1000 || win.top > -1000) {
-    try {
-      await chrome.windows.update(bulkWindowId, BULK_WINDOW_OFFSCREEN);
-      console.log(`[bulkWindow] nudged off-screen via update`);
-    } catch (e) {
-      console.warn(`[bulkWindow] update 실패 (창은 visible 상태로 남음): ${e.message}`);
-    }
+  bulkTabId = win.tabs?.[0]?.id ?? null;
+  console.log(`[bulkTab] created window=${win.id} tab=${bulkTabId} state=${win.state} focused=${win.focused}`);
+  if (bulkTabId === null) {
+    throw new Error("bulk window 생성 직후 tabs[0] 없음 — 비정상 상태");
   }
-  // about:blank 첫 탭은 placeholder. 첫 openManagedTab 호출이 진짜 NotebookLM URL
-  // 로 새 탭을 만들면서 placeholder 는 살아있어도 무해 (closeBulkWindow 가 결국 정리).
-  return bulkWindowId;
+  return bulkTabId;
 }
 
 async function closeBulkWindow() {
   if (bulkWindowId === null) return;
-  const id = bulkWindowId;
+  const winId = bulkWindowId;
+  const tabId = bulkTabId;
   bulkWindowId = null;
-  try { await chrome.windows.remove(id); } catch {}
+  bulkTabId = null;
+  const wasAttached = bulkDebuggerAttached;
+  bulkDebuggerAttached = false;
+  if (tabId !== null) ownedTabs.delete(tabId);
+  if (tabId !== null && wasAttached) {
+    try { await chrome.debugger.detach({ tabId }); } catch {}
+  }
+  try { await chrome.windows.remove(winId); } catch {}
 }
 
 async function openManagedTab(url, opts = {}) {
@@ -1533,30 +1741,37 @@ async function openManagedTab(url, opts = {}) {
   // background tab 의 download 트리거 거부 + programmatic click 도 거부 (isTrusted/
   // userActivation). 둘 다 우회하려면 popup window + chrome.debugger 가 필요.
   const inBulkWindow = !!opts.bulkWindow;
-  let createOpts;
+  let tabId;
   if (inBulkWindow) {
-    const winId = await ensureBulkWindow();
-    createOpts = { url, windowId: winId, active: true };
+    // 단일 탭 재사용 — ensureBulkTab 이 첫 호출엔 window+tab 생성, 이후 호출엔
+    // chrome.tabs.update 로 navigate (tabs.create 호출 없음 → 윈도우 raise 없음).
+    tabId = await ensureBulkTab(url);
+    ownedTabs.add(tabId);
   } else {
-    createOpts = { url, active: false };
+    const tab = await withTabRetry(() => chrome.tabs.create({ url, active: false }), "create");
+    tabId = tab.id;
+    ownedTabs.add(tabId);
   }
-  const tab = await withTabRetry(() => chrome.tabs.create(createOpts), "create");
-  ownedTabs.add(tab.id);
-  await waitForTabComplete(tab.id, TAB_OPEN_TIMEOUT);
-  if (inBulkWindow) {
-    // chrome.debugger.attach — Input.dispatchMouseEvent 로 진짜 user input 을 주입할
-    // 수 있게. 탭이 닫히면 자동 detach 라 lifecycle 추적 불필요. attach 시 노란
-    // "디버깅 중" 배너가 popup window 상단에 뜸 (사용자가 popup 안 봐도 무방).
-    try { await chrome.debugger.attach({ tabId: tab.id }, "1.3"); }
-    catch (e) {
-      console.warn(`[debugger] attach 실패 tab=${tab.id}: ${e.message}`);
-      // attach 실패해도 일단 진행 — clickViaDebugger 가 throw 하면 그 카드만 fail
+  await waitForTabComplete(tabId, TAB_OPEN_TIMEOUT);
+  if (inBulkWindow && !bulkDebuggerAttached) {
+    // chrome.debugger.attach — Input.dispatchMouseEvent 로 trusted user input 주입.
+    // 탭 재사용 덕분에 세션당 1회만 호출 — 디버그 배너 raise 도 1회로 한정.
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+      bulkDebuggerAttached = true;
+    } catch (e) {
+      if (/already attached/i.test(e.message)) {
+        bulkDebuggerAttached = true;
+      } else {
+        console.warn(`[debugger] attach 실패 tab=${tabId}: ${e.message}`);
+        // attach 실패해도 일단 진행 — clickViaDebugger 가 throw 하면 그 카드만 fail
+      }
     }
   }
-  const ready = await waitForContentReady(tab.id, CONTENT_PING_TIMEOUT);
+  const ready = await waitForContentReady(tabId, CONTENT_PING_TIMEOUT);
   if (!ready) {
     let finalUrl = "";
-    try { finalUrl = (await chrome.tabs.get(tab.id))?.url || ""; } catch {}
+    try { finalUrl = (await chrome.tabs.get(tabId))?.url || ""; } catch {}
     if (finalUrl.includes("accounts.google.com") || finalUrl.includes("ServiceLogin")) {
       throw new Error("NotebookLM 에 로그인되어 있지 않습니다. 브라우저에서 먼저 로그인 후 재시도하세요.");
     }
@@ -1565,10 +1780,12 @@ async function openManagedTab(url, opts = {}) {
     }
     throw new Error("NotebookLM 페이지에서 content script 로딩 실패 (timeout). 페이지 새로고침 후 재시도.");
   }
-  return tab.id;
+  return tabId;
 }
 
 async function closeManagedTab(tabId) {
+  // bulk 탭은 노트북 간 재사용 — 매 노트북 끝마다 닫지 않고 closeBulkWindow 시점까지 유지.
+  if (tabId === bulkTabId) return;
   ownedTabs.delete(tabId);
   // chrome.debugger 는 탭이 닫히면 자동 detach 지만, 명시적 detach 가 더 깔끔.
   // 탭이 attached 가 아니면 throw — swallow.
@@ -1985,6 +2202,7 @@ async function runBulkRemote(selections) {
   // 새 bulk 시작 — 직전의 failed 리스트는 더 이상 의미 없음.
   await clearFailedSelections();
 
+
   let done = 0;
   let success = 0;
   // 실패한 selection 을 [실패 N개 재시도] 용으로 모은다. push 응답 timeout / debugger
@@ -2001,7 +2219,7 @@ async function runBulkRemote(selections) {
     let tabId;
     try {
       // bulkWindow:true — NotebookLM 이 background tab 의 download 클릭을 거부하므로
-      // 전용 popup window 안에서 active tab 으로 띄움. 메인 윈도우 focus 는 그대로.
+      // 전용 popup window 안에서 active tab 으로 띄움.
       tabId = await openManagedTab(url, { bulkWindow: true });
       consecTabErrors = 0;
       const ready = await waitForAudioCards(tabId, NOTEBOOK_CARDS_TIMEOUT);
@@ -2133,7 +2351,7 @@ async function runBulkRemote(selections) {
   } else {
     await clearFailedSelections();
   }
-  notifyBulkComplete(success, done);
+  await notifyBulkComplete(success, done);
   emitEvent("bulk:remote:done", { ok: true, done });
   return { ok: true, done };
 }
@@ -2255,6 +2473,8 @@ async function pushEpisode(audioUrl, filename, dedupHints, episodeTitle) {
     stageLog(`pushed ${(size / 1024 / 1024).toFixed(1)}MB`);
     reportProgress("uploaded", size, size);
     pushResult = { ok: true, size, filename };
+    // 성공적으로 push 됐으므로 episodes/ 캐시 무효화 — 다음 카드 dedup 체크가 fresh list 를 봄.
+    invalidateGhListCache(cfg.repo, "docs/episodes");
   }
 
   // rssMode === "extension" 이면 audio push 가 끝난 직후 같은 SW 안에서 feed 도 재빌드.
@@ -2299,7 +2519,18 @@ async function ghGet(repo, path, token) {
   return r.json();
 }
 
+// docs/episodes/ list 를 반복 호출하는 경우 (list:pushed, buildNewSelections, storage:usage,
+// storage:cleanup, pushEpisode 등) 에 대한 in-memory TTL 캐시. GitHub GET 은 no-store
+// 이지만 같은 SW 안에서 수십ms 안에 연속 호출되는 케이스를 줄임.
+// TTL 30초 — push 후 즉시 무효화하므로 dedup 정확성에 영향 없음.
+const GHLIST_CACHE_TTL_MS = 30_000;
+const _ghListCache = new Map(); // key: `${repo}:${dirPath}` → { data: File[], ts: number }
+
 async function ghList(repo, dirPath, token) {
+  const cacheKey = `${repo}:${dirPath}`;
+  const hit = _ghListCache.get(cacheKey);
+  if (hit && Date.now() - hit.ts < GHLIST_CACHE_TTL_MS) return hit.data;
+
   const r = await fetch(ghContentsUrl(repo, dirPath), {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -2308,10 +2539,20 @@ async function ghList(repo, dirPath, token) {
     },
     cache: "no-store",
   });
-  if (r.status === 404) return [];
+  if (r.status === 404) {
+    _ghListCache.set(cacheKey, { data: [], ts: Date.now() });
+    return [];
+  }
   if (!r.ok) throw new Error(`ghList ${dirPath}: ${r.status} ${(await r.text()).slice(0, 200)}`);
   const arr = await r.json();
-  return Array.isArray(arr) ? arr.filter((f) => f.type === "file") : [];
+  const data = Array.isArray(arr) ? arr.filter((f) => f.type === "file") : [];
+  _ghListCache.set(cacheKey, { data, ts: Date.now() });
+  return data;
+}
+
+// push 성공 후 호출 — stale 캐시로 dedup 미스가 나지 않도록 해당 디렉토리 캐시 무효화.
+function invalidateGhListCache(repo, dirPath) {
+  _ghListCache.delete(`${repo}:${dirPath}`);
 }
 
 async function ghPut(repo, path, contentB64, message, sha, token, committer) {

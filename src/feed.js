@@ -8,7 +8,8 @@
 //   옛 포맷: ${date}__${notebook}__${title}.ext           (3 segment)
 //   새 포맷: ${date}__${notebook}__${shortId}__${title}.ext (4 segment, shortId = 8자 16진수)
 // shortId 그룹은 옵셔널이라 기존 episode 들도 그대로 파싱된다 (IMPLEMENTATION_NOTES.md §1).
-const FILENAME_RE = /^(\d{8})__(.+?)__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$/;
+// i 플래그 — ext (m4a/mp3/mp4) 대소문자 무관 매칭. background.js 도 이 값을 import해 사용.
+export const FILENAME_RE = /^(\d{8})__(.+?)__(?:([0-9a-f]{8})__)?(.+?)\.(m4a|mp3|mp4)$/i;
 const MIME = { m4a: "audio/mp4", mp4: "audio/mp4", mp3: "audio/mpeg" };
 
 const DEFAULT_META = {
@@ -43,7 +44,7 @@ export async function rebuildFeed({ repo, token, committer }) {
     }
   }
 
-  const xml = renderFeed({ ...meta, baseUrl }, keep);
+  const xml = renderFeed({ ...meta, baseUrl }, applyEpisodeOrder(keep, meta.episodeOrder));
 
   const path = "docs/feed.xml";
   const existing = await ghGet(repo, path, token);
@@ -54,6 +55,21 @@ export async function rebuildFeed({ repo, token, committer }) {
   await ghPut(repo, path, newB64,
     `auto: rebuild feed (${keep.length} episodes)`, existing?.sha, token, committer);
   return { ok: true, episodes: keep.length, dropped, missingMeta: !meta._fromRepo };
+}
+
+// podcast.json 의 episodeOrder 배열(filename 목록)이 있으면 그 순서로 정렬.
+// 배열에 없는 항목(새로 추가된 에피소드 등)은 날짜 내림차순으로 뒤에 붙임.
+// 배열이 없거나 비어있으면 기존 날짜 내림차순 그대로 반환.
+function applyEpisodeOrder(items, episodeOrder) {
+  if (!Array.isArray(episodeOrder) || episodeOrder.length === 0) return items;
+  const orderMap = new Map(episodeOrder.map((fn, i) => [fn, i]));
+  return items.slice().sort((a, b) => {
+    const ia = orderMap.has(a.filename) ? orderMap.get(a.filename) : Infinity;
+    const ib = orderMap.has(b.filename) ? orderMap.get(b.filename) : Infinity;
+    if (ia !== ib) return ia - ib;
+    // 둘 다 order에 없으면 날짜 내림차순 유지
+    return b.pubDate.getTime() - a.pubDate.getTime();
+  });
 }
 
 function applyRetention(items, retention) {

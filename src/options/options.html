@@ -151,6 +151,31 @@
   button.ep-action.danger { background: #dc2626; color: #fff; }
   button.ep-action.danger:hover:not(:disabled) { background: #b91c1c; }
   .ep-summary { font-size: 11px; color: #666; }
+  /* 순서 편집 모드 */
+  .ep-reorder-bar { display: none; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; padding: 8px 10px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; font-size: 12px; }
+  .ep-reorder-bar.visible { display: flex; }
+  .ep-reorder-bar .reorder-hint { color: #1d4ed8; flex: 1; min-width: 200px; }
+  .ep-reorder-bar button { margin-top: 0; padding: 5px 12px; font-size: 12px; border-radius: 4px; cursor: pointer; }
+  .ep-reorder-bar button.apply { background: #16a34a; color: #fff; border: 1px solid #16a34a; }
+  .ep-reorder-bar button.apply:hover:not(:disabled) { background: #15803d; }
+  .ep-reorder-bar button.apply:disabled { background: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
+  .ep-reorder-bar button.cancel { background: #fff; color: #444; border: 1px solid #d1d5db; }
+  .ep-reorder-bar button.cancel:hover { background: #f9fafb; }
+  .ep-reorder-bar button.reset { background: #fff; color: #6b7280; border: 1px solid #d1d5db; font-size: 11px; }
+  .ep-reorder-bar button.reset:hover { background: #f9fafb; }
+  /* 드래그 핸들 */
+  .ep-row td.col-drag { text-align: center; color: #9ca3af; font-size: 16px; cursor: grab; user-select: none; padding: 0 4px; }
+  .ep-row td.col-drag:active { cursor: grabbing; }
+  .ep-row.dragging { opacity: 0.4; }
+  .ep-row.drag-over td { background: #dbeafe !important; }
+  /* 편집 모드에서 정렬 헤더 비활성 */
+  .ep-reorder-active #ep-table th.sortable { cursor: default !important; pointer-events: none; color: #9ca3af; }
+  /* 피드 순서로 보기 모드에서 정렬 헤더 비활성 */
+  .ep-feed-view-active #ep-table th.sortable { cursor: default !important; pointer-events: none; color: #9ca3af; }
+  /* ▲▼ 이동 버튼 */
+  button.ep-move { margin: 0 1px; padding: 2px 5px; font-size: 11px; border-radius: 3px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; line-height: 1; color: #374151; }
+  button.ep-move:hover:not(:disabled) { background: #f3f4f6; }
+  button.ep-move:disabled { color: #d1d5db; cursor: not-allowed; }
   .ep-empty { color: #888; font-size: 12px; padding: 16px 0; text-align: center; font-style: italic; }
   .format-tag { display: inline-block; padding: 1px 5px; font-size: 10px; border-radius: 3px; background: #e5e7eb; color: #374151; font-family: ui-monospace, Consolas, monospace; }
   .format-tag.mp3 { background: #dcfce7; color: #166534; }
@@ -291,6 +316,7 @@
           <div id="pick-tree" style="max-height:380px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:5px; padding:6px 8px; background:#fff; font-size:12px;"></div>
           <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
             <button type="button" id="pick-download" class="primary-action" data-i18n="pick.download" style="background:#2563eb; color:#fff; border:0;">선택 카드 받기</button>
+            <button type="button" id="pick-skip" data-i18n="pick.skip" style="background:#fef3c7; border:1px solid #fcd34d; color:#92400e;" title="선택한 카드를 영구 스킵 목록에 추가">선택 카드 스킵</button>
             <button type="button" id="pick-cancel" data-i18n="pick.cancel">접기</button>
             <span id="pick-status" style="font-size:11px; color:#6b7280;"></span>
           </div>
@@ -534,10 +560,18 @@
         <button type="button" class="toggle" id="ep-group-toggle" data-i18n="episodes.groupToggle">노트북별 그룹화</button>
         <button type="button" id="ep-reset-sort" data-i18n="episodes.resetSort">정렬 초기화 (날짜 ↓)</button>
         <button type="button" id="ep-skip-toggle" title="[스킵] 으로 등록된 영구 제외 목록 — 같은 Google 계정의 다른 기기에 자동 동기화" data-i18n="episodes.skipToggle">스킵 목록</button>
+        <button type="button" class="toggle" id="ep-reorder-toggle" data-i18n="episodes.reorder">피드 순서 편집</button>
+        <button type="button" class="toggle" id="ep-feed-order-view" data-i18n="episodes.feedOrderView">피드 순서로 보기</button>
         <span class="ep-summary" id="ep-summary"></span>
         <span class="selected-count" id="ep-selected-count"></span>
         <button type="button" id="ep-batch-skip" data-i18n="episodes.batchSkip" disabled style="background:#2563eb; color:#fff; border:0;">선택 스킵</button>
         <button type="button" class="batch-delete" id="ep-batch-delete" data-i18n="episodes.batchDelete" disabled>선택 삭제</button>
+      </div>
+      <div class="ep-reorder-bar" id="ep-reorder-bar">
+        <span class="reorder-hint" data-i18n="episodes.reorderHint">드래그(☰) 또는 ▲▼ 버튼으로 RSS 피드 에피소드 순서를 변경합니다. [피드에 적용]을 눌러야 GitHub에 저장됩니다.</span>
+        <button type="button" class="reset" id="ep-reorder-reset" data-i18n="episodes.reorderReset">기본 순서로 초기화</button>
+        <button type="button" class="cancel" id="ep-reorder-cancel" data-i18n="episodes.reorderCancel">취소</button>
+        <button type="button" class="apply" id="ep-reorder-apply" data-i18n="episodes.reorderApply">피드에 적용</button>
       </div>
       <div id="ep-skip-panel" class="task-panel" style="display:none; margin-bottom:12px;">
         <div class="task-head">

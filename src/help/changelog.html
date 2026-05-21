@@ -33,6 +33,33 @@
 <h1>버전별 변경사항 (상세)</h1>
 <p class="sub">전체 commit 히스토리는 <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a> 참고. 아래는 사용자 입장에서 체감되는 변경만, 최신 버전부터.</p>
 
+<h3>v0.4.46 (2026-05-21) — 선택 카드 일괄 스킵 버튼</h3>
+<ul>
+  <li><strong>관리 페이지의 "직전 스캔 결과 → 선택해서 받기" 트리에 [선택 카드 스킵] 버튼 추가</strong> — 체크한 카드들을 한 번에 영구 스킵 목록에 등록. 다음 스캔부터 신규로 잡히지 않음. 익스텐션을 다른 경로로 재로드해 스킵 목록이 비워졌거나, 받기 싫은 카드를 한꺼번에 차단할 때 유용. 등록 직후 트리에서 해당 카드들이 자동으로 사라짐.</li>
+</ul>
+
+<h3>v0.4.45 (2026-05-21) — 일괄 다운로드 화면 전환 현상 수정</h3>
+<ul>
+  <li><strong>일괄 다운로드 중 매 노트북마다 popup 창이 잠깐 떠오르며 화면이 전환되던 현상 수정</strong> — Chrome 의 Windows 환경에서 <code>chrome.windows.create({focused:false})</code> 가 더 이상 honor 되지 않게 거동이 바뀌어, 매 노트북마다 <code>chrome.tabs.create({active:true})</code> 가 popup 창을 OS foreground 로 끌어올리던 문제. 단일 탭을 노트북 간에 재사용 (chrome.tabs.update 로 navigate) 하도록 구조 변경 — <code>tabs.create</code> 호출 자체가 세션 전체에서 0번. 화면 전환 빈도가 세션당 최대 1회 (첫 노트북 windows.create 시점) 로 감소.</li>
+  <li><strong>debugger.attach 도 세션당 1회만</strong> — 같은 탭을 재사용하므로 노란 디버그 배너 raise 도 1회만 발생.</li>
+</ul>
+
+<h3>v0.4.43 (2026-05-20) — 피드 순서로 보기 토글</h3>
+<ul>
+  <li><strong>에피소드 목록 "피드 순서로 보기" 토글</strong> — 현재 저장된 커스텀 피드 순서 그대로 에피소드 표를 확인하는 뷰 추가. 토글 ON 시 GitHub 의 <code>podcast.json</code> 에서 <code>episodeOrder</code> 배열을 읽어 그 순서로 정렬 (배열에 없는 파일은 날짜 내림차순으로 뒤에 배치). 그룹화·정렬·편집 모드 버튼은 보기 모드 중 비활성.</li>
+</ul>
+
+<h3>v0.4.42 (2026-05-20) — 다운로드 창 좌표 수정 + 피드 순서 편집</h3>
+<ul>
+  <li><strong>일괄 다운로드 popup 창 좌표 수정</strong> — Chrome 2026-05 업데이트로 <code>windows.create</code> / <code>windows.update</code> 에서 창 면적의 50% 이상이 화면 내에 있어야 한다는 조건이 추가됨. 기존 <code>left:-32000, top:-32000</code> 좌표가 에러로 차단되어 모든 일괄 다운로드가 "탭 열기 실패" 로 실패하던 문제 수정. <code>left:-399, top:0, width:800, height:600</code> 으로 변경 (화면 내 가시폭 401px = 50.1%). <code>focused:false</code> 와 <code>visibilityState='visible'</code> 는 그대로 유지.</li>
+  <li><strong>에피소드 RSS 피드 순서 편집 기능</strong> — 관리 페이지 에피소드 목록에 <strong>[피드 순서 편집]</strong> 버튼 추가. 드래그&amp;드롭 (☰ 핸들) 과 ▲▼ 버튼으로 에피소드 순서를 자유롭게 재배열. [피드에 적용] 클릭 시 <code>docs/podcast.json</code> 의 <code>episodeOrder</code> 배열로 저장되고 feed.xml 이 즉시 재빌드됨. [기본 순서로 초기화] 로 날짜 내림차순 복귀 가능.</li>
+</ul>
+
+<h3>v0.4.41 (2026-05-20) — 도움말 업데이트</h3>
+<ul>
+  <li>도움말 페이지에 §6-6 (피드 순서 편집), §6-7 (피드 순서로 보기) 추가. §3-3 다운로드 창 좌표 설명 갱신. §12 에 v0.4.42 테마 요약 추가.</li>
+</ul>
+
 <h3>v0.4.40 (2026-05-13) — 도움말 페이지 재구성</h3>
 <ul>
   <li><strong>도움말의 §12 버전별 업데이트를 테마 요약으로 압축</strong> + 버전 단위 상세는 이 페이지 (changelog) 로 분기. 사용자가 도움말 페이지 한 화면에서 큰 흐름만 빠르게 훑고, 필요할 때 상세 페이지로 점프.</li>

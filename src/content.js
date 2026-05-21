@@ -277,7 +277,9 @@
         let audios = getAudioCards();
         while (Date.now() - start < 3000) {
           const real = audios.filter((a) => !a.isPlaceholder);
-          const ready = !!cover.dateAttr && real.length > 0 && real.every((a) => a.artifactId);
+          // 음성개요가 0개인 노트북은 real.length > 0 조건이 절대 true 가 되지 않아
+          // 항상 3초를 다 기다리는 버그 수정. dateAttr 만 채워지면 즉시 반환.
+          const ready = !!cover.dateAttr && (real.length === 0 || real.every((a) => a.artifactId));
           if (ready) break;
           await new Promise((r) => setTimeout(r, 100));
           cover = getCover();
