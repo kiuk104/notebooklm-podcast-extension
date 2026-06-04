@@ -867,6 +867,7 @@ function renderPickTree() {
   let totalNew = 0;
   let totalPushed = 0;
   let totalPlaceholder = 0;
+  let totalSkipped = 0;
 
   for (const nb of pickState.notebooks) {
     const nbDiv = document.createElement("div");
@@ -895,21 +896,28 @@ function renderPickTree() {
     cardsBox.className = "pick-cards";
     nbDiv.appendChild(cardsBox);
 
-    let nbNew = 0, nbPushed = 0, nbPlaceholder = 0;
+    let nbNew = 0, nbPushed = 0, nbPlaceholder = 0, nbSkipped = 0;
     let visibleCount = 0;
     (nb.audios || []).forEach((audio, idx) => {
       const isPushed = !!audio.isPushed;
-      const isPlaceholder = !!audio.isPlaceholder;
+      // 스킵 카드는 영구 제외 대상 — pushed 다음 우선순위로 분류해 "신규" 에서 뺀다.
+      const isSkipped = !isPushed && !!audio.isSkipped;
+      const isPlaceholder = !isPushed && !isSkipped && !!audio.isPlaceholder;
       if (isPushed) nbPushed++;
+      else if (isSkipped) nbSkipped++;
       else if (isPlaceholder) nbPlaceholder++;
       else nbNew++;
 
-      if (isPushed && !showPushed) return;
+      // pushed 와 마찬가지로 skipped 도 default 숨김 — "이미 받은 카드도 보기" 토글로
+      // 같이 노출되지만, 다운로드 경로(runBulkRemote)가 어차피 거르므로 체크박스는
+      // 비활성 + "스킵됨" 태그로만 표시.
+      if ((isPushed || isSkipped) && !showPushed) return;
 
       visibleCount++;
       const row = document.createElement("div");
       row.className = "pick-card";
       if (isPushed) row.classList.add("is-pushed");
+      if (isSkipped) row.classList.add("is-skipped");
       if (isPlaceholder) row.classList.add("is-placeholder");
 
       const cardCb = document.createElement("input");
@@ -923,19 +931,21 @@ function renderPickTree() {
       // 어떤 파일이었는지 표시되도록.
       cardCb.dataset.coverDateAttr = nb.cover?.dateAttr || "";
       cardCb.dataset.notebookTitle = nb.cover?.title || "";
-      cardCb.dataset.kind = isPushed ? "pushed" : isPlaceholder ? "placeholder" : "new";
-      // default: 신규만 체크. placeholder 는 disabled (background 가 어차피 거절).
-      cardCb.disabled = isPlaceholder;
-      cardCb.checked = !isPushed && !isPlaceholder;
+      cardCb.dataset.kind = isPushed ? "pushed" : isSkipped ? "skipped" : isPlaceholder ? "placeholder" : "new";
+      // default: 신규만 체크. placeholder / skipped 는 disabled (다운로드 경로가 어차피 거절).
+      cardCb.disabled = isPlaceholder || isSkipped;
+      cardCb.checked = !isPushed && !isPlaceholder && !isSkipped;
 
       const lbl = document.createElement("label");
       const tagEl = document.createElement("span");
       tagEl.className = "pick-card-tag";
       tagEl.textContent = isPushed
         ? t("pick.tag.pushed")
-        : isPlaceholder
-          ? t("pick.tag.placeholder")
-          : t("pick.tag.new");
+        : isSkipped
+          ? t("pick.tag.skipped")
+          : isPlaceholder
+            ? t("pick.tag.placeholder")
+            : t("pick.tag.new");
       const titleEl = document.createElement("span");
       titleEl.className = "pick-card-title";
       titleEl.textContent = audio.title || `audio ${idx}`;
@@ -954,10 +964,12 @@ function renderPickTree() {
     totalNew += nbNew;
     totalPushed += nbPushed;
     totalPlaceholder += nbPlaceholder;
+    totalSkipped += nbSkipped;
 
     const metaParts = [];
     metaParts.push(t("pick.nb.new", { n: nbNew }));
     if (nbPushed > 0) metaParts.push(t("pick.nb.pushed", { n: nbPushed }));
+    if (nbSkipped > 0) metaParts.push(t("pick.nb.skipped", { n: nbSkipped }));
     if (nbPlaceholder > 0) metaParts.push(t("pick.nb.placeholder", { n: nbPlaceholder }));
     meta.textContent = metaParts.join(" · ");
 
@@ -1116,9 +1128,9 @@ if (pickSkipBtn) {
       pickSkipBtn.disabled = false;
       return;
     }
-    // 등록 성공 — 트리에서 방금 스킵된 카드는 다시 보이지 않게 fresh 데이터로 재렌더.
-    // scan:result:pushed 가 isSkipped 도 enrich 해서 반환하지만 pick 트리는 현재
-    // isSkipped 를 따로 안 보므로 그냥 같은 데이터를 다시 받는다 — pushedSet 만 갱신.
+    // 등록 성공 — fresh 데이터로 재렌더. scan:result:pushed 가 isSkipped 를 enrich 하고
+    // renderPickTree 가 skipped 카드를 default 숨김 + "스킵됨" 태그로 처리하므로, 방금
+    // 스킵된 카드는 자동으로 목록에서 사라진다 (별도 필터 불필요).
     pickStatusEl.textContent = t("pick.skipDoneN", { n: r.added || items.length });
     try {
       const rr = await chrome.runtime.sendMessage({ type: "scan:result:pushed" });
@@ -1127,11 +1139,6 @@ if (pickSkipBtn) {
           notebooks: rr.notebooks || [],
           scannedAt: rr.scannedAt || 0,
         };
-        // 방금 스킵된 카드를 안 보이도록 audios 에서 필터 (isSkipped flag 활용).
-        pickState.notebooks = pickState.notebooks.map((nb) => ({
-          ...nb,
-          audios: (nb.audios || []).filter((a) => !a.isSkipped),
-        }));
         renderPickTree();
       }
     } catch {}

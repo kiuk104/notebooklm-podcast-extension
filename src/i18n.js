@@ -87,9 +87,11 @@ const I18N_TRANSLATIONS = {
     "pick.cancel": "접기",
     "pick.tag.new": "신규",
     "pick.tag.pushed": "받음",
+    "pick.tag.skipped": "스킵됨",
     "pick.tag.placeholder": "제목 대기",
     "pick.nb.new": "{n} 신규",
     "pick.nb.pushed": "{n} 받음",
+    "pick.nb.skipped": "{n} 스킵됨",
     "pick.nb.placeholder": "{n} 제목 대기",
 
     // 작업 종류 / 상태
@@ -378,9 +380,11 @@ const I18N_TRANSLATIONS = {
     "pick.cancel": "Collapse",
     "pick.tag.new": "new",
     "pick.tag.pushed": "pushed",
+    "pick.tag.skipped": "skipped",
     "pick.tag.placeholder": "title pending",
     "pick.nb.new": "{n} new",
     "pick.nb.pushed": "{n} pushed",
+    "pick.nb.skipped": "{n} skipped",
     "pick.nb.placeholder": "{n} pending",
 
     "task.label.scan": "Scan all notebooks",
@@ -664,9 +668,11 @@ const I18N_TRANSLATIONS = {
     "pick.cancel": "Einklappen",
     "pick.tag.new": "neu",
     "pick.tag.pushed": "geladen",
+    "pick.tag.skipped": "übersprungen",
     "pick.tag.placeholder": "Titel ausstehend",
     "pick.nb.new": "{n} neu",
     "pick.nb.pushed": "{n} geladen",
+    "pick.nb.skipped": "{n} übersprungen",
     "pick.nb.placeholder": "{n} ausstehend",
 
     "task.label.scan": "Alle Notebooks scannen",
