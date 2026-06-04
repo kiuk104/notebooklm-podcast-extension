@@ -472,6 +472,15 @@
 
 <p style="font-size: 12px; color: #666;">테마별 큰 흐름. 버전 하나하나의 상세 변경은 <a href="changelog.html"><strong>전체 변경 이력 ↗</strong></a> 페이지 참고. 전체 commit 히스토리는 <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>.</p>
 
+<h3>스킵 안정화 + 편의 기능 <span style="font-weight:normal; color:#666;">(v0.4.45 ~ v0.4.47, 2026-05-21 ~ 06-04)</span></h3>
+<ul>
+  <li>일괄 다운로드 중 매 노트북마다 popup 창이 떠오르며 화면이 전환되던 현상 수정 — 단일 탭을 재사용 (화면 전환 세션당 최대 1회).</li>
+  <li>"직전 스캔 → 선택해서 받기" 트리에 [선택 카드 스킵] 버튼 — 체크한 카드들을 한 번에 영구 스킵.</li>
+  <li>스킵한 카드가 일괄 다운로드에서 무한 반복 실패하던 버그 수정 — 모든 다운로드 경로가 공통으로 스킵 목록을 먼저 거름. NotebookLM 에서 삭제된 카드는 다운로드 실패 시 자동 스킵 등록.</li>
+  <li>에피소드 목록에 [↑ 맨 위로 이동] 버튼 / "신규 N개" 카운트가 스킵 카드를 제외하도록 교정.</li>
+  <li>오류 제보 / 개선 제안을 <strong>🐛 GitHub 이슈</strong> + <strong>✉️ 이메일</strong> 2종류로 분리 (popup · 관리 · 도움말).</li>
+</ul>
+
 <h3>피드 순서로 보기 토글 <span style="font-weight:normal; color:#666;">(v0.4.43, 2026-05-20)</span></h3>
 <ul>
   <li>에피소드 목록 "피드 순서로 보기" 토글 — GitHub 의 <code>podcast.json</code> 에서 <code>episodeOrder</code> 를 읽어 현재 저장된 피드 순서 그대로 표를 확인.</li>
@@ -529,7 +538,9 @@
 구현 / 디버깅 노트:
 <a href="../../README.md" target="_blank">README.md</a> ·
 <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a><br>
-오류 / 개선사항 제보: <a href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank"><strong>🐛 GitHub Issues ↗</strong></a>
+오류 / 개선사항 제보:
+<a href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank"><strong>🐛 GitHub 이슈 ↗</strong></a> ·
+<a href="mailto:kiuk104@gmail.com?subject=%5BNotebookLM%20Podcast%20Sync%5D%20%EC%98%A4%EB%A5%98%20%EC%A0%9C%EB%B3%B4%20%2F%20%EA%B0%9C%EC%84%A0%20%EC%A0%9C%EC%95%88"><strong>✉️ 이메일 ↗</strong></a>
 </p>
 
 </body>

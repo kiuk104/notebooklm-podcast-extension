@@ -45,6 +45,9 @@
   ul.cards button.dl:disabled { color: #9ca3af; border-color: #d1d5db; cursor: not-allowed; }
   a.settings { display: block; text-align: center; margin-top: 10px; font-size: 11px; color: #2563eb; text-decoration: none; }
   a.settings:hover { text-decoration: underline; }
+  .feedback-group { margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee; }
+  .feedback-label { display: block; text-align: center; font-size: 11px; color: #6b7280; font-weight: 600; }
+  .feedback-group a.settings { margin-top: 5px; }
 </style>
 </head>
 <body>
@@ -65,7 +68,11 @@
 <ul class="cards" id="cards"></ul>
 <a href="#" class="settings" id="open-options" data-i18n="popup.openOptions">⚙ 관리</a>
 <a href="#" class="settings" id="open-help" data-i18n="popup.openHelp">❓ 도움말</a>
-<a href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank" class="settings" id="open-feedback" data-i18n="popup.openFeedback">🐛 오류 제보 / 개선 제안</a>
+<div class="feedback-group">
+  <span class="feedback-label" data-i18n="feedback.label">🐛 오류 제보 / 개선 제안</span>
+  <a href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank" class="settings" id="open-feedback-github" data-i18n="feedback.github">🐛 GitHub 이슈 등록 ↗</a>
+  <a href="#" class="settings" id="open-feedback-email" data-i18n="feedback.email">✉️ 이메일로 보내기 ↗</a>
+</div>
 <script src="../i18n.js"></script>
 <script src="popup.js"></script>
 </body>

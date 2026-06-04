@@ -102,6 +102,19 @@
      width: auto — 테이블 폭 = 모든 col 폭의 정확한 합. 한 컬럼을 늘리면 그 오른쪽
      컬럼들은 폭은 그대로 유지한 채 오른쪽으로 밀려남. wrapper 가 가로 스크롤로 흡수. */
   .ep-table-wrap { overflow-x: auto; margin-top: 10px; }
+  /* 우측 하단 floating "맨 위로" 버튼 — 스크롤을 내리면 .visible 로 나타남. */
+  #scroll-top-fab {
+    position: fixed; right: 28px; bottom: 28px; z-index: 1000;
+    width: 48px; height: 48px; border-radius: 50%;
+    background: #1d4ed8; color: #fff; border: 0; cursor: pointer;
+    font-size: 22px; line-height: 1; font-weight: 700;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; visibility: hidden; transform: translateY(8px);
+    transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  }
+  #scroll-top-fab.visible { opacity: 1; visibility: visible; transform: translateY(0); }
+  #scroll-top-fab:hover { background: #1e40af; }
   table.episodes { width: auto; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
   /* box-sizing: border-box — col 폭에 padding 도 포함시켜 컬럼이 텍스트/패딩보다 작게도 줄어들게.
      min-width: 0 — 콘텐츠 intrinsic min 이 cell 을 확장하지 않도록.
@@ -230,7 +243,11 @@
         </select>
       </div>
       <a id="help-link" href="../help/help.html" target="_blank" data-i18n="sidebar.help">❓ 도움말</a>
-      <a id="feedback-link" href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank" style="display:block; margin-top:6px;" data-i18n="sidebar.feedback">🐛 오류 제보 / 개선 제안</a>
+      <div class="sidebar-feedback" style="margin-top:8px;">
+        <span style="display:block; font-size:11px; color:#6b7280; font-weight:600; margin-bottom:3px;" data-i18n="feedback.label">🐛 오류 제보 / 개선 제안</span>
+        <a id="feedback-github-link" href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank" style="display:block;" data-i18n="feedback.github">🐛 GitHub 이슈 등록 ↗</a>
+        <a id="feedback-email-link" href="#" style="display:block; margin-top:3px;" data-i18n="feedback.email">✉️ 이메일로 보내기 ↗</a>
+      </div>
     </div>
   </aside>
 
@@ -615,6 +632,8 @@
 
   </main>
 </div>
+
+<button type="button" id="scroll-top-fab" data-i18n-attr="title:episodes.scrollTop,aria-label:episodes.scrollTop" title="맨 위로 이동" aria-label="맨 위로 이동">↑</button>
 
 <script src="../i18n.js"></script>
 <script src="options.js"></script>

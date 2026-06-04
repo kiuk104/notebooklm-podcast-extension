@@ -473,6 +473,15 @@
 
 <p style="font-size: 12px; color: #666;">Major themes only. For per-version details, see the <a href="changelog-en.html"><strong>full changelog ↗</strong></a>. Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>.</p>
 
+<h3>Skip stabilization + conveniences <span style="font-weight:normal; color:#666;">(v0.4.45 ~ v0.4.47, 2026-05-21 ~ 06-04)</span></h3>
+<ul>
+  <li>Fixed the popup window flashing to the foreground on every notebook during bulk download — a single tab is now reused (at most one screen switch per session).</li>
+  <li>[Skip selected cards] button in the "last scan → pick to download" tree — permanently skip all checked cards at once.</li>
+  <li>Fixed skipped cards failing forever in bulk download — every download path now runs the skip list first. Cards deleted in NotebookLM are auto-skipped when a download fails.</li>
+  <li>Added [↑ Back to top] button to the episode list / the "N new" count now excludes skipped cards.</li>
+  <li>Split "Report issue / suggestion" into <strong>🐛 GitHub issue</strong> + <strong>✉️ email</strong> (popup · options · help).</li>
+</ul>
+
 <h3>View by feed order toggle <span style="font-weight:normal; color:#666;">(v0.4.43, 2026-05-20)</span></h3>
 <ul>
   <li>"View by feed order" toggle — reads <code>episodeOrder</code> from <code>podcast.json</code> on GitHub and shows the episode list in the current saved feed order.</li>
@@ -530,7 +539,9 @@ Per-version detail: <a href="changelog-en.html"><strong>full changelog ↗</stro
 Implementation / debugging notes:
 <a href="../../README.md" target="_blank">README.md</a> ·
 <a href="../../IMPLEMENTATION_NOTES.md" target="_blank">IMPLEMENTATION_NOTES.md</a><br>
-Report bugs / suggestions: <a href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank"><strong>🐛 GitHub Issues ↗</strong></a>
+Report bugs / suggestions:
+<a href="https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" target="_blank"><strong>🐛 GitHub issue ↗</strong></a> ·
+<a href="mailto:kiuk104@gmail.com?subject=%5BNotebookLM%20Podcast%20Sync%5D%20Report%20issue%20%2F%20suggestion"><strong>✉️ Email ↗</strong></a>
 </p>
 
 </body>

@@ -33,6 +33,14 @@
 <h1>Detailed changelog</h1>
 <p class="sub">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. Below are user-visible changes only, newest first.</p>
 
+<h3>v0.4.47 (2026-06-04) — Skipped-card retry loop fix / back-to-top / two report channels</h3>
+<ul>
+  <li><strong>Fixed skipped cards failing forever in bulk download</strong> — if a card you had skipped was later deleted in NotebookLM, some paths ("Retry N failed", manual pick-and-download) bypassed the skip filter and kept re-attempting it → "card not found" every time → permanently piling up in the failed list. Now <em>every</em> download path runs the skip list first. Additionally, when a card is confirmed deleted from NotebookLM mid-download, it is <strong>auto-registered as skipped</strong> so it won't be picked up again on the next scan/retry.</li>
+  <li><strong>More accurate "N new" count</strong> — the last-scan summary no longer miscounts skipped cards as "new". Skipped cards are shown separately as "N skipped".</li>
+  <li><strong>Added [↑ Back to top] button to the episode list</strong> — for long lists, jump from the bottom of the table back to the top of the page with a smooth scroll.</li>
+  <li><strong>Split "Report issue / suggestion" into GitHub issue + email</strong> — in the popup, options sidebar, and help footer you can now choose between <strong>🐛 Open a GitHub issue</strong> and <strong>✉️ Send an email</strong>. The email subject is pre-filled with the current version.</li>
+</ul>
+
 <h3>v0.4.46 (2026-05-21) — Bulk-skip selected cards</h3>
 <ul>
   <li><strong>Admin page "Latest scan results → Select cards" tree now has a [Skip selected] button</strong> — adds all checked cards to the permanent skip list in one click. They will no longer appear as new in future scans. Useful when the skip list was wiped (reloading the extension from a different path) or to block a batch of unwanted cards at once. Skipped cards disappear from the tree immediately after registration.</li>

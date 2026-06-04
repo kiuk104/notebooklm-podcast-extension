@@ -592,7 +592,17 @@ document.getElementById("open-help").addEventListener("click", (e) => {
   chrome.tabs.create({ url: chrome.runtime.getURL(`src/help/${file}`) });
 });
 
-document.getElementById("open-feedback").addEventListener("click", (e) => {
+document.getElementById("open-feedback-github").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.tabs.create({ url: "https://github.com/kiuk104/notebooklm-podcast-extension/issues/new" });
 });
+
+// 이메일 경로 — mailto 는 OS 기본 메일 클라이언트가 처리하므로 preventDefault 없이
+// 앵커 그대로 둠 (chrome.tabs.create 로 열면 빈 about:blank 탭이 남음). 제목에 버전을
+// 넣어 사용자가 어떤 빌드에서 보고하는지 바로 파악.
+const feedbackEmailLink = document.getElementById("open-feedback-email");
+if (feedbackEmailLink) {
+  const ver = chrome.runtime.getManifest().version;
+  const subject = encodeURIComponent(`[NotebookLM Podcast Sync v${ver}] ${t("sidebar.feedback")}`);
+  feedbackEmailLink.href = `mailto:kiuk104@gmail.com?subject=${subject}`;
+}

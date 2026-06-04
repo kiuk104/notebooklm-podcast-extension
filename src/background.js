@@ -1460,13 +1460,28 @@ async function loadSkippedIndex() {
   const list = await loadSkippedEntries();
   const shortIds = new Set();
   const titleKeys = new Set();
+  const titleSlugs = new Set();
   for (const e of list) {
     if (e.shortId) shortIds.add(e.shortId);
     if (e.date && e.title) {
       titleKeys.add(`${e.date}|${slugify(e.title)}`);
     }
+    // titleSlugs 는 date 없이 제목만으로 매칭하는 폴백 — selection 객체에는 cover date
+    // 가 없어 runBulkRemote 의 choke-point 필터가 이 set 으로 artifactId 빈 race 를 잡음.
+    if (e.title) titleSlugs.add(slugify(e.title));
   }
-  return { shortIds, titleKeys };
+  return { shortIds, titleKeys, titleSlugs };
+}
+
+// selection 객체 ({ artifactId, episodeTitle, ... }) 가 skip 목록에 있는지 — runBulkRemote
+// choke-point 용. isAudioSkipped 는 cover dateAttr 를 받지만 selection 엔 date 가 없으므로
+// shortId (1차) + titleSlug (2차, artifactId 빈 race 폴백) 두 경로만 본다.
+function isSelectionSkipped(sel, skipIndex) {
+  const sid = (sel.artifactId || "").slice(0, 8);
+  if (sid && skipIndex.shortIds.has(sid)) return true;
+  const titleSlug = sel.episodeTitle ? slugify(sel.episodeTitle) : "";
+  if (titleSlug && skipIndex.titleSlugs.has(titleSlug)) return true;
+  return false;
 }
 
 // 카드 하나가 스킵 목록에 들어 있는지 — 두 경로:
@@ -2186,6 +2201,33 @@ async function runScanAll(opts = {}) {
 async function runBulkRemote(selections) {
   await startKeepalive();
   // selections: [{ notebookUrl, cardIndex, episodeTitle }, ...]
+  // Choke-point skip 필터 — buildNewSelections 만 skip 을 거르던 갭을 메움. retry-failed /
+  // selected / raw bulk:remote 등 모든 진입 경로가 여길 통과하므로, 사용자가 명시 스킵한
+  // 카드 (특히 NotebookLM 에서 삭제돼 "카드 못 찾음" 으로만 실패하던 것) 가 실패목록에
+  // 영구 보존되며 무한 재시도되는 루프를 원천 차단. (§22 — 필터는 모든 경로에 일관 적용.)
+  const skipIndex = await loadSkippedIndex();
+  const beforeCount = selections.length;
+  selections = selections.filter((s) => !isSelectionSkipped(s, skipIndex));
+  const skippedOut = beforeCount - selections.length;
+  if (skippedOut > 0) {
+    console.log(`[bulk:remote] skip 목록 ${skippedOut}건 제외 (${beforeCount} → ${selections.length})`);
+  }
+  if (selections.length === 0) {
+    // 전부 skip 으로 걸러짐 — 실패 보존목록도 비워 루프 종결.
+    await clearFailedSelections();
+    await setTaskState({
+      ...INITIAL_TASK_STATE,
+      task: "bulk:remote", status: "completed", phase: "done",
+      total: 0, done: 0,
+      message: skippedOut > 0
+        ? `스킵한 카드 ${skippedOut}건만 있어 받을 항목 없음`
+        : "받을 카드가 없습니다",
+      startedAt: Date.now(), endedAt: Date.now(),
+    });
+    emitEvent("bulk:remote:done", { ok: true, total: 0, success: 0 });
+    await stopKeepalive();
+    return { ok: true, total: 0, success: 0 };
+  }
   const grouped = new Map();
   for (const s of selections) {
     if (!grouped.has(s.notebookUrl)) grouped.set(s.notebookUrl, []);
@@ -2282,11 +2324,27 @@ async function runBulkRemote(selections) {
             30000,
           );
           if (!r?.ok) {
+            const errMsg = r?.error || "카드 prepare 실패";
             emitEvent("bulk:remote:result", {
-              episodeTitle: item.episodeTitle, ok: false, error: r?.error || "카드 prepare 실패",
+              episodeTitle: item.episodeTitle, ok: false, error: errMsg,
             });
-            await pushTaskError({ episodeTitle: item.episodeTitle, message: r?.error || "카드 prepare 실패" });
-            failedSelections.push(item);
+            await pushTaskError({ episodeTitle: item.episodeTitle, message: errMsg });
+            // "카드 못 찾음" 은 findCard 의 800ms 대기 + scrollToLoadAll 재시도까지 다 거친
+            // 뒤에만 나오므로 lazy render 지연이 아니라 NotebookLM 에서 카드가 삭제된 강한
+            // 신호. 자동 skip 등록해 다음 스캔/재시도에 같은 phantom 카드를 다시 안 잡는다.
+            // (자동 skip 은 재시도 후보에서도 빼야 하므로 failedSelections 에 넣지 않음.)
+            const cardGone = /카드 못 찾음|삭제됨/.test(errMsg);
+            const sid = (item.artifactId || "").slice(0, 8);
+            if (cardGone && sid) {
+              await addSkippedEntry({
+                shortId: sid,
+                title: item.episodeTitle || "",
+                notebookTitle: "",
+              });
+              console.log(`[bulk:remote] "${item.episodeTitle?.slice(0, 30)}" 카드 삭제 감지 → 자동 skip 등록 (${sid})`);
+            } else {
+              failedSelections.push(item);
+            }
             done++;
             continue;
           }

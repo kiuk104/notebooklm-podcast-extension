@@ -84,10 +84,19 @@ async function cfgSet(obj) {
 // 바로 갱신되어, 다음 [도움말] 클릭이 그 언어 페이지로 새 탭 열림.
 function refreshHelpLink() {
   const a = document.getElementById("help-link");
-  if (!a) return;
-  const lang = i18nGetLang();
-  const file = lang === "en" ? "help-en.html" : lang === "de" ? "help-de.html" : "help.html";
-  a.href = `../help/${file}`;
+  if (a) {
+    const lang = i18nGetLang();
+    const file = lang === "en" ? "help-en.html" : lang === "de" ? "help-de.html" : "help.html";
+    a.href = `../help/${file}`;
+  }
+  // 오류 제보 이메일 링크 — 제목에 버전 + 현재 언어 라벨을 넣어 mailto 구성. GitHub
+  // 이슈 링크는 정적이라 HTML href 그대로, 이메일만 동적으로 채운다.
+  const em = document.getElementById("feedback-email-link");
+  if (em) {
+    const ver = chrome.runtime.getManifest().version;
+    const subject = encodeURIComponent(`[NotebookLM Podcast Sync v${ver}] ${t("sidebar.feedback")}`);
+    em.href = `mailto:kiuk104@gmail.com?subject=${subject}`;
+  }
 }
 
 if (langSelectEl) {
@@ -668,6 +677,7 @@ async function renderLastScanPanel() {
   let newCount = 0;
   let placeholderCount = 0;
   let tooOldCount = 0;
+  let skippedCount = 0;
   try {
     const enriched = await chrome.runtime.sendMessage({ type: "scan:result:pushed" });
     for (const nb of (enriched?.notebooks || [])) {
@@ -676,6 +686,10 @@ async function renderLastScanPanel() {
         if (audio.isPushed) continue;
         // 옛 노트북 카드는 일괄 다운로드에서 스킵되므로 "신규" 로 안 셈.
         if (audio.isTooOld) { tooOldCount++; continue; }
+        // 사용자가 명시 스킵한 카드도 "신규" 가 아님 — background 의 buildNewSelections 가
+        // 어차피 거르므로 [신규 받기] 시 실제 다운로드되지 않는데, 이 카운트만 안 빼면
+        // "신규 N개" 가 부풀려져 0건인데도 버튼이 활성화되는 혼란을 줬다.
+        if (audio.isSkipped) { skippedCount++; continue; }
         newCount++;
       }
     }
@@ -697,6 +711,7 @@ async function renderLastScanPanel() {
   ];
   if (placeholderCount > 0) parts.push(t("monitor.summary.placeholder", { n: placeholderCount }));
   if (tooOldCount > 0) parts.push(t("monitor.summary.tooOld", { n: tooOldCount }));
+  if (skippedCount > 0) parts.push(t("monitor.summary.skipped", { n: skippedCount }));
   parts.push(t("monitor.summary.new", { n: newCount }));
   if (failedCount > 0) parts.push(t("monitor.summary.failed", { n: failedCount }));
   lastScanSummaryEl.textContent = parts.join(" · ");
@@ -1440,6 +1455,20 @@ const epStatusEl = document.getElementById("ep-status");
 const epTableWrapEl = document.getElementById("ep-table-wrap");
 const epTbody = document.getElementById("ep-tbody");
 const epEmptyEl = document.getElementById("ep-empty");
+// 우측 하단 floating "맨 위로" 버튼 — 페이지를 일정 이상 내리면 나타난다. 페이지 전체가
+// (body) 스크롤되므로 window.scrollY 기준. 짧은 페이지에선 자연히 안 보임.
+const scrollTopFab = document.getElementById("scroll-top-fab");
+if (scrollTopFab) {
+  const SHOW_AFTER = 300;
+  const updateFabVisibility = () => {
+    scrollTopFab.classList.toggle("visible", window.scrollY > SHOW_AFTER);
+  };
+  scrollTopFab.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  window.addEventListener("scroll", updateFabVisibility, { passive: true });
+  updateFabVisibility();
+}
 const epCheckAll = document.getElementById("ep-check-all");
 const epReorderToggleBtn = document.getElementById("ep-reorder-toggle");
 const epFeedOrderViewBtn = document.getElementById("ep-feed-order-view");

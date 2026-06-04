@@ -33,6 +33,14 @@
 <h1>Versionsverlauf (Detail)</h1>
 <p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
 
+<h3>v0.4.47 (2026-06-04) — Endlos-Fehler bei übersprungenen Karten behoben / Nach-oben-Button / zwei Meldekanäle</h3>
+<ul>
+  <li><strong>Übersprungene Karten scheiterten im Bündel-Download endlos — behoben</strong> — wurde eine bereits übersprungene Karte später in NotebookLM gelöscht, umgingen einige Pfade ("N Fehler wiederholen", manuelle Auswahl) den Überspring-Filter und versuchten sie immer wieder → jedes Mal „Karte nicht gefunden" → dauerhaftes Anwachsen der Fehlerliste. Jetzt durchläuft <em>jeder</em> Download-Pfad zuerst die Überspring-Liste. Wird eine Karte während des Downloads als in NotebookLM gelöscht erkannt, wird sie zudem <strong>automatisch als übersprungen registriert</strong>, sodass sie beim nächsten Scan/Wiederholen nicht erneut auftaucht.</li>
+  <li><strong>Genauere „N neu"-Zählung</strong> — die Zusammenfassung des letzten Scans zählt übersprungene Karten nicht mehr fälschlich als „neu". Übersprungene werden separat als „N übersprungen" angezeigt.</li>
+  <li><strong>Button [↑ Nach oben] in der Episodenliste</strong> — bei langen Listen vom Tabellenende mit sanftem Scrollen zurück zum Seitenanfang.</li>
+  <li><strong>„Fehler melden / Vorschlag" in GitHub-Issue + E-Mail aufgeteilt</strong> — im Popup, in der Verwaltungs-Seitenleiste und in der Hilfe-Fußzeile kann jetzt zwischen <strong>🐛 GitHub-Issue öffnen</strong> und <strong>✉️ Per E-Mail senden</strong> gewählt werden. Der E-Mail-Betreff wird mit der aktuellen Version vorbelegt.</li>
+</ul>
+
 <h3>v0.4.46 (2026-05-21) — Auswahl per Bündel überspringen</h3>
 <ul>
   <li><strong>Im Baum „Letztes Scan-Ergebnis → Karten auswählen" der Verwaltungsseite gibt es jetzt einen [Auswahl überspringen]-Button</strong> — fügt alle angekreuzten Karten mit einem Klick dauerhaft zur Skip-Liste hinzu. Sie erscheinen in zukünftigen Scans nicht mehr als neu. Nützlich, wenn die Skip-Liste leer ist (Erweiterung aus einem anderen Pfad neu geladen) oder ein Stapel unerwünschter Karten auf einmal blockiert werden soll. Übersprungene Karten verschwinden unmittelbar nach der Registrierung aus dem Baum.</li>
