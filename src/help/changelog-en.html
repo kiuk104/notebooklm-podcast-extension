@@ -33,6 +33,11 @@
 <h1>Detailed changelog</h1>
 <p class="sub">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. Below are user-visible changes only, newest first.</p>
 
+<h3>v0.4.49 (2026-06-15) — Fix skipped cards reappearing after the skip list was silently truncated</h3>
+<ul>
+  <li><strong>Fixes skipped cards being re-flagged as "new" and repeatedly retried/failing in bulk downloads.</strong> The skip list was stored in a single <code>chrome.storage.sync</code> item (8KB per-item limit) together with metadata, so entries (Korean titles, etc.) grew large and <strong>once you passed ~40 skips the oldest ones were silently trimmed</strong>. A trimmed skip reappears as new on the next scan → gets retried → (if you deleted the card in NotebookLM) fails → is auto-skipped again → exceeds the quota again and evicts another skip → endless churn. The skip data now lives in unlimited local storage (<strong>tens of thousands of entries kept, no truncation</strong>); only compact identifiers are mirrored to sync for cross-device. Your existing skip list migrates automatically.</li>
+</ul>
+
 <h3>v0.4.48 (2026-06-15) — Exclude Featured notebooks from scan / auto-recovery for missed feed rebuilds</h3>
 <ul>
   <li><strong>Google "Featured notebooks" are no longer swept into the scan.</strong> NotebookLM's home page lists a "Featured notebooks" section (Google-provided sample/shared notebooks) alongside your own. These were being scanned and flagged as new. Now only your "Recent notebooks" are scanned and downloaded; the Featured section is skipped. This also resolves the side effect where those cards — often grabbed before their cover/identifier finished loading — kept reappearing as new even after you skipped them.</li>

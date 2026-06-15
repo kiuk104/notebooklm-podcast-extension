@@ -95,9 +95,9 @@ NotebookLM은 두 가지 조건을 모두 요구:
 
 MV3 SW는 30초 idle이면 종료됨. bulk 작업 중 SW가 죽으면 다운로드 흐름 전체가 끊김. keepalive 알람(`chrome.alarms`)과 offscreen document port로 alive 유지. SW를 오래 살려야 하는 로직 추가 시 이 메커니즘 확인.
 
-### `chrome.storage.sync` quota [§16]
+### `chrome.storage.sync` quota [§16, §24]
 
-설정값은 `sync`에 저장 (다기기 공유). `skippedShortIds` 배열은 entry당 ~250byte × 최대 ~400건 = 100KB 한도. 새 sync 저장 항목 추가 시 quota 계산 필요.
+설정값은 `sync`에 저장 (다기기 공유). **주의: sync 는 총 100KB 와 별개로 per-item 8192 byte 한도가 있다** — 단일 키에 누적되는 배열은 후자에 먼저 막힌다 (§24 에서 `skippedShortIds` full-meta 배열이 ~40건에서 잘려 churn 사고). 누적형 데이터는 sync 에 두지 말고 `local` (≈10MB) 을 source-of-truth 로, sync 엔 식별자만 미러. 스킵 목록이 그 패턴 — `local.skippedEntries`(full) + `sync.skippedShortIds`(shortId 만).
 
 ### GitHub Contents API 캐시 [§1 dedup 주석]
 

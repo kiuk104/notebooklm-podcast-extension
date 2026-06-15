@@ -33,6 +33,11 @@
 <h1>Versionsverlauf (Detail)</h1>
 <p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
 
+<h3>v0.4.49 (2026-06-15) — Übersprungene Karten tauchten wieder auf, weil die Skip-Liste stillschweigend gekürzt wurde</h3>
+<ul>
+  <li><strong>Behebt, dass übersprungene Karten erneut als "neu" markiert und beim Massendownload wiederholt versucht wurden/fehlschlugen.</strong> Die Skip-Liste lag in einem einzigen <code>chrome.storage.sync</code>-Eintrag (8KB-Limit pro Eintrag) samt Metadaten; durch große Einträge (koreanische Titel usw.) wurden <strong>ab ca. 40 Einträgen die ältesten still gekürzt</strong>. Ein gekürzter Skip taucht beim nächsten Scan wieder als neu auf → wird erneut versucht → (falls die Karte in NotebookLM gelöscht ist) schlägt fehl → wird automatisch erneut übersprungen → überschreitet das Limit wieder und verdrängt einen weiteren Skip → endloses Hin und Her. Die Skip-Daten liegen jetzt im unbegrenzten lokalen Speicher (<strong>Zehntausende Einträge ohne Kürzung</strong>); nur kompakte Kennungen werden zur geräteübergreifenden Synchronisierung gespiegelt. Deine bestehende Skip-Liste wird automatisch migriert.</li>
+</ul>
+
 <h3>v0.4.48 (2026-06-15) — Empfohlene Notebooks vom Scan ausgeschlossen / autom. Wiederherstellung verpasster Feed-Neuaufbauten</h3>
 <ul>
   <li><strong>Von Google "Empfohlene Notebooks" werden nicht mehr mitgescannt.</strong> Die NotebookLM-Startseite zeigt neben deinen eigenen Notebooks einen Abschnitt "Empfohlene Notebooks" (von Google bereitgestellte Beispiel-/geteilte Notebooks). Diese wurden mitgescannt und als neu markiert. Jetzt werden nur deine "Letzten Notebooks" gescannt und heruntergeladen; der empfohlene Abschnitt wird übersprungen. Damit entfällt auch der Nebeneffekt, dass solche Karten — oft erfasst, bevor Cover/Kennung fertig geladen waren — trotz Überspringen immer wieder als neu auftauchten.</li>

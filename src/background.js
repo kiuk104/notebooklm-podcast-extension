@@ -765,7 +765,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === "skip:clear") {
     (async () => {
-      await chrome.storage.sync.set({ skippedShortIds: [] });
+      await Promise.all([
+        chrome.storage.local.set({ skippedEntries: [] }),
+        chrome.storage.sync.set({ skippedShortIds: [] }),
+      ]);
       sendResponse({ ok: true });
     })();
     return true;
@@ -1449,13 +1452,32 @@ async function loadBulkSkipOlderDays() {
 // 메타는 옵션 페이지의 스킵 목록 패널에서 어떤 파일이었는지 보여주기 위함.
 // quota: entry 평균 ~250byte × 400건 = 100KB 한도. 일반 사용자 범위 (수십~수백)
 // 에선 여유. 한계 도달 시 가장 옛것부터 자르는 fallback 으로 안전.
+// 저장 전략 (v0.4.49, IMPLEMENTATION_NOTES §24):
+//   - source-of-truth = chrome.storage.local.skippedEntries — full 메타, 10MB ≈ 수만 건.
+//     매칭(shortId + date|titleSlug)과 옵션 페이지 표시 모두 여기서.
+//   - cross-device 미러 = chrome.storage.sync.skippedShortIds — shortId 문자열 배열만.
+//     8KB per-item 한도에 600+ 개 수용 (옛 fat object 배열은 ~40개에서 잘려 churn 유발 §24).
+// 옛 포맷(sync 에 fat object / string 배열)은 load 시 흡수 → 다음 save 때 새 포맷으로 정착.
 async function loadSkippedEntries() {
-  const out = await chrome.storage.sync.get(["skippedShortIds"]).catch(() => ({}));
-  const raw = Array.isArray(out.skippedShortIds) ? out.skippedShortIds : [];
-  // 마이그레이션: 옛 string array → object array. shortId 만 있고 메타는 빈 string.
-  return raw.map((x) => typeof x === "string"
-    ? { shortId: x, filename: "", title: "", date: "", notebookTitle: "", skippedAt: 0 }
-    : x).filter((e) => e && e.shortId);
+  const [loc, syn] = await Promise.all([
+    chrome.storage.local.get(["skippedEntries"]).catch(() => ({})),
+    chrome.storage.sync.get(["skippedShortIds"]).catch(() => ({})),
+  ]);
+  const byId = new Map();
+  const localList = Array.isArray(loc.skippedEntries) ? loc.skippedEntries : [];
+  for (const e of localList) {
+    if (e && e.shortId) byId.set(e.shortId, e);
+  }
+  // sync 미러(또는 옛 fat 포맷) — local 에 없는 shortId 만 보충 (다른 기기 발 스킵 / 마이그레이션).
+  const syncRaw = Array.isArray(syn.skippedShortIds) ? syn.skippedShortIds : [];
+  for (const x of syncRaw) {
+    const sid = typeof x === "string" ? x : (x && x.shortId);
+    if (!sid || byId.has(sid)) continue;
+    byId.set(sid, typeof x === "string"
+      ? { shortId: sid, filename: "", title: "", date: "", notebookTitle: "", skippedAt: 0 }
+      : { shortId: sid, filename: x.filename || "", title: x.title || "", date: x.date || "", notebookTitle: x.notebookTitle || "", skippedAt: x.skippedAt || 0 });
+  }
+  return Array.from(byId.values());
 }
 
 // 스킵 목록을 두 키로 인덱싱 — shortId (1차) + (date, titleSlug) (2차, race 폴백).
@@ -1508,16 +1530,17 @@ function isAudioSkipped(audio, coverDateAttr, skipIndex) {
 }
 
 async function saveSkippedEntries(entries) {
+  // full 메타는 local 에 — per-item 8KB 한도가 없어 churn 없이 전량 보존.
+  await chrome.storage.local.set({ skippedEntries: entries });
+  // cross-device: shortId 만 sync 미러 (~12byte/건 → 8KB 에 600+). 그래도 넘치면
+  // best-effort 로 가장 옛것부터 컷 — local 은 전량 보존하므로 이 기기 매칭엔 영향 없음.
+  const ids = entries.map((e) => e.shortId).filter(Boolean);
   try {
-    await chrome.storage.sync.set({ skippedShortIds: entries });
+    await chrome.storage.sync.set({ skippedShortIds: ids });
   } catch (e) {
-    // quota 초과 — 20% 잘라내고 재시도. entry 1건 ≈ 250byte, sync item 한도 8KB 이므로
-    // entries.length > 100 조건은 충분하지 않음 (소수 건도 quota 초과 가능). 건수 무관하게
-    // 항상 80% 로 줄인 뒤 재시도 (최소 1건은 보존).
-    const trimCount = Math.max(1, Math.ceil(entries.length * 0.2));
-    const trimmed = entries.slice(trimCount);
-    console.warn(`[skip] sync quota 초과, 가장 옛것 ${trimCount}건 컷 (${entries.length} → ${trimmed.length})`, e);
-    await chrome.storage.sync.set({ skippedShortIds: trimmed });
+    const trimmed = ids.slice(Math.max(1, Math.ceil(ids.length * 0.2)));
+    console.warn(`[skip] sync 미러 quota 초과 — ${ids.length}→${trimmed.length} (local 전량 보존)`, e);
+    try { await chrome.storage.sync.set({ skippedShortIds: trimmed }); } catch {}
   }
 }
 

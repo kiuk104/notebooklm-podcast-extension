@@ -1309,6 +1309,40 @@ async function reconcileFeed(reason) {
 
 ---
 
+## 24. 스킵 목록이 sync 8KB per-item 한도에 잘려 churn (2026-06-15, v0.4.49)
+
+### 증상
+
+사용자가 스킵 등록한 카드가 일괄 다운로드에서 다시 "신규" 로 잡혀 반복 시도 → 실패 (특히 NotebookLM 에서 삭제한 카드는 "카드 못 찾음"). SW 콘솔에 `[skip] sync quota 초과, 가장 옛것 10건 컷 (50 → 40)` 가 반복 출력. 진단 스니펫: `skippedShortIds` entry 43건 / 직렬화 7194 byte (8192 코앞).
+
+### 원인
+
+스킵 목록을 `chrome.storage.sync` 의 **단일 키** `skippedShortIds` 에 `{shortId, filename, title, date, notebookTitle, skippedAt}` **full 메타 배열**로 저장. `chrome.storage.sync` 는 두 한도가 있는데 — 총 100KB **그리고 per-item 8192 byte** — 단일 키 배열은 후자에 묶인다. 한글 title + notebookTitle 이 entry 당 ~150~400 byte 라 **~40건이면 8KB 초과**. `saveSkippedEntries` 의 quota catch 가 가장 옛것 20% 를 컷 → 목록이 ~40 에서 고정.
+
+churn loop: 옛 스킵이 컷으로 증발 → 다음 스캔에 신규로 재인식 → selections 진입 → `runBulkRemote` choke-point 필터 (§22) 는 **그 시점 skipIndex 에 없으니** 통과시킴 → 다운로드 시도 → (삭제된 카드면) 실패 → auto-skip 재등록 (v0.4.47) → 또 8KB 초과 → **다른 10건 evict** → 그것들이 다음에 재출현. [[retention_dedup_loop]] 의 스킵 버전 — 영구 루프.
+
+`§16` (CLAUDE.md) 의 "entry당 250byte × 400건 = 100KB" 서술이 **틀렸음** — per-item 8KB 한도를 간과해 실제 상한은 ~40건이었다.
+
+### 대응
+
+스킵 데이터를 8KB 제약이 없는 **`chrome.storage.local` 로 이전** (source-of-truth):
+- `chrome.storage.local.skippedEntries` — full 메타 배열. local 은 ~10MB 라 수만 건 수용. 매칭(`loadSkippedIndex` 의 shortIds + titleKeys + titleSlugs)과 옵션 표시 모두 여기서.
+- `chrome.storage.sync.skippedShortIds` — **shortId 문자열 배열만** cross-device 미러. ~12 byte/건 → 8KB 에 600+ 개. 넘쳐도 best-effort 컷 (local 은 전량 보존하므로 *그 기기* 매칭엔 무영향).
+
+`loadSkippedEntries` 가 local + sync 를 shortId 기준으로 merge (local 우선, sync 가 다른 기기 발 스킵 보충). 옛 sync fat 포맷은 load 시 흡수 → 다음 `saveSkippedEntries` 때 새 포맷으로 정착 (마이그레이션 자동, 별도 단계 불필요). 단일 choke-point 인 load/save 만 변경 — `addSkippedEntry` / `bulk:skip:selected` / `loadSkippedIndex` / `removeSkippedShortId` 는 그대로 동작. `skip:clear` 는 local+sync 양쪽 비움.
+
+### 학습
+
+- **chrome.storage.sync 의 per-item 8KB 가 진짜 병목** — 총 100KB 만 보고 "여유" 라 오판하기 쉽다. *단일 키에 누적되는 배열*은 항상 8KB 에 먼저 막힌다. 누적형 데이터는 sync 에 두지 말 것 (또는 shard / 식별자만).
+- **silent truncation 은 dedup/skip 류에서 영구 루프를 만든다** — 컷이 로그만 남기고 끝나면 [[retention_dedup_loop]] 와 동일한 자기증식. 한도형 저장엔 "넘치면 어디로 가는가" 를 설계 시 명시.
+- **choke-point 필터는 데이터가 살아 있어야 의미** — §22 가 모든 경로에 skip 필터를 깔았어도, 저장이 evict 되면 필터가 볼 게 없다. 필터 일관성 + 저장 내구성은 한 쌍.
+
+### 진단 핸드오프
+
+옵션 페이지 콘솔: `chrome.storage.sync.get('skippedShortIds', r => console.log((r.skippedShortIds||[]).length, new Blob([JSON.stringify(r)]).size))`. bytes 가 8192 근처면 cap. `chrome.storage.local.get('skippedEntries', r => console.log((r.skippedEntries||[]).length))` 로 local 이전 여부 확인.
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```
