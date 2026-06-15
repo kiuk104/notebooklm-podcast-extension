@@ -51,6 +51,8 @@ NotebookLM 의 음성개요(Audio Overview)를 본인 GitHub repo 로 자동 pus
 - [x] **다운로드 popup 좌표 — Chrome 50% 규칙 대응** — Chrome 2026-05 업데이트로 `windows.create` 의 bounds 가 "창 면적 50% 이상 화면 내" 를 요구해 기존 `left:-32000` 가 차단됨. `left:-399, top:0, width:800, height:600` (가시폭 401px = 50.1%) 으로 교체. `focused:false` + `visibilityState='visible'` 유지. minimized 우회 시도는 자동 복원 + visibility hidden 으로 실패 — IMPLEMENTATION_NOTES §20 (v0.4.42)
 - [x] **에피소드 피드 순서 직접 편집** — 관리 페이지 에피소드 목록의 [피드 순서 편집] 버튼 → 드래그&드롭 (☰ 핸들) + ▲▼ 버튼으로 순서 재배열. [피드에 적용] 으로 `docs/podcast.json` 의 `episodeOrder` 배열에 저장 → feed.js 가 그 순서로 RSS 빌드. [기본 순서로 초기화] 로 날짜 내림차순 복귀 (v0.4.42)
 - [x] **에피소드 [피드 순서로 보기] 토글** — 현재 저장된 커스텀 피드 순서 그대로 표 확인. `podcast.json.episodeOrder` 읽어 정렬, 배열 미포함 항목은 날짜 내림차순으로 뒤에 배치. 토글 ON 시 그룹/정렬/편집 버튼 비활성 (v0.4.43)
+- [x] **추천 노트북 스캔 제외** — NotebookLM 홈의 "추천 노트북"(Google 제공 샘플/공유)이 내 노트북과 함께 스캔되던 문제 수정. `content.js` 가 홈 헤딩을 document-order 기준으로 "추천" 섹션 카드를 분류해 제외, "최근 노트북"(내 노트북)만 처리. 헤딩 미매칭 시 전부 포함 = 무회귀. IMPLEMENTATION_NOTES §22 (v0.4.48)
+- [x] **feed.xml 갱신 누락 자동 복구** — push 후 feed 재빌드가 SW 종료/transient 오류로 누락돼 `feed.xml` 이 `episodes/` 보다 뒤처지던 문제(실측 10일 stale → 팟캐스트 앱에 새 에피소드 안 보임). 재빌드 backoff 재시도 + bulk/scan 종료·SW 기동 시 reconcile. IMPLEMENTATION_NOTES §23 (v0.4.48)
 
 ## 설치
 

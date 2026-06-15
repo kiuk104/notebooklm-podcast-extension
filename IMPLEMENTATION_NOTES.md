@@ -1199,6 +1199,116 @@ if (inBulkWindow && !bulkDebuggerAttached) {
 
 ---
 
+## 22. 추천 노트북이 스캔에 섞임 (2026-06-15, v0.4.48)
+
+### 증상
+
+`scan:all` 결과에 사용자가 만든 적 없는 영어 제목 노트북 (*Sherlock's Shadow*, *The World Ahead: 2025*, *AI-Powered Genetics* 등) 의 카드가 "신규" 로 잡힘. 스킵 등록해도 다음 스캔에 다시 신규로 올라옴. 노트북 수가 비정상적으로 큼 (228개).
+
+### 원인
+
+NotebookLM 홈 (`https://notebooklm.google.com/`) 은 두 섹션으로 구성: **"추천 노트북"** (Google 제공 샘플/공유) + **"최근 노트북"** (내 노트북). [src/content.js](src/content.js) 의 `getNotebookUrls` / `getNotebookCards` 가 `a[href*="/notebook/"]` 를 무차별 수집 → 추천 노트북까지 다 끌려옴.
+
+구분이 어려운 이유 (2026-06-15 DOM 실측):
+- 두 섹션 모두 같은 `/notebook/<id>` URL 패턴 → URL 로 구분 불가
+- 두 섹션 모두 같은 카드 클래스 `mat-card.project-button-card .{color}-background` → 클래스로 구분 불가
+- 단, 홈의 `h1~h3 / [role=heading]` 쿼리는 정확히 `['추천 노트북', '최근 노트북']` 2개만 반환 — **카드 제목은 heading 요소가 아님**. 이게 분류의 열쇠.
+
+스킵해도 재출현하던 부작용: 추천 노트북 카드는 "Loading Notebook…" 상태 (cover/artifactId 미로딩) 로 잡히는 일이 잦아 `artifactId` 가 빈 채로 들어옴 → §19 가 *매칭* 쪽 폴백은 메웠지만 [src/background.js](src/background.js) `bulk:skip:selected` / `addSkippedEntry` 의 *저장* 쪽은 여전히 `if (!/^[0-9a-f]{8}$/.test(sid)) continue` 로 shortId 없으면 저장을 건너뜀 → 스킵이 영영 저장 안 됨.
+
+### 대응
+
+스킵 싸움 대신 **스캔 소스에서 추천 노트북 제외** — 한 번에 두 증상 해결:
+
+```js
+const FEATURED_HEADING_RE = /추천|featured|empfohlen|vorgestellt|destacad|en vedette/i;
+function featuredNotebookUrlSet() {
+  const set = new Set();
+  // 헤딩 + 노트북 링크를 document order 로 한 번에 순회 (querySelectorAll 순서 보장).
+  const nodes = document.querySelectorAll('h1,h2,h3,[role="heading"],a[href*="/notebook/"]');
+  let featured = false;
+  for (const el of nodes) {
+    if (el.matches('a[href*="/notebook/"]')) {
+      if (!featured) continue;
+      // … href 검증 후 set.add(URL)
+    } else {
+      const t = (el.textContent || "").trim();
+      if (t) featured = FEATURED_HEADING_RE.test(t);   // 섹션 헤딩이 토글
+    }
+  }
+  return set;
+}
+```
+
+`getNotebookUrls` / `getNotebookCards` 가 이 set 을 `continue` 로 제외.
+
+### 학습
+
+- **무회귀를 기본값으로** — 헤딩을 못 찾으면 (다른 로케일 / DOM 리디자인) featured set 이 비어 *전부 포함* = 기존 동작. 필터가 깨져도 내 노트북이 실수로 빠지는 일은 없게 설계. "잘못 제외" 보다 "안 제외" 쪽으로 fail.
+- **문서 순서는 컨테이너 구조보다 robust** — 섹션을 감싸는 공통 ancestor 를 찾는 대신 `querySelectorAll` 의 document-order 보장에 기댐. Angular 컴포넌트 트리가 자주 바뀌어도 "헤딩 → 그 섹션 카드" 순서는 유지됨.
+- **카드 제목이 heading 이 아니라는 전제에 의존** — 만약 향후 NotebookLM 이 카드 제목을 `<h3>` 로 렌더하면 featured 토글이 카드마다 흔들림. DOM 변경 시 `h*/[role=heading]` 쿼리가 여전히 섹션 헤딩만 반환하는지 재확인 ([[featured_notebooks_scan_exclude]] 메모리에도 기록).
+- **저장 쪽 폴백 미완** — §19 가 매칭만 고치고 저장 (`bulk:skip:selected`) 은 그대로 둔 게 이 사고의 2차 원인. 추천 제외로 실사용 영향은 사라졌지만, 내 노트북도 로딩 race 중엔 동일 현상 가능 — (제목+날짜) 기반 스킵 저장 + 누락 건수 안내는 후속 과제로 남김.
+
+### 진단 핸드오프
+
+홈에서 `[...document.querySelectorAll('h1,h2,h3,[role="heading"]')].map(h=>h.textContent.trim())` 로 섹션 헤딩 확인. 추천 섹션 헤딩 텍스트가 `FEATURED_HEADING_RE` 에 매칭되는지, 카드 수가 추천(소수)/최근(다수) 으로 갈리는지 검증.
+
+---
+
+## 23. feed.xml 이 episodes/ 보다 뒤처짐 — push 후 rebuild 누락 (2026-06-15, v0.4.48)
+
+### 증상
+
+다운로드/push 한 에피소드가 GitHub `docs/episodes/` 에는 올라갔는데 `docs/feed.xml` 에는 안 들어가 팟캐스트 앱 (YouTube Music 등) 에 안 보임. 실측: 6/4 에피소드가 6/5 push 됐는데 feed.xml 은 5/27 → 6/15 까지 19일간 재빌드 0회 → 10일간 stale. 6/15 의 다른 push 가 재빌드를 트리거하면서 비로소 6/4 까지 쓸려 들어감.
+
+### 원인
+
+[src/background.js](src/background.js) `pushEpisode` 는 **(1) audio PUT → (2) rebuildFeed** 2단계가 한 SW 안에서 순차. (1) 성공 후 (2) 가 실패하면:
+
+```js
+if (cfg.rssMode === "extension") {
+  try { const feed = await rebuildFeed(...); ... }
+  catch (e) { console.error("[feed]", e); pushResult.feedError = e.message; }  // 로그만, 재시도/복구 없음
+}
+```
+
+- **SW idle 종료** (§6/§7): (1) 과 (2) 사이에 SW 가 죽으면 (2) 실행 못 함. 파일은 올라갔지만 feed 미반영.
+- **transient GitHub 오류**: catch 가 삼키고 끝 → 다음 push 가 우연히 성공할 때까지 feed 가 episodes/ 보다 뒤처진 채 방치.
+
+[[retention_dedup_loop]] / [[feed_lag_behind_episodes]] 와 같은 "episodes/ ↔ feed 불일치" 계열.
+
+### 대응
+
+```js
+// 1) transient 오류 흡수 — rebuildFeed 는 idempotent (unchanged 면 PUT skip) 라 재시도 안전.
+async function rebuildFeedWithRetry(opts, attempts = 3) { /* backoff 1s/2s */ }
+
+// 2) 안전망 — episodes/ ↔ feed.xml 어긋남을 무조건 한 번 재빌드로 복구.
+async function reconcileFeed(reason) {
+  // rssMode==="extension" + token/repo 있을 때만, rebuildFeedWithRetry 호출
+}
+```
+
+`reconcileFeed` 호출 지점 3곳:
+- `bulk:remote` 작업 종료 `.finally` (개별 push 의 rebuild 가 누락돼도 작업 끝에 1회 권위 재빌드)
+- `scan:all` 작업 종료 `.finally`
+- `chrome.runtime.onStartup` (push 직후 SW 가 죽은 케이스의 마지막 그물 — 브라우저 재기동 시)
+
+`pushEpisode` 의 per-push 재빌드도 `rebuildFeedWithRetry` 로 교체.
+
+### 학습
+
+- **idempotent 한 작업은 "끝에 한 번 더" 가 싸고 강력** — rebuildFeed 가 sha 비교로 unchanged 면 PUT 을 건너뛰므로, bulk/scan 끝과 SW 기동마다 무조건 호출해도 비용이 작음. "각 단계가 정확히 1회 성공" 을 보장하려 애쓰는 대신 "마지막에 reconcile" 패턴이 SW-death 같은 비결정적 실패에 더 견고.
+- **catch 가 로그만 남기면 silent stale** — best-effort 라도 "다음 기회에 복구" 경로가 없으면 영구 누락. 외부 상태 (GitHub) 와의 동기화는 항상 reconcile 경로를 같이 둘 것.
+
+### 진단 핸드오프
+
+1. 라이브 피드: `curl https://<owner>.github.io/<repo>/feed.xml` → 최신 item pubDate + `Last-Modified` 헤더 (= 마지막 빌드 시각).
+2. `GET api.github.com/repos/<repo>/commits?path=docs/feed.xml` 의 "auto: rebuild feed" 간격에 큰 공백이 있으면 그 기간 push 의 재빌드 누락.
+3. 문제 에피소드 파일 커밋 시각 (`commits?path=docs/episodes/<urlencoded>`) vs feed.xml 재빌드 시각 비교. 파일이 먼저, feed 가 한참 뒤면 확정. (파일명 `YYYYMMDD` 는 NotebookLM cover 생성일이지 push 시각 아님 — 커밋 시각으로만 판단.)
+
+---
+
 ## 검증된 전체 흐름 (v0.4.0, 2026-04-29)
 
 ```
