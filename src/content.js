@@ -72,16 +72,48 @@
     });
   }
 
+  // NotebookLM 홈은 두 섹션으로 나뉜다: "추천 노트북"(Google 제공 샘플/공유) +
+  // "최근 노트북"(내 노트북). 둘 다 같은 `/notebook/<id>` URL + 같은 카드 클래스
+  // (project-button-card) 라 클래스로는 구분 불가. 문서 순서상 "추천" 헤딩과 다음
+  // 헤딩 사이에 있는 카드가 추천 노트북이므로, 헤딩을 기준선 삼아 그 구간 URL 만
+  // featured 로 분류한다. 헤딩 텍스트는 로케일별로 다르므로 ko/en/de/es/fr 마커를
+  // 폭넓게 매칭. 매칭 실패 시엔 featured 가 비어 전부 포함 (= 기존 동작, 무회귀).
+  const FEATURED_HEADING_RE = /추천|featured|empfohlen|vorgestellt|destacad|en vedette/i;
+  function featuredNotebookUrlSet() {
+    const set = new Set();
+    // 헤딩과 노트북 링크를 문서 순서대로 한 번에 순회 (querySelectorAll 은 document
+    // order 보장). 카드 제목은 h1~h3/[role=heading] 가 아니므로 (실측: 홈 헤딩은
+    // "추천 노트북"/"최근 노트북" 2개뿐) 섹션 헤딩만 featured 토글을 건드린다.
+    const nodes = document.querySelectorAll('h1,h2,h3,[role="heading"],a[href*="/notebook/"]');
+    let featured = false;
+    for (const el of nodes) {
+      if (el.matches('a[href*="/notebook/"]')) {
+        if (!featured) continue;
+        const href = el.getAttribute("href") || "";
+        if (!/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) continue;
+        try { set.add(new URL(href, location.origin).href); } catch {}
+      } else {
+        const t = (el.textContent || "").trim();
+        if (t) featured = FEATURED_HEADING_RE.test(t);
+      }
+    }
+    return set;
+  }
+
   // 노트북 list 페이지 (https://notebooklm.google.com/) 의 노트북 카드들에서
   // 노트북 URL 만 뽑아내기. NotebookLM 의 list 페이지 DOM 클래스가 자주 바뀌므로
   // `a[href*="/notebook/"]` 의 href 패턴 매칭으로 robust 하게 처리.
+  // 추천(Google 제공) 노트북은 제외 — 내 노트북만 동기화 대상.
   function getNotebookUrls() {
     const urls = new Set();
+    const featured = featuredNotebookUrlSet();
     for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
       const href = a.getAttribute("href") || "";
       if (/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) {
         try {
-          urls.add(new URL(href, location.origin).href);
+          const u = new URL(href, location.origin).href;
+          if (featured.has(u)) continue;
+          urls.add(u);
         } catch {}
       }
     }
@@ -141,12 +173,14 @@
   // 풀 스캔 스킵 + 옛 audios 그대로 사용. hint 가 null 이면 매번 풀 스캔 fallback (안전).
   function getNotebookCards() {
     const seenUrls = new Set();
+    const featured = featuredNotebookUrlSet();
     const out = [];
     for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
       const href = a.getAttribute("href") || "";
       if (!/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) continue;
       let url;
       try { url = new URL(href, location.origin).href; } catch { continue; }
+      if (featured.has(url)) continue; // 추천(Google 제공) 노트북 제외
       if (seenUrls.has(url)) continue;
       seenUrls.add(url);
       const card = findCardContainer(a);

@@ -33,6 +33,12 @@
 <h1>Versionsverlauf (Detail)</h1>
 <p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
 
+<h3>v0.4.48 (2026-06-15) — Empfohlene Notebooks vom Scan ausgeschlossen / autom. Wiederherstellung verpasster Feed-Neuaufbauten</h3>
+<ul>
+  <li><strong>Von Google "Empfohlene Notebooks" werden nicht mehr mitgescannt.</strong> Die NotebookLM-Startseite zeigt neben deinen eigenen Notebooks einen Abschnitt "Empfohlene Notebooks" (von Google bereitgestellte Beispiel-/geteilte Notebooks). Diese wurden mitgescannt und als neu markiert. Jetzt werden nur deine "Letzten Notebooks" gescannt und heruntergeladen; der empfohlene Abschnitt wird übersprungen. Damit entfällt auch der Nebeneffekt, dass solche Karten — oft erfasst, bevor Cover/Kennung fertig geladen waren — trotz Überspringen immer wieder als neu auftauchten.</li>
+  <li><strong>Behebt Episoden, die hochgeladen wurden, aber nie in den RSS-Feed (feed.xml) gelangten.</strong> Der Feed-Neuaufbau direkt nach einem Download konnte ausfallen, wenn der Service Worker beendet wurde oder GitHub einen vorübergehenden Fehler lieferte — die Episode blieb dann auf GitHub gespeichert, fehlte aber im RSS-Feed und tauchte so in Podcast-Apps (YouTube Music usw.) nicht auf, bis ein späterer Download zufällig erfolgreich war. Jetzt (1) wiederholt die Erweiterung einen fehlgeschlagenen Feed-Neuaufbau, (2) gleicht den Feed nach jedem Massendownload oder vollständigen Scan mit der Episodenliste ab und (3) prüft beim Start erneut — bei Abweichung wird automatisch neu aufgebaut.</li>
+</ul>
+
 <h3>v0.4.47 (2026-06-04) — Endlos-Fehler bei übersprungenen Karten behoben / Nach-oben-Button / zwei Meldekanäle</h3>
 <ul>
   <li><strong>Übersprungene Karten scheiterten im Bündel-Download endlos — behoben</strong> — wurde eine bereits übersprungene Karte später in NotebookLM gelöscht, umgingen einige Pfade ("N Fehler wiederholen", manuelle Auswahl) den Überspring-Filter und versuchten sie immer wieder → jedes Mal „Karte nicht gefunden" → dauerhaftes Anwachsen der Fehlerliste. Jetzt durchläuft <em>jeder</em> Download-Pfad zuerst die Überspring-Liste. Wird eine Karte während des Downloads als in NotebookLM gelöscht erkannt, wird sie zudem <strong>automatisch als übersprungen registriert</strong>, sodass sie beim nächsten Scan/Wiederholen nicht erneut auftaucht.</li>

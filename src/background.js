@@ -116,6 +116,14 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
 });
 
+// SW 가 깨어날 때(브라우저 시작 / 익스텐션 완전 언로드 후 재기동) feed.xml 이
+// episodes/ 보다 뒤처져 있으면 복구. 직전 push 직후 SW 가 죽어 그 push 의 재빌드가
+// 누락된 케이스의 마지막 안전망. reconcileFeed 가 extension 모드 + 설정 존재일 때만
+// 동작하고 이미 최신이면 PUT 없이 끝나므로 매 기동마다 호출해도 비용이 작다.
+chrome.runtime.onStartup.addListener(() => {
+  reconcileFeed("SW startup").catch((e) => console.warn("[feed] startup reconcile:", e.message));
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "download:expect") {
     const title = msg.payload?.episodeTitle || "";
@@ -170,6 +178,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         emitEvent("scan:all:done", { ok: false, error: e.message });
       })
       .finally(async () => {
+        await reconcileFeed("scan:all 종료");
         await cleanupOwnedTabs();
         await stopKeepalive();
         inProgressTask = null;
@@ -195,6 +204,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         emitEvent("bulk:remote:done", { ok: false, error: e.message });
       })
       .finally(async () => {
+        await reconcileFeed("bulk:remote 종료");
         await cleanupOwnedTabs();
         await stopKeepalive();
         inProgressTask = null;
@@ -2540,18 +2550,57 @@ async function pushEpisode(audioUrl, filename, dedupHints, episodeTitle) {
   // rebuildFeed 내부의 sha 비교가 unchanged 면 PUT 안 함, 그래서 호출은 무해함.
   if (cfg.rssMode === "extension") {
     try {
-      const feed = await rebuildFeed({ repo: cfg.repo, token: cfg.token, committer });
+      const feed = await rebuildFeedWithRetry({ repo: cfg.repo, token: cfg.token, committer });
       pushResult.feed = feed;
       if (feed.skipped) console.log(`[feed] skip (${feed.reason})`);
       else stageLog(`feed rebuilt (${feed.episodes} episodes)`);
       if (feed.missingMeta) console.warn("[feed] docs/podcast.json 없음 — default 메타로 생성됨. examples/feed-builder/docs/podcast.json 참고해서 추가 권장.");
     } catch (e) {
+      // 재시도까지 모두 실패. episodes/ 엔 파일이 올라갔는데 feed.xml 이 뒤처진 상태가 됨.
+      // bulk/scan 종료 시의 reconcileFeed 와 SW startup reconcile 가 다음 기회에 복구한다.
       console.error("[feed]", e);
       pushResult.feedError = e.message;
     }
   }
   stageLog(`done`);
   return pushResult;
+}
+
+// feed.xml 재빌드를 transient GitHub 오류에 대비해 backoff 재시도로 감싼다.
+// rebuildFeed 는 idempotent (변화 없으면 PUT skip) 라 재시도가 안전.
+async function rebuildFeedWithRetry(opts, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await rebuildFeed(opts);
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[feed] rebuild 실패 (시도 ${i + 1}/${attempts}): ${e.message}`);
+      if (i < attempts - 1) await sleep(1000 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+// 안전망: episodes/ 에는 파일이 올라갔는데 직후 feed 재빌드가 SW idle 종료나
+// transient 오류로 누락되면 feed.xml 이 episodes/ 보다 뒤처진 채 방치된다 (실측:
+// 6/5 push 후 재빌드 누락으로 10일간 stale). bulk/scan 작업 종료 시점과 SW 시작
+// 시점에 무조건 한 번 재빌드를 시도해 어긋남을 복구. rebuildFeed 가 idempotent
+// 라 이미 최신이면 PUT 없이 빠르게 끝남.
+async function reconcileFeed(reason) {
+  const cfg = await cfgGet(["token", "repo", "rssMode", "committerName", "committerEmail"]);
+  if (cfg.rssMode !== "extension") return;        // actions 모드는 워크플로가 feed 담당
+  if (!cfg.token || !cfg.repo) return;            // 설정 전이면 조용히 skip
+  const committer = cfg.committerName && cfg.committerEmail
+    ? { name: cfg.committerName, email: cfg.committerEmail }
+    : null;
+  try {
+    const feed = await rebuildFeedWithRetry({ repo: cfg.repo, token: cfg.token, committer });
+    if (feed.skipped) console.log(`[feed] reconcile (${reason}): 이미 최신`);
+    else console.log(`[feed] reconcile (${reason}): 재빌드됨 (${feed.episodes} episodes${feed.dropped ? `, ${feed.dropped} dropped` : ""})`);
+  } catch (e) {
+    console.error(`[feed] reconcile (${reason}) 실패:`, e.message);
+  }
 }
 
 function ghContentsUrl(repo, path) {

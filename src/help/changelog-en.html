@@ -33,6 +33,12 @@
 <h1>Detailed changelog</h1>
 <p class="sub">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. Below are user-visible changes only, newest first.</p>
 
+<h3>v0.4.48 (2026-06-15) — Exclude Featured notebooks from scan / auto-recovery for missed feed rebuilds</h3>
+<ul>
+  <li><strong>Google "Featured notebooks" are no longer swept into the scan.</strong> NotebookLM's home page lists a "Featured notebooks" section (Google-provided sample/shared notebooks) alongside your own. These were being scanned and flagged as new. Now only your "Recent notebooks" are scanned and downloaded; the Featured section is skipped. This also resolves the side effect where those cards — often grabbed before their cover/identifier finished loading — kept reappearing as new even after you skipped them.</li>
+  <li><strong>Fixes episodes that uploaded but never made it into the RSS feed (feed.xml).</strong> The feed rebuild that runs right after a download could be dropped if the Service Worker shut down or GitHub returned a transient error — leaving the episode saved on GitHub but absent from the RSS feed, so it never showed up in podcast apps (YouTube Music, etc.) until a later download happened to succeed. Now the extension (1) retries a failed feed rebuild, (2) reconciles the feed against the episode list whenever a bulk download or full scan finishes, and (3) re-checks on startup, rebuilding automatically when they diverge.</li>
+</ul>
+
 <h3>v0.4.47 (2026-06-04) — Skipped-card retry loop fix / back-to-top / two report channels</h3>
 <ul>
   <li><strong>Fixed skipped cards failing forever in bulk download</strong> — if a card you had skipped was later deleted in NotebookLM, some paths ("Retry N failed", manual pick-and-download) bypassed the skip filter and kept re-attempting it → "card not found" every time → permanently piling up in the failed list. Now <em>every</em> download path runs the skip list first. Additionally, when a card is confirmed deleted from NotebookLM mid-download, it is <strong>auto-registered as skipped</strong> so it won't be picked up again on the next scan/retry.</li>
