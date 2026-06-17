@@ -860,6 +860,15 @@ if (pickMasterEl) {
   });
 }
 
+// cover-subtitle-date 의 title 속성은 Date.toString() 포맷
+// ("Wed May 21 2025 11:10:26 GMT+0200 …") 라 Date.parse 가 그대로 처리.
+// 파싱 실패(빈 dateAttr 등)는 -Infinity 로 목록 맨 뒤로 보낸다.
+function pickCoverCreatedMs(nb) {
+  const s = nb?.cover?.dateAttr || "";
+  const t = s ? Date.parse(s) : NaN;
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
 function renderPickTree() {
   if (!pickState) return;
   const showPushed = !!pickShowPushedEl.checked;
@@ -869,7 +878,11 @@ function renderPickTree() {
   let totalPlaceholder = 0;
   let totalSkipped = 0;
 
-  for (const nb of pickState.notebooks) {
+  // 생성일(cover-subtitle-date) 기준 최신순 — popup 스캔 목록과 동일 정렬.
+  const orderedNotebooks = [...pickState.notebooks]
+    .sort((a, b) => pickCoverCreatedMs(b) - pickCoverCreatedMs(a));
+
+  for (const nb of orderedNotebooks) {
     const nbDiv = document.createElement("div");
     nbDiv.className = "pick-nb";
 

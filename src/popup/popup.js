@@ -72,6 +72,15 @@ function shortIdOf(artifactId) {
   return m ? m[1] : "";
 }
 
+// cover-subtitle-date 의 title 속성은 Date.toString() 포맷
+// ("Wed May 21 2025 11:10:26 GMT+0200 …") 라 Date.parse 가 그대로 처리.
+// 파싱 실패(dateAttr 빈 값 등)는 -Infinity 로 목록 맨 뒤로 보낸다.
+function coverCreatedMs(nb) {
+  const s = nb?.cover?.dateAttr || "";
+  const t = s ? Date.parse(s) : NaN;
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
 function clearList() {
   cardsEl.innerHTML = "";
   stateByTitle.clear();
@@ -531,7 +540,11 @@ async function renderAggregate(notebooks, opts = {}) {
   let totalPlaceholder = 0;
   let totalSkipped = 0;
 
-  for (const nb of notebooks) {
+  // 생성일(cover-subtitle-date) 기준 최신순 정렬 — NotebookLM 홈의 기본 순서가
+  // 생성순이 아니라 들쭉날쭉하므로, 스캔 목록은 생성일 내림차순으로 보여준다.
+  const ordered = [...notebooks].sort((a, b) => coverCreatedMs(b) - coverCreatedMs(a));
+
+  for (const nb of ordered) {
     appendNotebookHeader({
       title: nb.cover?.title,
       dateAttr: nb.cover?.dateAttr,

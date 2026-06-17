@@ -33,9 +33,10 @@
 <h1>Versionsverlauf (Detail)</h1>
 <p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
 
-<h3>v0.4.51 (2026-06-17) — Übersprungene Karten erschienen in der Popup-Scanliste wieder als „neu"</h3>
+<h3>v0.4.51 (2026-06-17) — Übersprungene Karten in der Popup-Scanliste behoben / Listen nach Erstelldatum sortiert</h3>
 <ul>
   <li><strong>Behebt, dass übersprungene Karten in der Scanliste des Popups erneut als neu erschienen.</strong> Skip-Speicherung/-Abgleich (v0.4.49) und der „Auswählen &amp; herunterladen"-Baum (Verwaltungsseite) waren bereits behoben, aber <strong>allein die Popup-Listen „Aktuelles Notebook scannen" / „Alle Notebooks scannen" zogen die Skip-Liste nie heran</strong> — übersprungene Karten wurden also als neu eingestuft, standardmäßig angehakt und unter „N neu" gezählt. Der eigentliche Download filterte sie ohnehin heraus, doch sie tauchten in der Liste wieder auf. Das Popup zeigt übersprungene Karten jetzt ausgegraut als „⊘ übersprungen" (Kontrollkästchen deaktiviert) und zählt sie separat als „N übersprungen", aus „N neu" ausgenommen. Aufheben über die Verwaltungsseite.</li>
+  <li><strong>Listen sind jetzt nach Erstelldatum (neueste zuerst) sortiert.</strong> Die Liste „Alle Notebooks scannen" und der „Auswählen &amp; herunterladen"-Baum auf der Verwaltungsseite folgten bisher der Reihenfolge der NotebookLM-Startseite, die nicht nach Erstelldatum ist. Sie sortieren Notebooks jetzt nach ihrem Erstelldatum (Cover-Datum), neueste zuerst.</li>
 </ul>
 
 <h3>v0.4.49 (2026-06-15) — Übersprungene Karten tauchten wieder auf, weil die Skip-Liste stillschweigend gekürzt wurde</h3>

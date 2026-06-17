@@ -33,9 +33,10 @@
 <h1>Detailed changelog</h1>
 <p class="sub">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. Below are user-visible changes only, newest first.</p>
 
-<h3>v0.4.51 (2026-06-17) — Fix skipped cards reappearing as "new" in the popup scan list</h3>
+<h3>v0.4.51 (2026-06-17) — Fix skipped cards reappearing in the popup scan list / sort lists by creation date</h3>
 <ul>
   <li><strong>Fixes skipped cards showing up as new again in the popup's scan list.</strong> Skip storage/matching (v0.4.49) and the "Pick &amp; download" tree (manage page) were already fixed, but <strong>the popup's "Scan current notebook" / "Scan all notebooks" lists alone never consulted the skip list</strong> — so skipped cards were classified as new, checked by default, and counted in "N new". The actual download filtered them out anyway, but they still appeared back in the list. The popup now shows skipped cards dimmed as "⊘ skipped" (checkbox disabled) and counts them separately as "N skipped", excluded from "N new". Unskip from the manage page.</li>
+  <li><strong>Lists are now sorted newest-first by creation date.</strong> The "Scan all notebooks" list and the manage page's "Pick &amp; download" tree used to follow NotebookLM's home-page order, which isn't by creation date. They now sort notebooks by their creation date (cover date), newest first.</li>
 </ul>
 
 <h3>v0.4.49 (2026-06-15) — Fix skipped cards reappearing after the skip list was silently truncated</h3>
