@@ -80,13 +80,20 @@ function clearList() {
   bulkBarEl.style.display = "none";
 }
 
-function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId }) {
+function appendCardRow({ idx, audio, alreadyPushed, isSkipped, notebookUrl, isRemote, tabId }) {
   const li = document.createElement("li");
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.className = "sel";
-  if (audio.isPlaceholder) {
+  // 우선순위: pushed > skipped > placeholder > new. skipped/placeholder 는 비활성.
+  // skipped 는 사용자가 영구 제외한 카드 — runBulkRemote choke-point 가 어차피 거르므로
+  // 다시 "신규" 로 잡혀 기본 체크되지 않게 막는다 (options renderPickTree 와 동일 처리).
+  if (isSkipped && !alreadyPushed) {
+    checkbox.disabled = true;
+    checkbox.checked = false;
+    checkbox.title = t("popup.skipped.tip");
+  } else if (audio.isPlaceholder) {
     checkbox.disabled = true;
     checkbox.checked = false;
     checkbox.title = t("popup.placeholder.cbTip");
@@ -108,12 +115,16 @@ function appendCardRow({ idx, audio, alreadyPushed, notebookUrl, isRemote, tabId
   const btn = document.createElement("button");
   btn.className = "dl";
   btn.textContent = t("popup.cardDl");
-  if (audio.isPlaceholder) {
+  if (alreadyPushed) {
+    setRow(state, "muted", t("popup.alreadyPushed"), t("popup.alreadyPushed.tip"));
+  } else if (isSkipped) {
+    btn.disabled = true;
+    btn.title = t("popup.skipped.tip");
+    setRow(state, "muted", t("popup.skipped"), t("popup.skipped.tip"));
+  } else if (audio.isPlaceholder) {
     btn.disabled = true;
     btn.title = t("popup.placeholder.btnTip");
     setRow(state, "muted", t("popup.placeholder.state"), t("popup.placeholder.stateTip"));
-  } else if (alreadyPushed) {
-    setRow(state, "muted", t("popup.alreadyPushed"), t("popup.alreadyPushed.tip"));
   }
   btn.addEventListener("click", () => {
     if (isRemote) {
@@ -426,15 +437,22 @@ scanBtn.addEventListener("click", async () => {
       }).catch(() => {});
     }
 
-    const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" })
-      .catch(() => ({ ok: false, shortIds: [] }));
+    const [pushed, skip] = await Promise.all([
+      chrome.runtime.sendMessage({ type: "list:pushed" }).catch(() => ({ ok: false, shortIds: [] })),
+      chrome.runtime.sendMessage({ type: "skip:list" }).catch(() => ({ ok: false, shortIds: [] })),
+    ]);
     const pushedShortIds = pushed?.shortIds || [];
+    const skippedShortIds = skip?.shortIds || [];
 
     const total = resp.audios.length;
     const pending = resp.audios.filter((a) => a.isPlaceholder).length;
     const alreadyCount = resp.audios.filter((a) => {
       const sid = shortIdOf(a.artifactId);
       return sid && pushedShortIds.includes(sid);
+    }).length;
+    const skippedCount = resp.audios.filter((a) => {
+      const sid = shortIdOf(a.artifactId);
+      return sid && !pushedShortIds.includes(sid) && skippedShortIds.includes(sid);
     }).length;
 
     if (!total) setStatus(t("popup.audioCount0"), "");
@@ -443,14 +461,16 @@ scanBtn.addEventListener("click", async () => {
       const parts = [t("popup.audioCount", { n: total })];
       if (pending > 0) parts.push(t("popup.placeholderN", { n: pending }));
       if (alreadyCount > 0) parts.push(t("popup.alreadyN", { n: alreadyCount }));
+      if (skippedCount > 0) parts.push(t("popup.skippedN", { n: skippedCount }));
       setStatus(parts.join(" · "), "success");
     }
 
     resp.audios.forEach((audio, idx) => {
       const sid = shortIdOf(audio.artifactId);
       const alreadyPushed = sid && pushedShortIds.includes(sid);
+      const isSkipped = sid && skippedShortIds.includes(sid);
       appendCardRow({
-        idx, audio, alreadyPushed,
+        idx, audio, alreadyPushed, isSkipped,
         notebookUrl: tab.url, isRemote: false, tabId: tab.id,
       });
     });
@@ -498,14 +518,18 @@ async function renderAggregate(notebooks, opts = {}) {
     return;
   }
 
-  const pushed = await chrome.runtime.sendMessage({ type: "list:pushed" })
-    .catch(() => ({ ok: false, shortIds: [] }));
+  const [pushed, skip] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "list:pushed" }).catch(() => ({ ok: false, shortIds: [] })),
+    chrome.runtime.sendMessage({ type: "skip:list" }).catch(() => ({ ok: false, shortIds: [] })),
+  ]);
   const pushedShortIds = pushed?.shortIds || [];
+  const skippedShortIds = skip?.shortIds || [];
 
   let totalCards = 0;
   let totalEligible = 0;
   let totalAlready = 0;
   let totalPlaceholder = 0;
+  let totalSkipped = 0;
 
   for (const nb of notebooks) {
     appendNotebookHeader({
@@ -516,12 +540,15 @@ async function renderAggregate(notebooks, opts = {}) {
     (nb.audios || []).forEach((audio, idx) => {
       const sid = shortIdOf(audio.artifactId);
       const alreadyPushed = sid && pushedShortIds.includes(sid);
+      // 우선순위: pushed > skipped > placeholder > new (요약 카운트도 동일).
+      const isSkipped = sid && !alreadyPushed && skippedShortIds.includes(sid);
       totalCards++;
-      if (audio.isPlaceholder) totalPlaceholder++;
-      else if (alreadyPushed) totalAlready++;
+      if (alreadyPushed) totalAlready++;
+      else if (isSkipped) totalSkipped++;
+      else if (audio.isPlaceholder) totalPlaceholder++;
       else totalEligible++;
       appendCardRow({
-        idx, audio, alreadyPushed,
+        idx, audio, alreadyPushed, isSkipped,
         notebookUrl: nb.url, isRemote: true,
       });
     });
@@ -533,6 +560,7 @@ async function renderAggregate(notebooks, opts = {}) {
   ];
   if (totalPlaceholder > 0) parts.push(t("popup.placeholderShort", { n: totalPlaceholder }));
   if (totalAlready > 0) parts.push(t("popup.alreadyN", { n: totalAlready }));
+  if (totalSkipped > 0) parts.push(t("popup.skippedN", { n: totalSkipped }));
   if (totalEligible > 0) parts.push(t("popup.newN", { n: totalEligible }));
   if (totalCards === 0) parts.push(t("popup.noOverviews"));
   // 캐시 재사용 안내. 직전 스캔이 30분 이내라 background 가 풀 스캔 안 한 케이스 —

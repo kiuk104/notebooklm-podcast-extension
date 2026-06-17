@@ -33,6 +33,11 @@
 <h1>Detailed changelog</h1>
 <p class="sub">Full commit history at <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub commits</a>. Below are user-visible changes only, newest first.</p>
 
+<h3>v0.4.51 (2026-06-17) — Fix skipped cards reappearing as "new" in the popup scan list</h3>
+<ul>
+  <li><strong>Fixes skipped cards showing up as new again in the popup's scan list.</strong> Skip storage/matching (v0.4.49) and the "Pick &amp; download" tree (manage page) were already fixed, but <strong>the popup's "Scan current notebook" / "Scan all notebooks" lists alone never consulted the skip list</strong> — so skipped cards were classified as new, checked by default, and counted in "N new". The actual download filtered them out anyway, but they still appeared back in the list. The popup now shows skipped cards dimmed as "⊘ skipped" (checkbox disabled) and counts them separately as "N skipped", excluded from "N new". Unskip from the manage page.</li>
+</ul>
+
 <h3>v0.4.49 (2026-06-15) — Fix skipped cards reappearing after the skip list was silently truncated</h3>
 <ul>
   <li><strong>Fixes skipped cards being re-flagged as "new" and repeatedly retried/failing in bulk downloads.</strong> The skip list was stored in a single <code>chrome.storage.sync</code> item (8KB per-item limit) together with metadata, so entries (Korean titles, etc.) grew large and <strong>once you passed ~40 skips the oldest ones were silently trimmed</strong>. A trimmed skip reappears as new on the next scan → gets retried → (if you deleted the card in NotebookLM) fails → is auto-skipped again → exceeds the quota again and evicts another skip → endless churn. The skip data now lives in unlimited local storage (<strong>tens of thousands of entries kept, no truncation</strong>); only compact identifiers are mirrored to sync for cross-device. Your existing skip list migrates automatically.</li>

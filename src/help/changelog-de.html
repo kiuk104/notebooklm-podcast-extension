@@ -33,6 +33,11 @@
 <h1>Versionsverlauf (Detail)</h1>
 <p class="sub">Vollständiger Commit-Verlauf auf <a href="https://github.com/kiuk104/notebooklm-podcast-extension/commits/main" target="_blank">GitHub</a>. Unten nur Änderungen, die für Nutzer sichtbar sind, neueste zuerst.</p>
 
+<h3>v0.4.51 (2026-06-17) — Übersprungene Karten erschienen in der Popup-Scanliste wieder als „neu"</h3>
+<ul>
+  <li><strong>Behebt, dass übersprungene Karten in der Scanliste des Popups erneut als neu erschienen.</strong> Skip-Speicherung/-Abgleich (v0.4.49) und der „Auswählen &amp; herunterladen"-Baum (Verwaltungsseite) waren bereits behoben, aber <strong>allein die Popup-Listen „Aktuelles Notebook scannen" / „Alle Notebooks scannen" zogen die Skip-Liste nie heran</strong> — übersprungene Karten wurden also als neu eingestuft, standardmäßig angehakt und unter „N neu" gezählt. Der eigentliche Download filterte sie ohnehin heraus, doch sie tauchten in der Liste wieder auf. Das Popup zeigt übersprungene Karten jetzt ausgegraut als „⊘ übersprungen" (Kontrollkästchen deaktiviert) und zählt sie separat als „N übersprungen", aus „N neu" ausgenommen. Aufheben über die Verwaltungsseite.</li>
+</ul>
+
 <h3>v0.4.49 (2026-06-15) — Übersprungene Karten tauchten wieder auf, weil die Skip-Liste stillschweigend gekürzt wurde</h3>
 <ul>
   <li><strong>Behebt, dass übersprungene Karten erneut als "neu" markiert und beim Massendownload wiederholt versucht wurden/fehlschlugen.</strong> Die Skip-Liste lag in einem einzigen <code>chrome.storage.sync</code>-Eintrag (8KB-Limit pro Eintrag) samt Metadaten; durch große Einträge (koreanische Titel usw.) wurden <strong>ab ca. 40 Einträgen die ältesten still gekürzt</strong>. Ein gekürzter Skip taucht beim nächsten Scan wieder als neu auf → wird erneut versucht → (falls die Karte in NotebookLM gelöscht ist) schlägt fehl → wird automatisch erneut übersprungen → überschreitet das Limit wieder und verdrängt einen weiteren Skip → endloses Hin und Her. Die Skip-Daten liegen jetzt im unbegrenzten lokalen Speicher (<strong>Zehntausende Einträge ohne Kürzung</strong>); nur kompakte Kennungen werden zur geräteübergreifenden Synchronisierung gespiegelt. Deine bestehende Skip-Liste wird automatisch migriert.</li>
