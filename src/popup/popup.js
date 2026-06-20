@@ -121,14 +121,17 @@ function appendCardRow({ idx, audio, alreadyPushed, isSkipped, notebookUrl, isRe
   state.className = "ep-state";
   if (audio.title) stateByTitle.set(audio.title, state);
 
+  const sid = shortIdOf(audio.artifactId);
+  const skippedActive = isSkipped && !alreadyPushed;
+
   const btn = document.createElement("button");
   btn.className = "dl";
   btn.textContent = t("popup.cardDl");
   if (alreadyPushed) {
     setRow(state, "muted", t("popup.alreadyPushed"), t("popup.alreadyPushed.tip"));
   } else if (isSkipped) {
-    btn.disabled = true;
-    btn.title = t("popup.skipped.tip");
+    // 스킵 카드는 받기 대신 [스킵 해제] 노출 — 받기 버튼은 숨김 (해제 시 되살림).
+    btn.style.display = "none";
     setRow(state, "muted", t("popup.skipped"), t("popup.skipped.tip"));
   } else if (audio.isPlaceholder) {
     btn.disabled = true;
@@ -148,7 +151,42 @@ function appendCardRow({ idx, audio, alreadyPushed, isSkipped, notebookUrl, isRe
     }
   });
 
-  li.append(checkbox, title, state, btn);
+  // [스킵 해제] — 영구 스킵을 풀고 이 행을 일반 신규 카드로 전환 (체크박스/받기 활성).
+  // 스킵됐고 아직 push 안 된 카드에만. (이미 받은 카드는 스킵 여부 무관 — 안 띄움.)
+  const unskipBtn = document.createElement("button");
+  unskipBtn.className = "unskip";
+  unskipBtn.textContent = t("popup.unskip");
+  unskipBtn.title = t("popup.unskip.tip");
+  if (!skippedActive) unskipBtn.style.display = "none";
+  unskipBtn.addEventListener("click", async () => {
+    if (!sid) return;
+    unskipBtn.disabled = true;
+    setRow(state, "", t("popup.unskip.doing"));
+    let resp;
+    try {
+      resp = await chrome.runtime.sendMessage({ type: "skip:remove", shortId: sid });
+    } catch (e) {
+      resp = { ok: false, error: e.message };
+    }
+    if (!resp?.ok) {
+      setRow(state, "err", "✗", resp?.error || t("popup.unskip.fail"));
+      unskipBtn.disabled = false;
+      return;
+    }
+    // 해제 성공 — 일반 신규 카드로 전환.
+    unskipBtn.style.display = "none";
+    setRow(state, "", "");
+    btn.style.display = "";
+    btn.disabled = false;
+    btn.title = "";
+    checkbox.disabled = false;
+    checkbox.checked = true;
+    const meta = cardMeta.get(li);
+    if (meta) meta.isSkipped = false;
+    refreshBulkBar();
+  });
+
+  li.append(checkbox, title, state, btn, unskipBtn);
   cardsEl.appendChild(li);
 
   cardMeta.set(li, {
@@ -158,6 +196,7 @@ function appendCardRow({ idx, audio, alreadyPushed, isSkipped, notebookUrl, isRe
     episodeTitle: audio.title,
     isPlaceholder: audio.isPlaceholder,
     alreadyPushed,
+    isSkipped: skippedActive,
     isRemote,
   });
   if (audio.title) controlsByTitle.set(audio.title, { checkbox, btn });

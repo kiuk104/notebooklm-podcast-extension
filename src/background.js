@@ -939,6 +939,54 @@ function notifyPush(detail) {
   // 옵션 페이지의 진행 모니터에 라이브 push 활동 로그로 표시 — 마지막 30 건.
   // 단일 [받기] / 일괄 받기 / 자동 다운로드 어느 경로든 모두 여기로 모임.
   appendRecentPush(detail).catch(() => {});
+  // bulk 가 "stall" 로 포기했던 카드의 push 가 뒤늦게 성공/스킵으로 들어오면 실패→성공 정정.
+  if (detail.ok || detail.skipped) {
+    reconcileBulkLateSuccess(detail).catch(() => {});
+  }
+}
+
+// 직전(또는 진행 중) bulk run 의 공유 tally. local 변수로 두면 reconcile 가 loop 의 다음
+// setTaskState 에 덮여 사라지므로 모듈 레벨로 둔다. runBulkRemote 시작 시 새 객체로 교체.
+let _bulkTally = null;
+
+// bulk 가 실패로 집계한 카드의 push 가 그 뒤에 실제로 성공/스킵으로 끝나면 여기서 실패→성공
+// 으로 되돌린다. GitHub 엔 ✓ 가 찍히는데 모니터엔 실패로 남던 모순 (성공 0 / 실패 N) 해소.
+//
+// **실패 원인 불문** — push 타임아웃(no-start/idle/hard) 뿐 아니라 "debugger click 실패:
+// 메뉴 항목 못 찾음" 처럼 워치독에 들어가기도 전에 실패 집계된 카드도, 어떤 경로로든 결국
+// 다운로드가 발사돼 push 가 성공하면(GitHub ✓) 정정 대상이다 (실측: 메뉴 클릭은 에러로
+// 보고됐는데 다운로드는 발사돼 ✓ 가 찍힘). 그래서 "타임아웃 카드" 화이트리스트 대신
+// **현재 failedSelections 에 그 타이틀이 있으면** 정정한다 — 정상 성공 카드는 애초에
+// failedSelections 에 없으니 no-op, 진짜 실패(push 안 옴) 카드는 늦은 ok 가 영영 안 와 그대로 둠.
+async function reconcileBulkLateSuccess(detail) {
+  const tally = _bulkTally;
+  if (!tally) return;
+  const title = detail.episodeTitle;
+  if (!title) return;
+  // 실패 selection 목록에 있는 카드만 대상 — 제거 → [실패 N개 재시도] 버튼 카운트도 줄어듦.
+  const fi = tally.failedSelections.findIndex((s) => s.episodeTitle === title);
+  if (fi < 0) return;
+  tally.failedSelections.splice(fi, 1);
+  tally.success++;
+  // 재시도 selection 영속본 갱신 (옵션 페이지 bulk:failed:list 가 읽는 소스).
+  if (tally.failedSelections.length > 0) await persistFailedSelections(tally.failedSelections);
+  else await clearFailedSelections();
+  // 모니터의 빨간 실패 줄 + ✗ 카운트도 정리 (해당 카드의 모든 에러 라인 — 원인 불문).
+  const errors = (currentTaskState.errors || []).filter((e) => e.episodeTitle !== title);
+  const removed = (currentTaskState.errors || []).length - errors.length;
+  const updates = {
+    successCount: tally.success,
+    errors,
+    errorCount: Math.max(0, (currentTaskState.errorCount || 0) - removed),
+  };
+  // 이미 완료된 run 이면 "bulk 완료 — 성공/실패/총" 메시지를 새 카운트로 다시 쓴다.
+  // 진행 중이면 loop 가 "다운로드 중: …" 를 관리하므로 message 는 건드리지 않는다.
+  if (currentTaskState.status === "completed") {
+    const d = tally.done;
+    updates.message = `bulk 완료 — 성공 ${tally.success} / 실패 ${d - tally.success} / 총 ${d}`;
+  }
+  await setTaskState(updates);
+  console.log(`[bulk] late success reconcile: "${title.slice(0, 30)}" → 성공으로 정정`);
 }
 
 async function appendRecentPush(detail) {
@@ -986,18 +1034,19 @@ function waitPushResultLocal(episodeTitle, timeoutMs) {
 // idleMs 동안 어떤 progress 도 안 오면 "stall" 로 판정. hardMs 는 마지노선 (무한
 // 진행률 emit 으로 영영 안 끝나는 사고도 막아둠).
 const pushProgressBeacons = new Set();
-function waitPushResultLocalWithWatchdog(episodeTitle, idleMs, hardMs) {
+function waitPushResultLocalWithWatchdog(episodeTitle, startGraceMs, idleMs, hardMs) {
   return new Promise((resolve) => {
     let done = false;
-    let idleTimer = null;
-    const armIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
+    let timer = null;
+    // 시작 전엔 startGraceMs (다운로드 개시 대기), 시작 후엔 idleMs (전송 중 stall) 적용.
+    const arm = (ms, reason) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
         if (done) return;
         done = true;
         cleanup();
-        resolve({ timeout: true, reason: "idle", idleMs });
-      }, idleMs);
+        resolve({ timeout: true, reason, startGraceMs, idleMs });
+      }, ms);
     };
     const handler = (detail) => {
       if (done) return;
@@ -1009,12 +1058,13 @@ function waitPushResultLocalWithWatchdog(episodeTitle, idleMs, hardMs) {
     const beacon = (title) => {
       if (done) return;
       if (title !== episodeTitle) return;
-      armIdle();
+      // 첫 비콘에서 start-grace → idle 워치독으로 전환. 이후 비콘은 idle 타이머 reset.
+      arm(idleMs, "idle");
     };
     const cleanup = () => {
       pushResultLocalListeners.delete(handler);
       pushProgressBeacons.delete(beacon);
-      if (idleTimer) clearTimeout(idleTimer);
+      if (timer) clearTimeout(timer);
       if (hardTimer) clearTimeout(hardTimer);
     };
     pushResultLocalListeners.add(handler);
@@ -1025,7 +1075,7 @@ function waitPushResultLocalWithWatchdog(episodeTitle, idleMs, hardMs) {
       cleanup();
       resolve({ timeout: true, reason: "hard", hardMs });
     }, hardMs);
-    armIdle();
+    arm(startGraceMs, "no-start");
   });
 }
 
@@ -1066,7 +1116,18 @@ const NOTEBOOK_CARDS_TIMEOUT = 12000;
 // 정상 다운로드 (40분짜리 ~75MB, 100-200초 소요) 는 fetch chunk 가 250ms 마다
 // 들어오므로 idle 에 안 걸림. PUSH_HARD_TIMEOUT 은 무한 progress emit 사고
 // (예: lamejs 가 무한 루프) 대비 마지노선.
-const PUSH_IDLE_TIMEOUT = 90000;     // 90s 동안 progress 0건 → stall
+//
+// **start-grace 분리 (v0.4.54)**: 워치독은 "다운로드 메뉴 클릭" 직후 켜지는데, 첫
+// 진행률 비콘은 NotebookLM 이 실제로 브라우저 다운로드를 개시해 onDeterminingFilename
+// → pushEpisode 가 돌기 시작해야 나온다. bulk 탭은 화면 밖 popup (§21) 이라 Chrome 이
+// timer/network 를 throttle 하고, 긴 에피소드는 서버측 다운로드 준비도 느려 이 "시작
+// 전 빈 구간" 이 90s 를 넘길 수 있다. 그러면 *전송 중 stall* 이 아니라 *시작이 느린 것*
+// 인데 같은 idle 타이머가 둘을 구분 못 하고 잘라 → push 는 뒤늦게 성공하는데 bulk 는
+// 실패로 집계 (GitHub 엔 ✓, 모니터엔 실패). 그래서 첫 비콘 전엔 넉넉한 START_GRACE 를,
+// 첫 비콘 후엔 IDLE_TIMEOUT 을 적용해 분리한다. (뒤늦은 성공은 reconcileBulkLateSuccess
+// 가 추가로 실패→성공 정정.)
+const PUSH_START_GRACE = 180000;     // 3분 — 메뉴 클릭 후 다운로드 *개시* 까지 대기
+const PUSH_IDLE_TIMEOUT = 90000;     // 전송 시작 후 progress 0건 90s → stall
 const PUSH_HARD_TIMEOUT = 900000;    // 15분 — 단일 카드 절대 최대치
 
 let inProgressTask = null;
@@ -1617,6 +1678,10 @@ async function buildNewSelections(notebooks, repo, token) {
         // UUID 매칭으로 정확한 카드를 짚는다 (content.js findCard).
         artifactId: audio.artifactId || "",
         episodeTitle: audio.title,
+        // cover date 를 selection 에 실어둔다 — bulk 다운로드가 "카드 못 찾음" 으로 실패해
+        // 자동 skip 등록할 때 date 까지 저장해야 titleKeys(date+slug) 폴백이 살아, 다음
+        // 스캔에서 artifact-labels UUID race 로 shortId 가 비어도 그 카드를 skip 으로 잡는다.
+        coverDateAttr,
       });
     });
   }
@@ -1695,13 +1760,17 @@ async function withTabRetry(fn, label, maxAttempts = 5) {
 //   v0.4.42a state:"minimized" 시도 → minimized 창에 tabs.create(active:true) 를 넣으면
 //            Chrome 이 창을 자동 복원(un-minimize) → 사용자 화면에 팝업이 튀어 오름.
 //            또한 minimized 창의 visibilityState='hidden' 이라 download 트리거도 불안정.
-//   v0.4.42b (현재) 화면 왼쪽 가장자리에 걸쳐 50% 조건만 충족하는 좌표 사용.
+//   v0.4.42b   화면 왼쪽 가장자리에 걸쳐 50% 조건만 충족하는 좌표 사용 (width 800).
 //            Chrome bounds 검사 통과 + focused:false 로 포커스 비침 없음 + 화면 전환 없음.
-//            창 오른쪽 절반(400px) 이 화면 왼쪽 테두리 밖으로 숨겨짐 — 사용자에게 최소 노출.
+//   v0.4.54  (현재) NotebookLM 새 반응형 레이아웃이 viewport 폭 ~800px 에서 음성개요
+//            (Studio) 패널을 접어 .artifact-item-button 을 0개로 만든다(실측: 넓은 화면=1개,
+//            800px=0개 → bulk 가 "보이는 카드=[없음]" 으로 전부 실패). bulk 탭은 이 창의
+//            inner width 로 레이아웃되므로 desktop 폭이 필요 → width 800 → 1280 으로 확대.
 //
-// BULK_WINDOW_OPTS: left=-399 → 화면 안 visible 폭 401px (800의 50.1%) — 50% 규칙 통과.
-// 높이는 0부터 시작해 전부 on-screen. 실제 NotebookLM UI 렌더 영역은 화면 안쪽 401px.
-const BULK_WINDOW_OPTS = { left: -399, top: 0, width: 800, height: 600 };
+// BULK_WINDOW_OPTS: width=1280 로 desktop 3-pane 레이아웃을 강제해 음성개요 카드를 렌더.
+// 50% 규칙(§20) 상 창이 커진 만큼 화면 안 visible 영역도 커지는 건 불가피 — left 를 음수로
+// 최대한 밀어 노출 최소화. left=-620 → visible 폭 660px (1280 의 51.6%) — 50% 규칙 통과.
+const BULK_WINDOW_OPTS = { left: -620, top: 0, width: 1280, height: 600 };
 
 let bulkWindowId = null;
 // bulk window 안에서 노트북 간 재사용되는 단일 탭의 ID. 매 노트북마다 chrome.tabs.create
@@ -1973,10 +2042,31 @@ async function scanHomePageForNotebookUrls() {
   // "구조적 지문". 노트북 변경 시 hint 도 변경 → per-notebook 캐시 무효화 키.
   const tabId = await openManagedTab("https://notebooklm.google.com/");
   try {
-    const r = await chrome.tabs.sendMessage(tabId, { type: "scan:list" });
-    if (Array.isArray(r?.notebooks) && r.notebooks.length > 0) return r.notebooks;
-    // 옛 응답 호환 (urls 만 반환하는 옛 content.js 시점). hint 없음 → 캐시 안 탐.
-    if (Array.isArray(r?.urls)) return r.urls.map((url) => ({ url, modifiedHint: null }));
+    // scan:list 는 content script 가 카드 출현을 최대 15s 기다린 뒤 응답한다(§26). 그
+    // 사이 NotebookLM SPA 가 redirect/재렌더하면 content script context 가 파괴돼 채널이
+    // 닫히고 sendMessage 가 "message channel closed before a response was received" 로
+    // reject — 단발 raw 호출이면 그대로 runScanAll 전체가 실패한다(실측, src/background.js:172).
+    // 채널 닫힘/timeout 은 content script 재주입을 기다려 재시도. (scanOneNotebook 의
+    // waitForAudioCards 가 개별 노트북에서 쓰는 내성을 홈 목록 수집에도 부여.)
+    const MAX_TRIES = 3;
+    let lastErr = null;
+    for (let i = 0; i < MAX_TRIES; i++) {
+      try {
+        // timeout 35s — content script 의 self-ceiling(첫 카드 waitFor 15s + scrollToLoadAll
+        // 최대 ~10.5s ≈ 26s)보다 충분히 위. 채널 닫힘은 Promise.race 가 즉시 reject 하므로
+        // 재시도는 빠르고, 이 timeout 은 진짜 hang 만 끊는다. (노트북 226개 정상 스캔 보호.)
+        const r = await sendMessageWithTimeout(tabId, { type: "scan:list" }, 35000);
+        if (Array.isArray(r?.notebooks) && r.notebooks.length > 0) return r.notebooks;
+        // 옛 응답 호환 (urls 만 반환하는 옛 content.js 시점). hint 없음 → 캐시 안 탐.
+        if (Array.isArray(r?.urls)) return r.urls.map((url) => ({ url, modifiedHint: null }));
+        // ok 인데 0개 — content 가 이미 카드 출현을 15s 기다렸으므로 진짜 0개로 본다.
+        return [];
+      } catch (e) {
+        lastErr = e;
+        if (i < MAX_TRIES - 1) await sleep(1500); // SPA 안정화 / content script 재주입 대기.
+      }
+    }
+    console.warn(`[scan:list] ${MAX_TRIES}회 재시도 후에도 실패:`, lastErr?.message);
     return [];
   } finally {
     await closeManagedTab(tabId);
@@ -2278,17 +2368,26 @@ async function runBulkRemote(selections) {
   await clearFailedSelections();
 
 
-  let done = 0;
-  let success = 0;
+  // 카운터를 모듈 레벨 tally 로 공유 — bulk 가 stall 로 포기한 카드의 push 가 뒤늦게
+  // 성공하면 (notifyPush → reconcileBulkLateSuccess) 같은 tally 를 갱신해 실패→성공 정정.
+  // local 변수면 reconcile 가 loop 의 다음 setTaskState 에 덮여 사라지므로 공유가 필수.
+  const tally = (_bulkTally = {
+    done: 0,
+    success: 0,
+    total,
+    // 실패 집계된 selection. 뒤늦게 push 가 성공하면 reconcileBulkLateSuccess 가 여기서
+    // 빼며 실패→성공 정정 (실패 원인 불문 — 이 목록 멤버십이 정정 자격).
+    failedSelections: [],
+  });
   // 실패한 selection 을 [실패 N개 재시도] 용으로 모은다. push 응답 timeout / debugger
   // click 실패 / 카드 prepare 실패 / 탭 열기 실패 모두 retry 후보.
-  const failedSelections = [];
+  const failedSelections = tally.failedSelections;
   const MAX_CONSEC_TAB_ERRORS = 5;
   let consecTabErrors = 0;
   for (const [url, items] of grouped) {
     await setTaskState({ phase: "open", message: `노트북 ${url.split("/notebook/")[1]?.slice(0, 8)}… 탭 여는 중` });
     emitEvent("bulk:remote:progress", {
-      phase: "open", url, done, total,
+      phase: "open", url, done: tally.done, total,
       message: `${url.split("/").pop().slice(0, 8)}… 탭 여는 중`,
     });
     let tabId;
@@ -2305,9 +2404,9 @@ async function runBulkRemote(selections) {
           });
           await pushTaskError({ episodeTitle: item.episodeTitle, message: "카드 로딩 타임아웃" });
           failedSelections.push(item);
-          done++;
+          tally.done++;
         }
-        await setTaskState({ done });
+        await setTaskState({ done: tally.done });
         continue;
       }
     } catch (e) {
@@ -2317,15 +2416,15 @@ async function runBulkRemote(selections) {
         });
         await pushTaskError({ episodeTitle: item.episodeTitle, message: `탭 열기 실패: ${e.message}` });
         failedSelections.push(item);
-        done++;
+        tally.done++;
       }
-      await setTaskState({ done });
+      await setTaskState({ done: tally.done });
       if (TRANSIENT_TAB_ERROR_RE.test(e.message)) {
         consecTabErrors++;
         if (consecTabErrors >= MAX_CONSEC_TAB_ERRORS) {
           throw new Error(
             `Chrome 탭 API 잠김 (${consecTabErrors}회 연속). ` +
-            `탭바 드래그 해제 / 다른 익스텐션 비활성화 후 재시도. 성공 ${success} / 실패 ${done - success} 까지는 결과에 반영됨.`,
+            `탭바 드래그 해제 / 다른 익스텐션 비활성화 후 재시도. 성공 ${tally.success} / 실패 ${tally.done - tally.success} 까지는 결과에 반영됨.`,
           );
         }
       } else {
@@ -2338,23 +2437,28 @@ async function runBulkRemote(selections) {
         if (cancelRequested) {
           await setTaskState({
             status: "failed", phase: "cancelled",
-            message: `사용자 중단 — 진행 ${done}/${total}`, endedAt: Date.now(),
+            message: `사용자 중단 — 진행 ${tally.done}/${total}`, endedAt: Date.now(),
           });
           return { ok: false, cancelled: true };
         }
         await setTaskState({ phase: "download", message: `다운로드 중: ${item.episodeTitle?.slice(0, 40) || "(제목 없음)"}` });
         emitEvent("bulk:remote:progress", {
-          phase: "download", url, episodeTitle: item.episodeTitle, done, total,
+          phase: "download", url, episodeTitle: item.episodeTitle, done: tally.done, total,
         });
         try {
           // bulk:remote 는 chrome.debugger 로 진짜 user input 주입 (Input.dispatchMouseEvent).
           // programmatic .click() 으론 NotebookLM 이 isTrusted=false / no user activation
           // 으로 판단해 download 트리거를 안 발사. 실측 (focused popup window 안 active
           // 탭 + .click()) 으로 모든 카드 push 응답 타임아웃 확인 후 이 경로로 전환.
+          // 40s — content.js findCard 는 새 음성개요의 artifact-labels UUID 가 fresh
+          // navigation 직후 늦게 붙는 lazy render race 를 견디려 artifactId 를 최대
+          // FIND_CARD_TIMEOUT(14s) + scrollToLoadAll 재시도까지 폴링한다. 그 합산보다
+          // 위여야 폴링이 timeout 으로 끊겨 멀쩡한 새 카드가 "카드 못 찾음 → 자동 skip"
+          // 으로 잘못 묻히지 않는다.
           const r = await sendMessageWithTimeout(
             tabId,
             { type: "download:prepare", index: item.cardIndex, artifactId: item.artifactId },
-            30000,
+            40000,
           );
           if (!r?.ok) {
             const errMsg = r?.error || "카드 prepare 실패";
@@ -2362,23 +2466,15 @@ async function runBulkRemote(selections) {
               episodeTitle: item.episodeTitle, ok: false, error: errMsg,
             });
             await pushTaskError({ episodeTitle: item.episodeTitle, message: errMsg });
-            // "카드 못 찾음" 은 findCard 의 800ms 대기 + scrollToLoadAll 재시도까지 다 거친
-            // 뒤에만 나오므로 lazy render 지연이 아니라 NotebookLM 에서 카드가 삭제된 강한
-            // 신호. 자동 skip 등록해 다음 스캔/재시도에 같은 phantom 카드를 다시 안 잡는다.
-            // (자동 skip 은 재시도 후보에서도 빼야 하므로 failedSelections 에 넣지 않음.)
-            const cardGone = /카드 못 찾음|삭제됨/.test(errMsg);
-            const sid = (item.artifactId || "").slice(0, 8);
-            if (cardGone && sid) {
-              await addSkippedEntry({
-                shortId: sid,
-                title: item.episodeTitle || "",
-                notebookTitle: "",
-              });
-              console.log(`[bulk:remote] "${item.episodeTitle?.slice(0, 30)}" 카드 삭제 감지 → 자동 skip 등록 (${sid})`);
-            } else {
-              failedSelections.push(item);
-            }
-            done++;
+            // "카드 못 찾음" 을 카드 삭제로 단정해 자동 skip 하지 않는다. bulk 는 off-screen
+            // 팝업 창(좁은 width)에서 동작하는데, NotebookLM 의 새 레이아웃에선 일반 탭에서
+            // 멀쩡히 찾히는 카드도 이 환경에서만 findCard 가 못 잡는 경우가 있다(실측: 일반
+            // 탭 단건 다운로드는 성공하는데 같은 카드들이 bulk 에선 전부 "카드 못 찾음").
+            // 그 상태에서 자동 skip 하면 멀쩡한 새 에피소드를 영구 매장해 churn 을 일으킨다
+            // (§28). 그래서 재시도 가능한 실패로만 분류하고, 진짜 삭제된 카드는 사용자가
+            // 스킵 UI 로 직접 처리하도록 둔다. (자동 skip 은 사람이 확인 못 하는 매장이라 위험.)
+            failedSelections.push(item);
+            tally.done++;
             continue;
           }
           // ⋮ 버튼을 chrome.debugger 로 진짜 클릭 → 메뉴 등장 → 메뉴 항목 좌표 받기 →
@@ -2395,37 +2491,42 @@ async function runBulkRemote(selections) {
             });
             await pushTaskError({ episodeTitle: item.episodeTitle, message: `debugger click 실패: ${clickErr.message}` });
             failedSelections.push(item);
-            done++;
+            tally.done++;
             continue;
           }
           const result = await waitPushResultLocalWithWatchdog(
-            item.episodeTitle, PUSH_IDLE_TIMEOUT, PUSH_HARD_TIMEOUT,
+            item.episodeTitle, PUSH_START_GRACE, PUSH_IDLE_TIMEOUT, PUSH_HARD_TIMEOUT,
           );
           if (result.timeout) {
             const reasonMsg = result.reason === "idle"
               ? `진행률 ${Math.round(PUSH_IDLE_TIMEOUT / 1000)}s 동안 정지 (stall)`
-              : `최대 ${Math.round(PUSH_HARD_TIMEOUT / 1000)}s 한도 초과`;
+              : result.reason === "no-start"
+                ? `다운로드 시작 ${Math.round(PUSH_START_GRACE / 1000)}s 내 미발생`
+                : `최대 ${Math.round(PUSH_HARD_TIMEOUT / 1000)}s 한도 초과`;
             emitEvent("bulk:remote:result", {
               episodeTitle: item.episodeTitle, ok: false, error: `push 타임아웃 (${reasonMsg})`,
             });
             await pushTaskError({ episodeTitle: item.episodeTitle, message: `push 타임아웃 (${reasonMsg})` });
+            // 워치독이 포기했어도 다운로드 요청은 이미 큐에 있어 push 가 뒤늦게 성공할 수
+            // 있다. failedSelections 에 들어가면 reconcileBulkLateSuccess 가 늦은
+            // notifyPush(ok) 로 실패→성공 정정 (별도 등록 불필요 — 목록 멤버십이 자격).
             failedSelections.push(item);
           } else if (result.ok || result.skipped) {
-            success++;
+            tally.success++;
           } else if (result.error) {
             await pushTaskError({ episodeTitle: item.episodeTitle, message: result.error });
             failedSelections.push(item);
           }
-          done++;
+          tally.done++;
         } catch (e) {
           emitEvent("bulk:remote:result", {
             episodeTitle: item.episodeTitle, ok: false, error: e.message,
           });
           await pushTaskError({ episodeTitle: item.episodeTitle, message: e.message });
           failedSelections.push(item);
-          done++;
+          tally.done++;
         }
-        await setTaskState({ done, successCount: success });
+        await setTaskState({ done: tally.done, successCount: tally.success });
       }
     } finally {
       await closeManagedTab(tabId);
@@ -2433,8 +2534,8 @@ async function runBulkRemote(selections) {
   }
   await setTaskState({
     status: "completed", phase: "done",
-    done, successCount: success,
-    message: `bulk 완료 — 성공 ${success} / 실패 ${done - success} / 총 ${done}`,
+    done: tally.done, successCount: tally.success,
+    message: `bulk 완료 — 성공 ${tally.success} / 실패 ${tally.done - tally.success} / 총 ${tally.done}`,
     endedAt: Date.now(),
   });
   if (failedSelections.length > 0) {
@@ -2442,9 +2543,9 @@ async function runBulkRemote(selections) {
   } else {
     await clearFailedSelections();
   }
-  await notifyBulkComplete(success, done);
-  emitEvent("bulk:remote:done", { ok: true, done });
-  return { ok: true, done };
+  await notifyBulkComplete(tally.success, tally.done);
+  emitEvent("bulk:remote:done", { ok: true, done: tally.done });
+  return { ok: true, done: tally.done };
 }
 
 async function pushEpisode(audioUrl, filename, dedupHints, episodeTitle) {

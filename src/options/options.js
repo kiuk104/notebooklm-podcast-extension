@@ -1052,6 +1052,9 @@ function collectPickedSelections() {
       cardIndex: Number(cb.dataset.cardIndex),
       artifactId: cb.dataset.artifactId || "",
       episodeTitle: cb.dataset.episodeTitle || "",
+      // cover date 동반 — 이 selection 으로 받다 "카드 못 찾음" 실패 시 자동 skip 이
+      // date 까지 저장해 titleKeys 폴백을 살린다 (buildNewSelections 와 동일 의도).
+      coverDateAttr: cb.dataset.coverDateAttr || "",
     });
   });
   return out;

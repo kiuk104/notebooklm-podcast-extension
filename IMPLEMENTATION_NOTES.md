@@ -1307,6 +1307,20 @@ async function reconcileFeed(reason) {
 2. `GET api.github.com/repos/<repo>/commits?path=docs/feed.xml` 의 "auto: rebuild feed" 간격에 큰 공백이 있으면 그 기간 push 의 재빌드 누락.
 3. 문제 에피소드 파일 커밋 시각 (`commits?path=docs/episodes/<urlencoded>`) vs feed.xml 재빌드 시각 비교. 파일이 먼저, feed 가 한참 뒤면 확정. (파일명 `YYYYMMDD` 는 NotebookLM cover 생성일이지 push 시각 아님 — 커밋 시각으로만 판단.)
 
+### ⚠ 먼저 "feed stale" 인지 "클라이언트 지연" 인지부터 가른다 (2026-06-20 확인)
+
+"YouTube Music 에 새 에피소드 안 보임" 의 **1차 용의자는 이 §23 (feed stale) 이 아니라 YT Music
+자체의 느린 서버측 RSS 재크롤** 이다. 실측 (2026-06-20): GitHub `docs/episodes/` 와 라이브
+`feed.xml` 양쪽에 6월 항목이 정상으로 다 들어가 있는데 YT Music 만 5월에 멈춰 있었음 — feed 는
+멀쩡, YT Music 이 며칠+ 늦게 따라오는 케이스. 코드/repo 손댈 것 없음.
+
+**판별 (1분)**: `feed.xml` URL 을 **AntennaPod 같은 즉시-갱신 앱**에 넣어본다.
+- AntennaPod 에 최신까지 정상 표시 → **feed 정상 = 클라이언트(YT Music) 지연 확정.** 기다리면 됨.
+- AntennaPod 에서도 빠짐 → **그제서야 §23 (feed stale)** 의심 → 위 1~3 진단.
+
+curl 로 직접 셀 때: `curl -s <feed.xml> | grep -c '<item>'` + `grep <YYYYMMDD>`. (WebFetch 의
+피드 요약은 fast model 이라 item 수·특정 항목 존재를 종종 틀린다 — 정확한 확인은 raw grep.)
+
 ---
 
 ## 24. 스킵 목록이 sync 8KB per-item 한도에 잘려 churn (2026-06-15, v0.4.49)
@@ -1340,6 +1354,210 @@ churn loop: 옛 스킵이 컷으로 증발 → 다음 스캔에 신규로 재인
 ### 진단 핸드오프
 
 옵션 페이지 콘솔: `chrome.storage.sync.get('skippedShortIds', r => console.log((r.skippedShortIds||[]).length, new Blob([JSON.stringify(r)]).size))`. bytes 가 8192 근처면 cap. `chrome.storage.local.get('skippedEntries', r => console.log((r.skippedEntries||[]).length))` 로 local 이전 여부 확인.
+
+---
+
+## 25. 같은 날짜 에피소드가 팟캐스트 앱에서 뒤섞임 — pubDate 동일 (2026-06-17)
+
+### 증상
+
+팟캐스트 앱(YT Music 등)에서 음성개요 목록을 보면 같은 날 받은 에피소드들의 순서가 뒤죽박죽. 스캔/다운로드로 `feed.xml` 이 재생성될 때마다 같은 날 묶음의 순서가 바뀌어 보임. 한 날짜에 4~5편이 몰린 경우 특히 두드러짐.
+
+### 원인
+
+파일명 규약(`YYYYMMDD__...`)에 **시각 정보가 없다** → `feed.js` `parseDate` / `build_feed.py` `parse_date` 가 모두 자정(`Date.UTC(y,mo,d)` = `00:00:00`) Date 를 만든다. 결과적으로 **같은 날 에피소드는 `<pubDate>` 가 글자 그대로 동일** (`... 00:00:00 GMT`). 대부분의 팟캐스트 앱은 피드의 item 출현 순서를 무시하고 **`pubDate` 로 정렬**하는데, 동일 pubDate 끼리는 tie-break 이 앱마다 제각각이라 재빌드마다 순서가 흔들린다.
+
+피드 내부 순서 자체는 `listEpisodes` 의 `pubDate desc → filename desc` 로 결정적이지만(feed.js), 앱이 그 순서를 안 쓰는 게 핵심.
+
+### 대응
+
+렌더링 직전 같은 날짜 그룹 안에서 **이미 정해진 표시 순서(items 는 최신순)를 초 단위 합성 시각으로 인코딩** — `stampPubDates`(feed.js) / `stamp_pubdates`(build_feed.py). 그 날 첫(최신) 항목이 가장 늦은 시각(`midnight + (N-1)s`), 이후 1초씩 감소. 자정 기준 N초 이내라 날짜 표시는 불변. 두 빌더에 **동일 로직**을 넣어 byte 일치 불변식(feed.js 헤더 주석) 유지. retention/episodeOrder 는 자정 Date 그대로 사용(렌더 직전에만 stamp) — blast radius 최소.
+
+배포 후 첫 재빌드 때 feed.xml 이 한 번 갱신(모든 item 시각 변경), 이후 idempotent.
+
+### 학습
+
+- **날짜만 있는 GUID/정렬 키는 동일 날 항목에서 비결정적** — 팟캐스트 앱이 피드 순서를 honor 한다는 보장이 없으니, 정렬에 쓰는 필드(pubDate)는 표시 순서와 1:1 로 strict 하게 구별돼야 한다.
+- **두 빌더(JS/Python) 병행** — 한쪽만 고치면 모드 전환 시 byte diff. pubDate 생성처럼 출력에 닿는 로직은 항상 양쪽 동시 수정 + 교차 검증.
+
+## 26. "모든 노트북 스캔" 이 0개로 조기 완료 (2026-06-17)
+
+### 증상
+
+[모든 노트북 스캔] 실행 시 진행되다 곧바로 "완료" — 처리된 노트북 0개. SW 콘솔 `[scan:list] 0개 노트북`, 진행 메시지 `노트북 0개 발견`. `runScanAll` 의 완료 루프(background.js)는 `homeEntries` 전체를 돌므로, 조기 완료 = **홈 목록 수집 단계에서 0개**가 원인.
+
+### 원인 (0개로 가는 두 경로)
+
+**(A) SPA 카드 렌더 전에 읽음 — 실측 확인된 주원인** — 개별 노트북 스캔엔 `waitForAudioCards` 폴링이 있지만, 홈 목록 스캔(`scan:list`)엔 그게 없어 `scrollToLoadAll` 한 번 후 즉시 `getNotebookCards()`. NotebookLM 은 SPA 라 `openManagedTab` 이 기다리는 "페이지 complete + content script ping ready" 시점에도 노트북 카드는 아직 비동기 렌더 중일 수 있다. `scrollToLoadAll` 은 scrollHeight 가 안 자라면 ~350ms 만에 종료 → 빈 DOM → 0개. 타이밍 의존이라 실행마다 개수가 들쭉날쭉.
+
+> 실측 (2026-06-17, 225 노트북): cold-load 직후엔 `document.body.innerHTML` 에 `/notebook/` 문자열이 **아예 없음** (카드 0개 렌더). warm reload 측정으론 **209ms 에 225개 전부** 출현. cold-load (managed background tab, 서버 데이터 fetch) 가 그보다 느려 구 코드가 빈 DOM 을 읽었다. → §26 (A) 의 카드 대기로 해소.
+
+**홈 DOM 구조 (2026-06-17 개편 후, 셀렉터 유지보수 참고)**: 노트북이 `<a href>` 단독이 아니라 `<project-button class="project-button"> > <mat-card class="... project-button-card {color}-background"> > <a role="link" class="primary-action-button" href="/notebook/{UUID}">` 구조. **앵커 href 는 그대로 `/notebook/{UUID}` 라 기존 `a[href*="/notebook/"]` + `/\/notebook\/[a-zA-Z0-9-]{16,}/` 정규식이 계속 매칭** (셀렉터 교체 불필요). 카드 제목/부제 클래스: `project-button-title` / `project-button-subtitle` (부제에 "2026. 6. 14.·소스 3개" 식 날짜+소스수). 홈 헤딩은 이제 `내 노트북` 1개 ("추천 노트북" 섹션 없음 — featured 분류는 자연히 빈 set = 전부 포함). 리스트 뷰는 `<tr role="row" class="mat-mdc-row">` (`project-table` 안).
+
+**(B) featured 제외 오작동** — `featuredNotebookUrlSet` 은 "추천 노트북" 헤딩(`h1~h3/[role=heading]`) 과 다음 헤딩 사이 카드를 featured 로 분류해 제외(§22). NotebookLM 이 "최근 노트북" 헤딩을 heading 요소가 아닌 마크업으로 바꾸면 featured 토글이 안 꺼져 **추천 이후 카드 전부가 featured 로 분류** → 전부 제외 → 0개. §22 의 "헤딩 미매칭 시 전부 포함 = 무회귀" 가 이 케이스는 못 막음 (매칭이 *과하게* 되는 거라 set 이 비지 않음).
+
+### 대응 (둘 다 결과 0개일 때만 동작하는 무회귀 가드)
+
+content.js:
+1. **`scan:list` 카드 대기** — 노트북 링크(`/notebook/<16자+>`)가 DOM 에 나타날 때까지 최대 15초 `waitFor` 후 스크롤·수집. 진짜 0개면 timeout 후 그대로 진행. (개별 스캔 `waitForAudioCards` 의 홈 목록 버전.)
+2. **featured 전부-제외 가드** — `getNotebookCards`/`getNotebookUrls` 에서 featured 분류가 **모든** 노트북을 제외하면 무회귀로 전부 포함. featured/recent 가 섞여 있으면 추천만 제외하는 §22 정상 동작은 유지 (kept 가 비어있을 때만 fallback).
+
+### 학습
+
+- **SPA 의 "페이지 로드 완료" ≠ "콘텐츠 렌더 완료"** — `tabs.onUpdated status==='complete'` 와 content script ping 은 DOM 데이터 준비를 보장하지 않는다. 목록/카드를 읽는 모든 지점은 "원하는 요소가 실제로 나타날 때까지" 폴링해야 한다. 한 곳(scanOneNotebook)만 폴링하고 다른 곳(scan:list)을 빠뜨린 게 이 버그.
+- **분류기(featured)가 입력 전부를 한 클래스로 몰면 무해하지 않다** — "매칭 실패 시 안전" 만 설계하고 "과매칭 시 안전" 을 빠뜨리면 정반대 회귀. 필터는 "전부 제거" 결과를 의심하고 fallback 을 둘 것.
+
+---
+
+## 27. 새로 만든 음성개요 bulk 다운로드가 전부 "카드 못 찾음" 으로 실패 (2026-06-18)
+
+증상: 일괄 다운로드 (cross-notebook) 가 "성공 0 / 실패 6 / 총 6", 모든 항목이
+`artifact <id> 카드 못 찾음 (lazy render 미완료 또는 카드 삭제됨)`. 대상은 전부
+**방금 스캔으로 새로 발견된** (=실재하는) 음성개요.
+
+### 원인 — ready 판정이 타깃 카드를 보지 않음 + findCard 조기 포기
+
+bulk 다운로드 흐름: `openManagedTab(url)` → `waitForAudioCards` → `download:prepare`
+(content.js `findCard({artifactId, index})`).
+
+1. **`waitForAudioCards` 가 "아무 카드나 1개라도 non-placeholder" 면 ready 로 통과**
+   ([src/background.js](src/background.js) `audios.some((a) => !a.isPlaceholder)`). 노트북에
+   옛 음성개요가 같이 있으면 그게 ready 를 통과시켜, **새 카드의 `artifact-labels` UUID
+   가 아직 lazy render 중인데** download:prepare 가 들어간다 (§1 race 의 bulk 재navigate 판).
+2. `findCard` 는 artifactId 매칭 실패 후 800ms 단발 + scrollToLoadAll 1회만 기다리고
+   포기. `getAudioCardEls()` 는 play 버튼 있는 카드만 세므로 fresh navigation 중인 새
+   카드는 목록에 없어 index fallback (`cards[index]`) 도 빗나감 → "카드 못 찾음".
+3. **치명적 2차 피해**: [src/background.js](src/background.js) `runBulkRemote` 가 "카드 못
+   찾음" 을 *카드 삭제 강한 신호* 로 단정 → `addSkippedEntry` 로 **자동 skip 등록**.
+   shortId 가 유효한 8-hex 라 멀쩡한 새 에피소드 6개가 전부 스킵 목록에 묻힘.
+
+### 수정
+
+- `findCard` ([src/content.js](src/content.js)): artifactId 가 주어지면 800ms 단발이 아니라
+  `FIND_CARD_TIMEOUT`(14s) 동안 그 UUID 카드를 폴링 (+scrollToLoadAll 후 2s 재폴).
+  index fallback 은 artifactId 폴링이 끝난 뒤에만 — index 는 fresh navigation 중 카드 수가
+  달라지면 엉뚱한 카드를 가리킬 수 있어 약한 단서로 격하.
+- `download:prepare` sendMessageWithTimeout 30s → **40s** ([src/background.js](src/background.js)):
+  findCard 폴링 + scroll 합산을 견뎌야 멀쩡한 새 카드가 timeout 으로 끊겨 자동 skip 으로
+  잘못 묻히지 않음.
+
+### 학습
+
+- **"ready" 는 타깃을 기준으로 판정해야** — 집계형 ready (아무거나 1개) 는 다른 항목의
+  준비 상태를 가린다. 특정 대상을 쓸 거면 그 대상의 출현을 기다릴 것.
+- **실패를 "영구 상태" 로 승격할 땐 충분히 기다린 뒤에만** — 짧은 race 창의 일시적
+  "못 찾음" 을 "삭제됨 → 자동 skip" 으로 굳히면 정상 데이터를 silent 하게 매장한다.
+
+## 28. 스킵한 카드가 스캔에 다시 신규로 재출현 — 자동 skip 의 date 누락 (2026-06-18)
+
+증상: 스킵 목록에 있는 카드가 다음 스캔에서 다시 "신규" 로 떠 bulk 가 또 받기 시도 →
+또 실패 → 또 자동 skip (churn). §24 (sync 8KB evict) 와 증상은 비슷하나 원인이 다름.
+
+### 원인 — 자동 skip 이 date 없이 저장돼 titleKeys 폴백이 죽음
+
+스캔 시 skip 매칭 `isAudioSkipped` ([src/background.js](src/background.js)) 는 두 경로:
+(1) shortId(=artifactId 첫 8자), (2) `date|titleSlug` 폴백 (`titleKeys`). `loadSkippedIndex`
+는 **`if (e.date && e.title)` 일 때만** titleKeys 를 만든다.
+
+- **수동 skip** (`bulk:skip:selected`) 은 `extractDateStrict(coverDateAttr)` 로 date 를 저장 →
+  titleKeys 정상 → artifactId race 로 shortId 가 비어도 date+slug 로 잡힘.
+- **자동 skip** (`runBulkRemote` 의 §27 경로) 은 selection 에 cover date 가 없어
+  (`buildNewSelections` 가 `coverDateAttr` 를 selection 에 안 실음) date="" 로 저장 →
+  titleKeys 진입 불가 → **shortId 로만** 매칭 가능. 다음 스캔에서 그 카드의 UUID 가
+  race 로 안 뜨면 shortId 도 비어 → 두 경로 다 실패 → 신규로 재출현 → churn.
+
+즉 매칭(`isAudioSkipped`)은 두 경로인데 *저장*(자동 skip)이 한 경로 분량의 데이터만
+넣은 **비대칭** 이 원인. (choke-point `isSelectionSkipped` 는 date 없는 `titleSlugs` 폴백을
+쓰지만, 스캔 분류 `isAudioSkipped` 는 안 써서 갭이 드러남.)
+
+### 수정
+
+- `buildNewSelections` / 옵션 `collectPickedSelections` 의 selection 에 `coverDateAttr` 동반
+  ([src/background.js](src/background.js), [src/options/options.js](src/options/options.js)).
+- `runBulkRemote` 자동 skip 이 수동 skip 과 동일하게 `date: extractDateStrict(item.coverDateAttr)`
+  저장 → titleKeys 폴백이 살아 artifactId race 에도 스킵 유지.
+
+### 복구 (이미 묻힌 건)
+
+§27 이전에 date 없이 자동 skip 된 엔트리는 코드 수정으로 안 풀린다 — 관리 페이지
+스킵 목록에서 수동 제거 후 재스캔해야 다시 잡힌다.
+
+### 학습
+
+- **저장과 매칭의 키 집합은 대칭이어야** — 매칭이 N개 경로를 보는데 저장이 그중 일부
+  키만 채우면, 1차 키가 race 로 비는 순간 폴백이 빈손. §19/§22 의 chain-of-defense 원칙을
+  *저장 측* 으로 확장한 것.
+- **자동 생성 데이터일수록 사람이 넣는 데이터와 같은 필드를 채워라** — 수동 skip 은
+  멀쩡했고 자동 skip 만 깨진 이유가 정확히 이 차이.
+
+---
+
+## 29. push 는 성공하는데 bulk 는 "성공 0 / 실패 N" — stall 워치독 오판 (2026-06-19)
+
+### 증상
+
+[모든 노트북 스캔] → [신규 받기] bulk 직후 진행 모니터가 **성공 0 / 실패 12 / 총 12**
+인데, 같은 화면의 "최근 GitHub push 활동" 에는 같은 에피소드들이 **✓ 푸시 완료** 로
+찍힘. 즉 **동일 에피소드가 실패 목록과 성공 push 목록에 동시에** 등장. 실패 사유는
+`push 타임아웃 (진행률 90s 동안 정지 (stall))`.
+
+### 원인 — idle 워치독이 "다운로드 시작 전 빈 구간" 을 stall 로 오판
+
+bulk 한 카드 흐름: `clickViaDebugger(다운로드 메뉴)` → 곧바로
+`waitPushResultLocalWithWatchdog` 호출 → **이 순간 90s idle 타이머 켜짐**. 워치독은
+`emitCardProgress` 비콘이 올 때마다 타이머를 reset 하는데, **첫 비콘은 NotebookLM 이
+실제로 브라우저 다운로드를 개시해 `onDeterminingFilename` → `pushEpisode` 가 돌기
+시작해야** 나온다. 메뉴 클릭과 다운로드 실제 개시 사이엔 비콘이 0건.
+
+bulk 탭은 화면 밖 popup (§21) 이라 Chrome 이 그 창의 timer/network 를 throttle 하고,
+긴 에피소드는 NotebookLM 서버측 다운로드 준비도 느리다 → 이 "시작 전 빈 구간" 이 90s 를
+넘기면 idle 타이머가 *전송 중 stall* 로 오판하고 카드를 실패 집계 후 다음 카드로 넘어감.
+하지만 다운로드 요청은 이미 큐에 들어가 있어 그 뒤 `pushEpisode` 가 정상 실행 → GitHub
+PUT 성공(✓) → 이미 워치독 cleanup 된 뒤라 bulk 집계엔 반영 안 됨. **성공 0 / 실패 12
+인데 GitHub 엔 푸시** 모순의 정체.
+
+> **같은 화면의 두 실패 부류를 구분하라.** 이 §29 는 *다운로드는 됐는데 느려서
+> false-fail* 된 카드(= GitHub 에 ✓ 가 찍힌 것) 만 설명한다. 같은 run 의 "카드 못 찾음"
+> / "메뉴 항목 못 찾음" 실패(GitHub ✓ 없음)는 **별개 원인 — bulk 창이 좁아(800px)
+> NotebookLM 반응형 레이아웃이 `.artifact-item-button` 을 0개로 렌더한 것**으로,
+> `BULK_WINDOW_OPTS.width` 를 800 → 1280 으로 확대(`left:-620`)해 desktop 3-pane 을
+> 강제하는 v0.4.54 변경이 1차 해결책이다 (CLAUDE.md "bulk window" §27 참고). 즉 같은
+> bulk run 의 실패가 (a) 너비-원인(다수, 다운로드 자체 미발생) + (b) 느린-push
+> false-fail(소수, ✓ 동반) 로 섞여 있었고, 두 수정은 상보적이다.
+
+### 수정 (두 갈래)
+
+1. **start-grace 와 transfer-stall 분리** — `waitPushResultLocalWithWatchdog` 가 첫 비콘
+   전엔 `PUSH_START_GRACE`(180s, 다운로드 *개시* 대기), 첫 비콘 후엔
+   `PUSH_IDLE_TIMEOUT`(90s, 전송 중 stall) 을 적용. 타임아웃 reason 도 `no-start` /
+   `idle` / `hard` 로 구분해 에러 메시지로 노출. "느리게 시작" 이 stall 로 잘리지 않음.
+2. **뒤늦은 성공 reconcile** — 실패 집계된 카드의 push 가 나중에 `notifyPush({ok})` 로
+   끝나면 `reconcileBulkLateSuccess` 가 실패→성공으로 정정 (success++, 실패 selection
+   목록·해당 `errors`·`errorCount` 에서 제거, 완료 메시지 재계산). **실패 원인은 불문** —
+   처음엔 push 타임아웃만 화이트리스트(`timedOutTitles`)로 등록했으나, 실측에서
+   *"debugger click 실패: 메뉴 항목 못 찾음" 으로 실패 집계됐는데 다운로드는 발사돼
+   GitHub ✓ 가 찍힌* 카드가 정정 안 되는 갭이 드러나(검증 2026-06-19), 화이트리스트를
+   버리고 **현재 `failedSelections` 에 그 타이틀이 있으면** 정정하도록 일반화. 정상 성공
+   카드는 애초에 그 목록에 없어 no-op, 진짜 실패(push 안 옴)는 늦은 ok 가 영영 안 와 그대로.
+   bulk 카운터를 **모듈 레벨 `_bulkTally` 로 공유** 해야 reconcile 가 loop 의 다음
+   `setTaskState` 에 덮이지 않는다 (local 변수면 정정이 사라짐). 새 bulk 시작 시 tally
+   교체 → 이전 run 의 늦은 성공이 새 run 에 오염되지 않음 (failedSelections 도 새 빈 배열).
+
+### bulk 워치독 수정 시 체크리스트
+
+1. 첫 비콘 전 구간은 `PUSH_START_GRACE`, 후 구간은 `PUSH_IDLE_TIMEOUT` 로 분리돼 있는가?
+2. **모든** 실패 경로(타임아웃·prepare 실패·debugger click 실패·sendMessage timeout·catch)가
+   `failedSelections.push` 하는가? — reconcile 자격이 이 목록 멤버십이므로 빠지면 정정 누락.
+3. bulk 카운터(`success`/`done`/`failedSelections`)가 모듈 `_bulkTally` 공유인가? (local 금지)
+4. `notifyPush` 의 ok/skipped 분기에서 `reconcileBulkLateSuccess` 가 호출되는가?
+
+### 학습
+
+- **타임아웃 워치독은 "준비 중" 과 "진행 중 멈춤" 을 같은 타이머로 재면 안 된다** —
+  off-screen/throttle 환경에선 준비 구간이 길어 stall 로 오판된다. 첫 progress 신호를
+  경계로 두 phase 의 timeout 을 분리.
+- **비동기로 끝나는 작업의 집계는 워치독이 포기한 뒤에도 정정 가능해야** — 포기 ≠ 실패
+  확정. 늦게 도착한 결과를 되돌릴 reconcile 경로 + 공유 가능한 카운터를 함께 둔다.
 
 ---
 

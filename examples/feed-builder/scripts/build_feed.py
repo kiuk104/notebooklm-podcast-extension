@@ -70,7 +70,30 @@ def collect_episodes() -> list[dict]:
     return items
 
 
+# 같은 날짜(YYYYMMDD) 에피소드는 parse_date 가 모두 자정으로 만들어 pubDate 가 동일해진다
+# → 팟캐스트 앱은 피드 item 순서를 무시하고 pubDate 로 정렬하므로, 같은 날 묶음의 순서가
+# 불안정해 재빌드 때마다 목록이 뒤섞여 보인다. items 는 이미 표시 순서(최신순)로 정렬돼
+# 있으므로, 같은 날 그룹 안에서 그 순서를 보존하도록 초 단위 합성 시각을 부여한다 — 그 날
+# 첫(최신) 항목이 가장 늦은 시각. 자정 기준 N초 이내라 날짜 표시는 그대로 유지된다.
+# feed.js 의 stampPubDates 와 동일 로직 (byte 일치).
+def stamp_pubdates(items: list[dict]) -> list[dict]:
+    counts: dict = {}
+    for it in items:
+        k = it["pubDate"].date()
+        counts[k] = counts.get(k, 0) + 1
+    seen: dict = {}
+    out: list[dict] = []
+    for it in items:
+        k = it["pubDate"].date()
+        idx = seen.get(k, 0)
+        seen[k] = idx + 1
+        offset = counts[k] - 1 - idx  # 그 날 첫 항목이 최대
+        out.append({**it, "pubDate": it["pubDate"] + timedelta(seconds=offset)})
+    return out
+
+
 def render(cfg: dict, items: list[dict]) -> str:
+    items = stamp_pubdates(items)
     lines: list[str] = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<rss version="2.0" '

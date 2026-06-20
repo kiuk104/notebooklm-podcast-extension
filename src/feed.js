@@ -161,7 +161,34 @@ function parseDate(yyyymmdd) {
   return new Date(Date.UTC(y, mo - 1, d));
 }
 
+// 같은 날짜(YYYYMMDD) 에피소드는 parseDate 가 모두 자정(00:00:00)으로 만들어 pubDate 가
+// 동일해진다 → 팟캐스트 앱은 피드 item 순서를 무시하고 pubDate 로 정렬하므로, 같은 날
+// 묶음의 순서가 불안정해 재빌드 때마다 목록이 뒤섞여 보인다. items 는 이미 표시 순서
+// (최신순)로 정렬돼 있으므로, 같은 날 그룹 안에서 그 순서를 보존하도록 초 단위 합성
+// 시각을 부여한다 — 그 날 첫(최신) 항목이 가장 늦은 시각. 자정 기준 N초 이내라 기존
+// 날짜 표시는 그대로 유지된다. build_feed.py 의 stamp_pubdates 와 동일 로직 (byte 일치).
+function stampPubDates(items) {
+  const counts = new Map();
+  for (const it of items) {
+    const k = dayKey(it.pubDate);
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  const seen = new Map();
+  return items.map((it) => {
+    const k = dayKey(it.pubDate);
+    const idx = seen.get(k) || 0;
+    seen.set(k, idx + 1);
+    const offsetSec = counts.get(k) - 1 - idx; // 그 날 첫 항목이 최대
+    return { ...it, pubDate: new Date(it.pubDate.getTime() + offsetSec * 1000) };
+  });
+}
+
+function dayKey(d) {
+  return `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+}
+
 function renderFeed(meta, items) {
+  items = stampPubDates(items);
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<rss version="2.0" '

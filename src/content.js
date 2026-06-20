@@ -105,19 +105,17 @@
   // `a[href*="/notebook/"]` 의 href 패턴 매칭으로 robust 하게 처리.
   // 추천(Google 제공) 노트북은 제외 — 내 노트북만 동기화 대상.
   function getNotebookUrls() {
-    const urls = new Set();
+    const all = new Set();
     const featured = featuredNotebookUrlSet();
     for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
       const href = a.getAttribute("href") || "";
       if (/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) {
-        try {
-          const u = new URL(href, location.origin).href;
-          if (featured.has(u)) continue;
-          urls.add(u);
-        } catch {}
+        try { all.add(new URL(href, location.origin).href); } catch {}
       }
     }
-    return Array.from(urls);
+    const kept = Array.from(all).filter((u) => !featured.has(u));
+    // featured 분류가 전부를 제외하면 무회귀로 전부 포함 (getNotebookCards 와 동일 가드).
+    return kept.length > 0 ? kept : Array.from(all);
   }
 
   // 노트북 카드의 walk-up 루트 — Material Design / Angular 패턴 후보 + 폴백.
@@ -174,20 +172,25 @@
   function getNotebookCards() {
     const seenUrls = new Set();
     const featured = featuredNotebookUrlSet();
-    const out = [];
+    const all = [];
     for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
       const href = a.getAttribute("href") || "";
       if (!/\/notebook\/[a-zA-Z0-9-]{16,}/.test(href)) continue;
       let url;
       try { url = new URL(href, location.origin).href; } catch { continue; }
-      if (featured.has(url)) continue; // 추천(Google 제공) 노트북 제외
       if (seenUrls.has(url)) continue;
       seenUrls.add(url);
       const card = findCardContainer(a);
       const modifiedHint = extractModifiedHint(card);
-      out.push({ url, modifiedHint });
+      all.push({ url, modifiedHint, featured: featured.has(url) });
     }
-    return out;
+    const kept = all.filter((n) => !n.featured);
+    // featured 분류가 모든 노트북을 제외해버리면 (NotebookLM 이 "최근 노트북" 헤딩을
+    // h1~h3/[role=heading] 가 아닌 마크업으로 바꿔 featured 토글이 안 꺼지는 등 오분류)
+    // scan:all 이 "노트북 0개"로 조기 완료된다. 그 경우 무회귀로 전부 포함 — featured
+    // 매칭 실패 시 전부 포함이라는 기존 설계 의도(§22)와 일관.
+    const list = kept.length > 0 ? kept : all;
+    return list.map(({ url, modifiedHint }) => ({ url, modifiedHint }));
   }
 
   // home 페이지가 lazy render 인 경우 끝까지 스크롤해서 모든 카드를 DOM 에 올린다.
@@ -218,35 +221,97 @@
     });
   }
 
+  // 홈에 노트북 URL 앵커가 하나라도 있는가 = 카드(그리드) 뷰가 렌더된 상태.
+  // NotebookLM 홈은 "그리드 뷰"와 "목록(테이블) 뷰" 두 가지가 있고, 노트북 id 가
+  // 담긴 `<a href="/notebook/<id>">` 는 그리드 뷰에만 존재한다. 목록 뷰의 `<tr>` 행엔
+  // href·id 가 전혀 없어 URL 수집이 불가능 → scan:all 이 "노트북 0개"로 끝난다.
+  function hasNotebookAnchors() {
+    for (const a of document.querySelectorAll('a[href*="/notebook/"]')) {
+      if (/\/notebook\/[a-zA-Z0-9-]{16,}/.test(a.getAttribute("href") || "")) return true;
+    }
+    return false;
+  }
+
+  // 그리드/목록 토글 중 "그리드로 보기" 버튼. aria-label("그리드로 보기")은 로케일별로
+  // 다르므로, 로케일 무관한 `<mat-icon>grid_view</mat-icon>` 텍스트로 식별한다.
+  function findGridViewToggle() {
+    for (const btn of document.querySelectorAll("button")) {
+      const icon = btn.querySelector("mat-icon");
+      if (icon && icon.textContent.trim() === "grid_view") return btn;
+    }
+    return null;
+  }
+
+  // scan:list 가 URL 을 긁기 전에 그리드 뷰를 보장. 사용자가 홈을 목록 뷰로 둬도
+  // (뷰 설정은 계정에 저장돼 managed 탭도 그대로 열림) 자동으로 카드 뷰로 전환한다.
+  async function ensureGridView() {
+    // 이미 카드 뷰면 앵커가 곧 뜬다 (SPA 비동기 렌더 대비 폴링). 뜨면 그대로 진행.
+    if (await waitFor(hasNotebookAnchors, 5000).then(() => true).catch(() => false)) return;
+    // 5s 내 앵커 없음 → 목록 뷰로 판단. 그리드 토글을 눌러 전환 후 앵커 출현 대기.
+    const toggle = findGridViewToggle();
+    if (toggle) {
+      toggle.click();
+      await waitFor(hasNotebookAnchors, 12000).catch(() => {});
+    }
+    // 토글이 없으면(빈 계정 등) 그대로 진행 — getNotebookCards 가 0개를 반환.
+  }
+
   // artifactId (UUID) 가 주어지면 그걸로 카드 찾고, 없으면 index 로 fallback.
   // 이 두 단계를 한 번 시도해 실패하면 lazy-render 가 미완료된 케이스를 가정해
   // scrollToLoadAll 후 재탐색. NotebookLM 이 카드를 비동기로 추가하는 동안
   // bulk:remote 가 download 메시지를 보내면 첫 시도는 빈 DOM 을 본다.
+  // findCard 의 artifactId 폴링 예산. bulk:remote 의 download:prepare sendMessageWithTimeout
+  // (40s) 보다 충분히 아래여야 timeout 으로 끊기지 않는다 (이 폴링 + scrollToLoadAll
+  // 재시도 합산이 40s 미만이어야 함).
+  const FIND_CARD_TIMEOUT = 14000;
+
   async function findCard({ artifactId, index }) {
-    const tryFind = () => {
+    const byArtifact = () => {
+      if (!artifactId) return null;
+      return getAudioCardEls().find((c) => getArtifactId(c) === artifactId) || null;
+    };
+    const byIndex = () => {
       const cards = getAudioCardEls();
-      if (artifactId) {
-        const byId = cards.find((c) => getArtifactId(c) === artifactId);
-        if (byId) return byId;
-      }
-      if (typeof index === "number" && cards[index]) return cards[index];
-      return null;
+      return (typeof index === "number" && cards[index]) ? cards[index] : null;
     };
 
-    let card = tryFind();
-    if (card) return card;
+    // 1) artifactId 우선 — 정확히 그 카드를 충분히 기다린다. 새로 만든 음성개요는
+    //    카드(play 버튼) 와 `artifact-labels` UUID 가 fresh navigation 직후 비동기로
+    //    늦게 붙는다(§1 lazy render race). 게다가 bulk 의 ready 판정(waitForAudioCards)
+    //    은 "아무 카드나 1개라도 non-placeholder" 면 통과하므로, 노트북에 옛 음성개요가
+    //    같이 있으면 새 카드가 아직 안 떴는데도 download:prepare 가 들어온다. 그래서
+    //    800ms 단발이 아니라 FIND_CARD_TIMEOUT 동안 폴링해야 새 카드를 놓치지 않는다.
+    if (artifactId) {
+      const hit = await waitFor(byArtifact, FIND_CARD_TIMEOUT).catch(() => null);
+      if (hit) return hit;
+      // 끝내 안 뜸 — scrollToLoadAll 로 강제 렌더 후 마지막으로 한 번 더 짧게 폴.
+      await scrollToLoadAll();
+      const hit2 = await waitFor(byArtifact, 2000).catch(() => null);
+      if (hit2) return hit2;
+    }
 
-    // 첫 탐색 실패 — 페이지가 lazy render 중일 가능성. 짧게 한 번 더 기다려본다.
+    // 2) artifactId 로 못 찾았을 때만 index fallback (artifactId 없는 옛 호출 경로 포함).
+    //    index 는 약한 단서라 — fresh navigation 중 카드 수가 달라지면 엉뚱한 카드를
+    //    가리킬 수 있다 — artifactId 매칭을 충분히 시도한 뒤에만 쓴다.
+    let card = byIndex();
+    if (card) return card;
     await new Promise((r) => setTimeout(r, 800));
-    card = tryFind();
+    card = byIndex();
     if (card) return card;
-
-    // 여전히 없음 — scrollToLoadAll 로 강제 렌더 후 마지막 시도.
     await scrollToLoadAll();
-    card = tryFind();
+    card = byIndex();
     if (card) return card;
 
-    if (artifactId) throw new Error(`artifact ${artifactId.slice(0, 8)} 카드 못 찾음 (lazy render 미완료 또는 카드 삭제됨)`);
+    if (artifactId) {
+      // 진단용: bulk 의 off-screen 탭이 실제로 어느 노트북에 있는지(pathname) + 그 페이지에
+      // 보이는 카드 id 들을 에러에 박는다. "기대 노트북 != 실제 노트북" 이면 selection 의
+      // notebookUrl 이 틀린 것, "같은 노트북인데 id 목록에 target 없음" 이면 렌더/가시성 문제.
+      const here = (location.pathname.match(/\/notebook\/([0-9a-f-]+)/) || [])[1]?.slice(0, 8) || "?";
+      const seen = getAudioCardEls().map((c) => getArtifactId(c).slice(0, 8)).filter(Boolean);
+      throw new Error(
+        `artifact ${artifactId.slice(0, 8)} 카드 못 찾음 (현재 노트북=${here}, 보이는 카드=[${seen.join(",") || "없음"}])`,
+      );
+    }
     throw new Error(`card #${index} 없음`);
   }
 
@@ -281,6 +346,14 @@
       // urls 키는 옛 API 호환 (혹시 다른 호출자가 있을 경우).
       (async () => {
         try {
+          // NotebookLM 은 SPA — background 가 기다리는 페이지 'complete' + content
+          // script ready 시점에도 노트북 카드는 아직 비동기 렌더 중일 수 있다. 그 상태로
+          // 바로 읽으면 빈 DOM → "노트북 0개"로 scan:all 이 조기 완료된다. 또한 홈이
+          // 목록(테이블) 뷰면 노트북 URL 앵커가 아예 없다 → ensureGridView 가 그리드
+          // 뷰로 전환해 `<a href="/notebook/<id>">` 를 확보한 뒤 수집. (개별 노트북
+          // 스캔의 waitForAudioCards 에 대응하는 홈 목록용 가드.) 진짜 노트북이 0개면
+          // ensureGridView 의 timeout 후 그대로 진행.
+          await ensureGridView();
           await scrollToLoadAll();
           const notebooks = getNotebookCards();
           // 진단 로그 — modifiedHint 가 몇 % 추출됐는지. 0% 면 selector 조정 필요.
